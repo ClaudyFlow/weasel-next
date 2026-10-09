@@ -684,14 +684,15 @@ impl Palette {
 
     /// 返回显式背景色或按明暗模式选取的亚克力不透明回退色。
     fn acrylic_base(self) -> Color {
-        if let Some(background) = self.background {
-            return background;
-        }
+        // 一律忽略配置里的背景色：面板必须全透。
+        // 之前这个函数会把用户配置的 backgroundColor（不透明）当作面板底色/兜底色 ✗，
+        // 于是"真机候选窗看着是不透明深色"——这正是用户反复反馈的问题。
+        // 返回值恒为全透明；函数签名保留，避免影响调用方。
         Color {
-            A: 0xff,
-            R: if self.dark { 0x1c } else { 0xf3 },
-            G: if self.dark { 0x1c } else { 0xf3 },
-            B: if self.dark { 0x1c } else { 0xf3 },
+            A: 0x00,
+            R: 0x00,
+            G: 0x00,
+            B: 0x00,
         }
     }
 }
