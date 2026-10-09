@@ -399,6 +399,14 @@ unsafe fn create_window(mode: UiMode) -> Result<HWND, String> {
     // 让 `AcrylicBackgroundSource::HostBackdrop` 真正有"底"可透：
     // 没有这一步，WinUI 会退回 acrylic_base() 的不透明兜底色（深色背景上看起来就是黑的）。
     apply_host_backdrop(window);
+    // 真机窗（WS_EX_NOACTIVATE + XAML 岛）在显示/挂载时会把窗口的合成状态重置 ✗，
+    // 只在创建时设一次会被冲掉 —— 现象就是"预览窗透明、真机候选窗发黑"。
+    // 这里起一个极轻量的守护线程定期重申该策略（每次几微秒，完全可忽略）。
+    let raw = window.0 as isize;
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        apply_host_backdrop(HWND(raw as *mut core::ffi::c_void));
+    });
     Ok(window)
 }
 
@@ -709,6 +717,31 @@ fn apply_host_backdrop(window: HWND) {
                 "host backdrop accent policy rejected; acrylic may fall back to a solid color"
             ));
         }
+    }
+
+    // 真机窗是 WS_EX_NOACTIVATE 工具窗，**没有 DWM 背板** ✗ —— 它的透明区域会被
+    // 合成成黑色 ✗（这正是"预览窗透明、真机候选窗发黑"的物理原因）。
+    // 经典 "sheet of glass" 修法：把 DWM 边框延伸到整个客户区（边距全 -1），
+    // 整个窗口即成为带逐像素 alpha 的玻璃面，透明处才真正透出背后内容。
+    #[repr(C)]
+    struct Margins {
+        left: i32,
+        right: i32,
+        top: i32,
+        bottom: i32,
+    }
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        fn DwmExtendFrameIntoClientArea(hwnd: HWND, margins: *const Margins) -> i32;
+    }
+    let margins = Margins {
+        left: -1,
+        right: -1,
+        top: -1,
+        bottom: -1,
+    };
+    unsafe {
+        let _ = DwmExtendFrameIntoClientArea(window, &margins);
     }
 }
 

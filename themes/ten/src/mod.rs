@@ -1,4 +1,4 @@
-//! Windows 10 候选栏主题后端，使用 Direct2D/DirectWrite 绘制独立弹出窗口。
+﻿//! Windows 10 候选栏主题后端，使用 Direct2D/DirectWrite 绘制独立弹出窗口。
 //!
 //! HWND、图形资源和输入状态均由本模块内部管理；窗口消息回调与主题接口共享稳定的
 //! [`Window`] 分配，所有原生窗口和图形操作都应在创建它们的 UI 线程执行。
@@ -113,7 +113,7 @@ impl Graphics {
                     dpiX: dpi as f32,
                     dpiY: dpi as f32,
                     pixelFormat: D2D1_PIXEL_FORMAT {
-                        alphaMode: D2D1_ALPHA_MODE_IGNORE,
+                        alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
                         ..Default::default()
                     },
                     ..Default::default()
@@ -259,6 +259,31 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
             return Err(windows_core::Error::from_thread().to_string());
         }
         window.hwnd.set(hwnd);
+        // 玻璃第 1 步：给原生窗口打开整窗模糊（hRgnBlur = NULL → 整个客户区）。
+        // ⚠️ 单靠它看不见效果：当前的 ID2D1HwndRenderTarget 会不透明地盖住它。
+        // 第 2 步（把渲染目标换成 ID2D1DCRenderTarget + 32 位 DIB，用 UpdateLayeredWindow
+        // 提交逐像素 alpha）落地后，这一步才会真正显示为毛玻璃。
+        #[repr(C)]
+        struct DwmBlurBehind {
+            flags: u32,
+            enable: i32,
+            blur_region: isize,
+            transition_on_maximized: i32,
+        }
+        const DWM_BB_ENABLE: u32 = 0x1;
+        #[link(name = "dwmapi")]
+        unsafe extern "system" {
+            fn DwmEnableBlurBehindWindow(hwnd: HWND, bb: *const DwmBlurBehind) -> i32;
+        }
+        let blur = DwmBlurBehind {
+            flags: DWM_BB_ENABLE,
+            enable: 1,
+            blur_region: 0,
+            transition_on_maximized: 0,
+        };
+        unsafe {
+            let _ = DwmEnableBlurBehindWindow(hwnd, &blur);
+        }
         window.dpi.set(GetDpiForWindow(hwnd).max(1));
         if preview {
             apply_taskbar_icon(hwnd, icon);
@@ -447,7 +472,12 @@ impl Window {
                 target,
                 ended: false,
             };
-            target.Clear(Some(&color(p.background)));
+            // 玻璃：把背景清成完全透明（A=0）。窗口上已开 DwmEnableBlurBehindWindow，
+            // 配合 PREMULTIPLIED 像素格式，DWM 才能把背后的模糊合成进来。
+            // 想让文字在任何背景上都看得清时，把 a 调到 0.4~0.5 即可（半透明底色）。
+            let mut glass = color(p.background);
+            glass.a = 0.0;
+            target.Clear(Some(&glass));
             if let Some(c) = &app.content {
                 if let Some(indicator) = &c.snapshot.mode_indicator {
                     text(
