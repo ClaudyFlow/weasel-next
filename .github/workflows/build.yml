@@ -1,4 +1,4 @@
-name: Build Windows installer
+﻿name: Build Windows installer
 
 on:
   push:
@@ -29,21 +29,21 @@ jobs:
           persist-credentials: false
 
       - name: Prepare build environment
-        run: ./scripts/prepare-ci.ps1
+        run: ./script/prepare-ci.ps1
 
       - name: Build and package
         id: build
-        run: ./scripts/build-ci.ps1
+        run: ./script/build-ci.ps1
 
       - name: Upload installer and checksum
         uses: actions/upload-artifact@v7
         with:
           name: Weasel-RS-${{ steps.build.outputs.version }}-x64
           path: |
-            artifacts/installer/Weasel-RS-${{ steps.build.outputs.version }}-x64-setup.exe
-            artifacts/installer/Weasel-RS-${{ steps.build.outputs.version }}-x64-setup.exe.sha256
-            artifacts/installer/Weasel-RS-${{ steps.build.outputs.version }}-x64-mini-setup.exe
-            artifacts/installer/Weasel-RS-${{ steps.build.outputs.version }}-x64-mini-setup.exe.sha256
+            artifact/installer/Weasel-RS-${{ steps.build.outputs.version }}-x64-setup.exe
+            artifact/installer/Weasel-RS-${{ steps.build.outputs.version }}-x64-setup.exe.sha256
+            artifact/installer/Weasel-RS-${{ steps.build.outputs.version }}-x64-mini-setup.exe
+            artifact/installer/Weasel-RS-${{ steps.build.outputs.version }}-x64-mini-setup.exe.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
@@ -68,11 +68,11 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: Weasel-RS-${{ needs.build.outputs.version }}-x64
-          path: release-assets
+          path: release-asset
 
       - name: Prepare WinSparkle signer
         shell: pwsh
-        run: ./scripts/download_winsparkle.ps1
+        run: ./script/download_winsparkle.ps1
 
       - name: Sign Mini installer
         shell: pwsh
@@ -83,7 +83,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           if ($env:RELEASE_TAG -cne "v$env:BUILD_VERSION") { throw 'Release tag and Cargo version differ.' }
-          ./scripts/sign-update.ps1 -Installer "release-assets/Weasel-RS-$env:BUILD_VERSION-x64-mini-setup.exe" -PublicKey $env:WINSPARKLE_PUBLIC_KEY
+          ./script/sign-update.ps1 -Installer "release-assets/Weasel-RS-$env:BUILD_VERSION-x64-mini-setup.exe" -PublicKey $env:WINSPARKLE_PUBLIC_KEY
 
       - name: Attach installer to release
         shell: pwsh

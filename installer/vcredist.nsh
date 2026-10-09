@@ -1,10 +1,10 @@
-!include WordFunc.nsh
+﻿!include WordFunc.nsh
 
 !ifndef VC_X86_VERSION
-  !error "Missing VC_X86_VERSION; use scripts\build-installer.ps1."
+  !error "Missing VC_X86_VERSION; use script\build-installer.ps1."
 !endif
 !ifndef VC_X64_VERSION
-  !error "Missing VC_X64_VERSION; use scripts\build-installer.ps1."
+  !error "Missing VC_X64_VERSION; use script\build-installer.ps1."
 !endif
 
 ; Inspect both registry views; do not assume that Installed alone means new enough.
@@ -44,7 +44,7 @@ Function InstallRuntime_${ARCH}
   SetOutPath "$PLUGINSDIR"
   ClearErrors
 !ifdef MINI_INSTALLER
-  File "${PROJECT_ROOT}\scripts\download-runtime.ps1"
+  File "${PROJECT_ROOT}\script\download-runtime.ps1"
   StrCpy $7 ""
   IfSilent 0 +2
     StrCpy $7 "-Silent"
@@ -59,7 +59,7 @@ Function InstallRuntime_${ARCH}
     Abort
   ${EndIf}
 !else
-  File "${PROJECT_ROOT}\artifacts\vcredist\vc_redist.${ARCH}.exe"
+  File "${PROJECT_ROOT}\artifact\vcredist\vc_redist.${ARCH}.exe"
 !endif
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法解压 Microsoft Visual C++ v14 Redistributable ${ARCH} 安装程序。" /SD IDOK

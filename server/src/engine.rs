@@ -1,4 +1,4 @@
-//! 管理输入会话、Rime 调用与渲染状态，并在工作线程中串行处理它们。
+﻿//! 管理输入会话、Rime 调用与渲染状态，并在工作线程中串行处理它们。
 //!
 //! 会话及其原生 Rime 资源只由引擎工作线程访问；来自客户端和渲染器的事件都先进入
 //! 工作队列，再由该线程完成状态变更。引擎据上下文令牌和修订号拒绝过期输入与界面事件。
@@ -324,6 +324,712 @@ mod preedit_tests {
     }
 }
 
+/// 诊断用：把每次发往 TIP 的响应中携带的提交文本记账到 `%TEMP%\weasel-commit-trace.log`。
+///
+/// 仅在环境变量 `WEASEL_TRACE_COMMIT` 非空时启用。用于排查"一次提交在宿主文档里出现
+/// 两份"这类问题：把服务端**实际发出的**每一条响应（修订号、提交文本字节数、是否仍在
+/// 组合）逐条落盘，就能判定重复插入是服务端回了两次，还是客户端把同一响应应用了两次。
+fn trace_commit_reply(response: &KeyEventResponse) {
+    if std::env::var_os("WEASEL_TRACE_COMMIT").is_none() {
+        return;
+    }
+    let Some(dir) = std::env::var_os("TEMP").or_else(|| std::env::var_os("TMP")) else {
+        return;
+    };
+    let path = std::path::PathBuf::from(dir).join("weasel-commit-trace.log");
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    use std::io::Write as _;
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or(0);
+    let _ = writeln!(
+        file,
+        "{millis} revision={} commit_bytes={} composing={} candidates={}",
+        response.revision,
+        response.commit_text.len(),
+        response.composing,
+        response.candidates.len()
+    );
+}
+
+/// 键音 / 上屏音（复古打字机音色）。
+///
+/// 放在服务端播：TIP 位于每个应用进程里（改它要重启应用），渲染器又没有音频接口，
+/// 而服务端能看到全部按键与提交，一处即可覆盖所有应用。播放用
+/// `PlaySoundW(SND_ASYNC)` **异步**执行，绝不阻塞输入线程。
+///
+/// 配置直接读运行目录下的 `weasel.json`（不经设置界面的 schema，改完即生效）：
+///
+/// ```json
+/// { "sound": { "enabled": true,
+///              "key": "sounds/typewriter-key.wav",
+///              "commit": "sounds/typewriter-bell.wav" } }
+/// ```
+///
+/// 默认关闭；文件缺失或播放失败一律静默。
+pub(crate) mod sound {
+    /// 最近一次按键的键码，由按键处理路径写入（`process_key`）。
+    ///
+    /// 服务端的响应里不带键码，所以要给"空格单独一个音"这类分派留一个进程内的记录槽。
+    static LAST_KEYCODE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+    /// 记录最近一次按键的键码（供按键音分派使用；无需精确同步，按键本身是串行的）。
+    pub(crate) fn note_key(keycode: i32) {
+        LAST_KEYCODE.store(keycode, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    use std::ffi::c_void;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::SystemTime;
+
+    const SND_ASYNC: u32 = 0x0001;
+    const SND_NODEFAULT: u32 = 0x0002;
+    const SND_FILENAME: u32 = 0x0002_0000;
+
+    #[link(name = "winmm")]
+    unsafe extern "system" {
+        fn PlaySoundW(sound: *const u16, module: *mut c_void, flags: u32) -> i32;
+    }
+
+    #[derive(Default)]
+    struct Config {
+        enabled: bool,
+        key: Option<PathBuf>,
+        commit: Option<PathBuf>,
+    }
+
+    impl Config {
+        fn snapshot(&self) -> Self {
+            Self {
+                enabled: self.enabled,
+                key: self.key.clone(),
+                commit: self.commit.clone(),
+            }
+        }
+    }
+
+    /// 运行目录：`weasel.json` 与 `sounds/` 所在处。
+    fn runtime_dir() -> Option<PathBuf> {
+        let exe = std::env::current_exe().ok()?;
+        exe.parent().map(PathBuf::from)
+    }
+
+    /// 仅供单元测试：暴露解析入口（生产路径仍然只通过 [`config`] 调用）。
+    #[cfg(test)]
+    pub(crate) fn parse_for_test(
+        text: &str,
+        dir: &PathBuf,
+    ) -> (bool, Option<PathBuf>, Option<PathBuf>) {
+        let config = parse(text, Some(dir));
+        (config.enabled, config.key.clone(), config.commit.clone())
+    }
+
+    /// 从 JSON 文本里取 `"sound"` 对象下的字段。
+    ///
+    /// 手写解析是为了不引入新依赖、也不动设置界面的 schema：只认这几个键，其余忽略；
+    /// 任何异常都退化为"未开启"。
+    fn parse(text: &str, dir: Option<&PathBuf>) -> Config {
+        let mut config = Config::default();
+        let Some(anchor) = text.find("\"sound\"") else {
+            return config;
+        };
+        let Some(open) = text[anchor..].find('{').map(|i| anchor + i) else {
+            return config;
+        };
+        let Some(close) = text[open..].find('}').map(|i| open + i) else {
+            return config;
+        };
+        // `asset` 指定资源根目录（如 C:/code/weasel-rs/asset），key/commit 等子路径相对它解析；
+        // 未配置时退回 exe 所在目录 —— 安装后的布局（$INSTDIR\sound\…）正是这种情况。
+        let base: Option<PathBuf> = {
+            let mut found = None;
+            if let Some(at) = text.find("\"asset\"") {
+                if let Some(colon) = text[at..].find(':') {
+                    let rest = text[at + colon + 1..].trim_start();
+                    if let Some(stripped) = rest.strip_prefix('"') {
+                        if let Some(end) = stripped.find('"') {
+                            found = Some(stripped[..end].to_string());
+                        }
+                    }
+                }
+            }
+            match found {
+                Some(raw) => {
+                    let path = PathBuf::from(raw.replace('\\', "/"));
+                    if path.is_absolute() {
+                        Some(path)
+                    } else {
+                        // 相对 asset 以"根目录"为准：从 exe 目录起逐级向上找同名目录。
+                        // 开发运行时（artifact\smoke\）会找到 <仓库根>\asset，
+                        // 安装后 asset 与 exe 同级（或未配置时退回 exe 目录）。
+                        dir.map(|start| {
+                            let mut here = Some(start.clone());
+                            while let Some(base) = here {
+                                let candidate = base.join(&path);
+                                if candidate.is_dir() {
+                                    return candidate;
+                                }
+                                here = base.parent().map(PathBuf::from);
+                            }
+                            start.join(&path)
+                        })
+                    }
+                }
+                None => dir.cloned(),
+            }
+        };
+        for field in text[open + 1..close].split(',') {            let Some(colon) = field.find(':') else {
+                continue;
+            };
+            let name = field[..colon].trim().trim_matches('"');
+            let value = field[colon + 1..].trim();
+            match name {
+                "enabled" => config.enabled = value.starts_with("true"),
+                "key" | "commit" => {
+                    let raw = value.trim_matches(|c| c == '"' || c == '\'' || c == ' ');
+                    if raw.is_empty() {
+                        continue;
+                    }
+                    let raw_path = PathBuf::from(raw.replace('\\', "/"));
+                    let path = if raw_path.is_absolute() {
+                        raw_path
+                    } else {
+                        match &base {
+                            Some(base) => base.join(raw_path),
+                            None => raw_path,
+                        }
+                    };
+                    if name == "key" {
+                        config.key = Some(path);
+                    } else {
+                        config.commit = Some(path);
+                    }
+                }
+                _ => {}
+            }
+        }
+        config
+    }
+
+    /// 读配置；`weasel.json` 未变化时复用缓存（按 mtime 判断）。
+    fn config() -> Config {
+        static CACHE: OnceLock<Mutex<(Option<SystemTime>, Config)>> = OnceLock::new();
+        let cell = CACHE.get_or_init(|| Mutex::new((None, Config::default())));
+        let Some(dir) = runtime_dir() else {
+            return Config::default();
+        };
+        let path = dir.join("weasel.json");
+        let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let Ok(mut cache) = cell.lock() else {
+            return Config::default();
+        };
+        if cache.0 == modified {
+            return cache.1.snapshot();
+        }
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let parsed = parse(&text, Some(&dir));
+        let snapshot = parsed.snapshot();
+        cache.0 = modified;
+        cache.1 = parsed;
+        snapshot
+    }
+
+    /// 多声部播放引擎：多个 `waveOut` 设备 + 内存里的 PCM。
+    ///
+    /// 现实打字机连打时是**多次击打同时叠加**的，而 `PlaySound` 同时只能播一个声音。
+    /// 单个 `waveOut` 设备的缓冲是**串行队列**，所以要重叠必须开多个设备（系统会把它们混音）。
+    /// WAV 只在首次使用时读一次、解析进内存，之后每次播放只是一次内存拷贝。
+    pub(super) mod voices {
+        use std::collections::HashMap;
+        use std::ffi::c_void;
+        use std::path::PathBuf;
+        use std::sync::{Mutex, OnceLock};
+
+        const WAVE_MAPPER: u32 = u32::MAX;
+        const CALLBACK_NULL: usize = 0;
+        const WAVE_FORMAT_PCM: u16 = 1;
+        const WHDR_INQUEUE: u32 = 0x0000_0010;
+        /// 同时可叠加的声部数（真人连打很少超过 4~5 声重叠）。
+        const VOICE_COUNT: usize = 6;
+
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct WaveFormatEx {
+            format_tag: u16,
+            channels: u16,
+            samples_per_sec: u32,
+            avg_bytes_per_sec: u32,
+            block_align: u16,
+            bits_per_sample: u16,
+            cb_size: u16,
+        }
+
+        #[repr(C)]
+        struct WaveHdr {
+            data: *mut u8,
+            buffer_length: u32,
+            bytes_recorded: u32,
+            user: usize,
+            flags: u32,
+            loops: u32,
+            next: *mut WaveHdr,
+            reserved: usize,
+        }
+
+        #[link(name = "winmm")]
+        unsafe extern "system" {
+            fn waveOutOpen(
+                handle: *mut *mut c_void,
+                device: u32,
+                format: *const WaveFormatEx,
+                callback: usize,
+                instance: usize,
+                flags: u32,
+            ) -> u32;
+            fn waveOutPrepareHeader(handle: *mut c_void, header: *mut WaveHdr, size: u32) -> u32;
+            fn waveOutWrite(handle: *mut c_void, header: *mut WaveHdr, size: u32) -> u32;
+            fn waveOutUnprepareHeader(handle: *mut c_void, header: *mut WaveHdr, size: u32) -> u32;
+            fn waveOutClose(handle: *mut c_void) -> u32;
+        }
+
+        struct Voice {
+            handle: *mut c_void,
+            header: Box<WaveHdr>,
+            buffer: Vec<u8>,
+        }
+
+        /// 设备句柄与 `WAVEHDR` 只在本模块的互斥锁内访问，因此可以安全跨线程。
+        unsafe impl Send for Voice {}
+
+        struct Clip {
+            format: WaveFormatEx,
+            pcm: Vec<u8>,
+        }
+
+        struct Engine {
+            voices: Vec<Voice>,
+            format: WaveFormatEx,
+            clips: HashMap<PathBuf, Clip>,
+            next: usize,
+        }
+
+        unsafe impl Send for Engine {}
+
+        static ENGINE: OnceLock<Mutex<Option<Engine>>> = OnceLock::new();
+
+        /// 极简 WAV 解析：只要 PCM 与 `fmt `/`data` 两块。
+        fn parse_wav(bytes: &[u8]) -> Option<(WaveFormatEx, Vec<u8>)> {
+            if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+                return None;
+            }
+            let mut format = None;
+            let mut data = None;
+            let mut at = 12usize;
+            while at + 8 <= bytes.len() {
+                let id = &bytes[at..at + 4];
+                let size = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().ok()?) as usize;
+                let body = bytes.get(at + 8..at + 8 + size)?;
+                if id == b"fmt " && body.len() >= 16 {
+                    format = Some(WaveFormatEx {
+                        format_tag: u16::from_le_bytes(body[0..2].try_into().ok()?),
+                        channels: u16::from_le_bytes(body[2..4].try_into().ok()?),
+                        samples_per_sec: u32::from_le_bytes(body[4..8].try_into().ok()?),
+                        avg_bytes_per_sec: u32::from_le_bytes(body[8..12].try_into().ok()?),
+                        block_align: u16::from_le_bytes(body[12..14].try_into().ok()?),
+                        bits_per_sample: u16::from_le_bytes(body[14..16].try_into().ok()?),
+                        cb_size: 0,
+                    });
+                } else if id == b"data" {
+                    data = Some(body.to_vec());
+                }
+                at += 8 + size + (size & 1);
+            }
+            let format = format?;
+            if format.format_tag != WAVE_FORMAT_PCM {
+                return None;
+            }
+            Some((format, data?))
+        }
+
+        fn open_voices(format: &WaveFormatEx) -> Vec<Voice> {
+            let mut voices = Vec::with_capacity(VOICE_COUNT);
+            for _ in 0..VOICE_COUNT {
+                let mut handle: *mut c_void = std::ptr::null_mut();
+                let code = unsafe {
+                    waveOutOpen(
+                        &mut handle,
+                        WAVE_MAPPER,
+                        format,
+                        CALLBACK_NULL,
+                        0,
+                        0,
+                    )
+                };
+                if code != 0 || handle.is_null() {
+                    break;
+                }
+                voices.push(Voice {
+                    handle,
+                    header: Box::new(WaveHdr {
+                        data: std::ptr::null_mut(),
+                        buffer_length: 0,
+                        bytes_recorded: 0,
+                        user: 0,
+                        flags: 0,
+                        loops: 0,
+                        next: std::ptr::null_mut(),
+                        reserved: 0,
+                    }),
+                    buffer: Vec::new(),
+                });
+            }
+            voices
+        }
+
+        /// 播放一段 PCM；返回 false 表示本引擎不可用（调用方应退回 `PlaySound`）。
+        pub(super) fn play(path: &PathBuf, from_ms: u32, to_ms: u32) -> bool {
+            let cell = ENGINE.get_or_init(|| Mutex::new(None));
+            let mut guard = match cell.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            // 首次使用：读文件、解析格式、打开多个设备。
+            if guard.is_none() {
+                let Ok(bytes) = std::fs::read(path) else {
+                    return false;
+                };
+                let Some((format, pcm)) = parse_wav(&bytes) else {
+                    return false;
+                };
+                let voices = open_voices(&format);
+                if voices.is_empty() {
+                    return false;
+                }
+                let mut clips = HashMap::new();
+                clips.insert(path.clone(), Clip { format, pcm });
+                *guard = Some(Engine {
+                    voices,
+                    format,
+                    clips,
+                    next: 0,
+                });
+            }
+            let Some(engine) = guard.as_mut() else {
+                return false;
+            };
+            if !engine.clips.contains_key(path) {
+                let Ok(bytes) = std::fs::read(path) else {
+                    return false;
+                };
+                let Some((format, pcm)) = parse_wav(&bytes) else {
+                    return false;
+                };
+                // 设备是按第一个片段的格式打开的；格式不同就退回 PlaySound。
+                if format.format_tag != engine.format.format_tag
+                    || format.channels != engine.format.channels
+                    || format.samples_per_sec != engine.format.samples_per_sec
+                    || format.bits_per_sample != engine.format.bits_per_sample
+                {
+                    return false;
+                }
+                engine.clips.insert(path.clone(), Clip { format, pcm });
+            }
+            let Some(clip) = engine.clips.get(path) else {
+                return false;
+            };
+            // 按毫秒窗口切片（窗口为 0 时播整段）。
+            let align = clip.format.block_align.max(1) as usize;
+            let rate = clip.format.avg_bytes_per_sec.max(1) as usize;
+            let start = ((from_ms as usize * rate / 1000) / align) * align;
+            let end = if to_ms > from_ms {
+                (((to_ms as usize * rate / 1000) / align) * align).min(clip.pcm.len())
+            } else {
+                clip.pcm.len()
+            };
+            if start >= end || end > clip.pcm.len() {
+                return false;
+            }
+            let slice = clip.pcm[start..end].to_vec();
+            // 找一个空闲声部；全都还在播就复用轮转位置（接受切掉最老的一声）。
+            let count = engine.voices.len();
+            let mut picked = None;
+            for offset in 0..count {
+                let index = (engine.next + offset) % count;
+                let flags = engine.voices[index].header.flags;
+                if flags & WHDR_INQUEUE == 0 {
+                    picked = Some(index);
+                    break;
+                }
+            }
+            let index = picked.unwrap_or_else(|| {
+                let index = engine.next % count;
+                index
+            });
+            engine.next = (index + 1) % count;
+            let voice = &mut engine.voices[index];
+            if voice.header.flags & WHDR_INQUEUE != 0 {
+                return false; // 全部声部都在播：这一声放弃，避免破坏正在播放的缓冲。
+            }
+            if voice.header.flags != 0 {
+                unsafe {
+                    waveOutUnprepareHeader(
+                        voice.handle,
+                        voice.header.as_mut(),
+                        std::mem::size_of::<WaveHdr>() as u32,
+                    )
+                };
+            }
+            voice.buffer.clear();
+            voice.buffer.extend_from_slice(&slice);
+            voice.header.data = voice.buffer.as_mut_ptr();
+            voice.header.buffer_length = voice.buffer.len() as u32;
+            voice.header.flags = 0;
+            let prepared = unsafe {
+                waveOutPrepareHeader(
+                    voice.handle,
+                    voice.header.as_mut(),
+                    std::mem::size_of::<WaveHdr>() as u32,
+                )
+            };
+            if prepared != 0 {
+                return false;
+            }
+            let written = unsafe {
+                waveOutWrite(
+                    voice.handle,
+                    voice.header.as_mut(),
+                    std::mem::size_of::<WaveHdr>() as u32,
+                )
+            };
+            written == 0
+        }
+
+        /// 进程退出时关闭设备（正常路径用不到，但避免驱动残留）。
+        pub(super) fn shutdown() {
+            let Some(cell) = ENGINE.get() else {
+                return;
+            };
+            let mut guard = match cell.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let Some(engine) = guard.take() {
+                for mut voice in engine.voices {
+                    unsafe { waveOutClose(voice.handle) };
+                    voice.handle = std::ptr::null_mut();
+                }
+            }
+        }
+    }
+
+    /// 播放一个声音文件：mp3 走 MCI（`PlaySound` 不支持 mp3，且 MCI 能给毫秒窗口），
+    /// wav 仍走 `PlaySoundW`。
+    ///
+    /// 两条路径都是**异步**的：立即返回，不给每键增加延迟。`from_ms`/`to_ms` 是播放窗口
+    /// （毫秒；`to_ms <= from_ms` 表示整段播放）—— 所以"只播第一击"这类裁剪变成**播放参数**，
+    /// 不需要再产出裁剪过的 WAV。
+    fn play(path: &PathBuf, from_ms: u32, to_ms: u32) {
+        // 诊断：把"要播什么、在不在、走哪条路径"落盘，避免"没声音"再次静默。
+        {
+            use std::io::Write as _;
+            let exists = path.is_file();
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(std::env::temp_dir().join("weasel-sound.log"))
+            {
+                let _ = writeln!(
+                    file,
+                    "play {:?} exists={} window={}..{}",
+                    path, exists, from_ms, to_ms
+                );
+            }
+        }
+        use std::os::windows::ffi::OsStrExt as _;
+        let is_mp3 = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3"));
+        if is_mp3 {
+            play_mci(path, from_ms, to_ms);
+            return;
+        }
+        // 窗口只对 mp3(MCI) 有意义：WAV 一律整段播放。
+        // （否则 1019..1419ms 这种 mp3 时代的窗口会把 650ms 的铃整段跳过，只剩单声部兜底。）
+        let (from_ms, to_ms) = (0, 0);
+        // wav：优先走多声部引擎（连打时声音可以叠加，像真打字机）；
+        // 设备打不开或格式不匹配时退回单声部的 PlaySound，保证永远有声音。
+        // 两个声音都走多声部引擎：连打时按键声可叠加，上屏铃响起时也不会掐断余音。
+        // 设备打不开或格式不匹配时，下面的 PlaySound 兜底仍然生效。
+        if voices::play(path, from_ms, to_ms) {
+            return;
+        }
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let _ = unsafe {
+            PlaySoundW(
+                wide.as_ptr(),
+                std::ptr::null_mut(),
+                SND_ASYNC | SND_NODEFAULT | SND_FILENAME,
+            )
+        };
+    }
+
+    /// 用 MCI 播放 mp3。
+    ///
+    /// 别名按调用序号轮换（4 个），这样上一声不会被这一声立刻掐断；`close` 之后重新
+    /// `open` 是为了让每次播放都从头开始。所有命令都是异步的，失败也只是不出声。
+    fn play_mci(path: &PathBuf, from_ms: u32, to_ms: u32) {
+        #[link(name = "winmm")]
+        unsafe extern "system" {
+            fn mciSendStringW(
+                command: *const u16,
+                buffer: *mut u16,
+                buffer_len: u32,
+                callback: *mut c_void,
+            ) -> u32;
+        }
+        static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        /// 已打开的文件 → 别名。`open` 一个 mp3 要重建 DirectShow 滤镜图（几十毫秒），
+        /// 每键都 open/close 会在快速连打时排队、甚至彻底没声；打开后只做 stop/play 就很快。
+        static OPEN: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
+        let send = |command: &str| {
+            let wide: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
+            let _ = unsafe {
+                mciSendStringW(wide.as_ptr(), std::ptr::null_mut(), 0, std::ptr::null_mut())
+            };
+        };
+        let file = path.to_string_lossy().to_string();
+        let alias = {
+            let mut open = match OPEN.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            match open.iter().find(|(opened, _)| opened == path) {
+                Some((_, alias)) => alias.clone(),
+                None => {
+                    let alias = format!(
+                        "weaselsnd{}",
+                        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    );
+                    send(&format!("open \"{file}\" type mpegvideo alias {alias}"));
+                    // 必须声明时间单位为毫秒，否则 `from/to` 会按设备默认单位解释，
+                    // 窗口就落到别处（表现为"上屏没声音"或声音不对）。
+                    send(&format!("set {alias} time format milliseconds"));
+                    open.push((path.clone(), alias.clone()));
+                    alias
+                }
+            }
+        };
+        send(&format!("stop {alias}"));
+        if to_ms > from_ms {
+            send(&format!("play {alias} from {from_ms} to {to_ms}"));
+        } else {
+            send(&format!("play {alias}"));
+        }
+    }
+
+    /// 上屏铃的播放窗口：`bell.mp3` 里第一击在 1019 ms、第二击在 1119 ms，
+    /// 所以 1019→1419 ms 正好是那声"叮-铃"（原始录音不动，窗口只在播放时生效）。
+    const BELL_FROM_MS: u32 = 1019;
+    const BELL_TO_MS: u32 = 1419;
+
+    /// 击键音样本池：`sounds/typewriter-key-*.wav`（首次调用时枚举一次）。
+    ///
+    /// 真机的每一次击键都不同（商业音效库也是从样本池随机取），固定播同一个文件会有
+    /// 明显的"电子循环感"。
+    fn key_pool(dir: &PathBuf) -> &'static [PathBuf] {
+        static POOL: OnceLock<Vec<PathBuf>> = OnceLock::new();
+        POOL.get_or_init(|| {
+            let Ok(entries) = std::fs::read_dir(dir.join("sound")) else {
+                return Vec::new();
+            };
+            let mut pool: Vec<PathBuf> = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| {
+                            name.starts_with("typewriter-key-") && name.ends_with(".wav")
+                        })
+                })
+                .collect();
+            pool.sort();
+            pool
+        })
+        .as_slice()
+    }
+
+    /// 从样本池里随机取一个击键音；池为空时退回配置中的 `key`。
+    ///
+    /// 用系统时间的纳秒做种、配一个原子计数推进，因此不需要引入随机数依赖，
+    /// 连续两次也不会取到同一个文件。
+    fn pick_key(config: &Config, dir: &PathBuf) -> Option<PathBuf> {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let pool = key_pool(dir);
+        if pool.is_empty() {
+            return config.key.clone();
+        }
+        let mixed = COUNTER
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map(|elapsed| u64::from(elapsed.subsec_nanos()))
+                    .unwrap_or(0),
+            );
+        Some(pool[(mixed >> 33) as usize % pool.len()].clone())
+    }
+
+    /// 按键响应：带回提交文本 → 上屏音；被接受的按键 → 从样本池随机取一个击键音。
+    ///
+    /// 重放类响应（例如能力变化后恢复内联预编辑）会把 `eaten` 置为 false，
+    /// 因此不会误响；被输入法忽略的按键同样不出声。
+    pub(super) fn play_for_response(response: &super::KeyEventResponse) {
+        let config = config();
+        if !config.enabled {
+            return;
+        }
+        if !response.commit_text.is_empty() {
+            if let Some(path) = config.commit.as_ref() {
+                // 上屏：只播铃的那一声（mp3 用窗口，wav 时窗口被忽略）。
+                play(path, BELL_FROM_MS, BELL_TO_MS);
+            }
+            return;
+        }
+        if response.eaten {
+            let Some(dir) = runtime_dir() else {
+                return;
+            };
+            // 空格单独一个音（真机空格键杆更长，声音更闷更重）；其余按键走样本池随机。
+            let keycode = LAST_KEYCODE.load(std::sync::atomic::Ordering::Relaxed);
+            if keycode == 0x20 {
+                let space = dir.join("sound").join("typewriter-space.wav");
+                if space.exists() {
+                    play(&space, 0, 0);
+                    return;
+                }
+            }
+            if let Some(path) = pick_key(&config, &dir) {
+                play(&path, 0, 0);
+            }
+        }
+    }
+}
+
 /// 将按键响应写回客户端，并附带服务端安全输入策略。
 ///
 /// 队列已关闭等发送错误只记调试日志，不回滚已经完成的引擎状态变更。
@@ -334,6 +1040,8 @@ fn reply(
     allow_rime_in_secure_fields: bool,
 ) {
     response.allow_rime_in_secure_fields = Some(allow_rime_in_secure_fields);
+    trace_commit_reply(&response);
+    sound::play_for_response(&response);
     if let Err(error) = connection.enqueue(Envelope {
         request_id,
         payload: Some(Payload::KeyEventResponse(host_response(response))),
@@ -1124,5 +1832,47 @@ impl Processor<Work> for Engine {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod sound_parse_tests {
+    use super::sound::parse_for_test;
+    use std::fs;
+
+    /// 相对 asset 应从 exe 目录逐级向上找同名目录，子路径相对它解析。
+    #[test]
+    fn sound_parse_resolves_relative_asset() {
+        let root = std::env::temp_dir().join(format!("weasel-asset-{}", std::process::id()));
+        let exe_dir = root.join("artifact").join("smoke");
+        let sound_dir = root.join("asset").join("sound");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&exe_dir).unwrap();
+        fs::create_dir_all(&sound_dir).unwrap();
+        fs::write(sound_dir.join("typewriter-bell.wav"), b"x").unwrap();
+        fs::write(sound_dir.join("typewriter-key.wav"), b"x").unwrap();
+
+        let json = r#"{ "asset": "asset", "sound": { "enabled": true, "key": "sound/typewriter-key.wav", "commit": "sound/typewriter-bell.wav" } }"#;
+        let (enabled, key, commit) = parse_for_test(json, &exe_dir);
+        assert!(enabled, "enabled 应为 true");
+        let key = key.expect("key 应解析出路径");
+        let commit = commit.expect("commit 应解析出路径");
+        assert_eq!(key, sound_dir.join("typewriter-key.wav"), "key 解析错误");
+        assert_eq!(commit, sound_dir.join("typewriter-bell.wav"), "commit 解析错误");
+        assert!(commit.is_file(), "commit 解析出的文件应真实存在: {commit:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 未配置 asset 时退回 exe 目录（安装后的布局）。
+    #[test]
+    fn sound_parse_falls_back_to_exe_directory() {
+        let exe_dir = std::env::temp_dir().join(format!("weasel-noasset-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&exe_dir);
+        fs::create_dir_all(exe_dir.join("sound")).unwrap();
+        let json = r#"{ "sound": { "enabled": true, "key": "sound/k.wav", "commit": "sound/b.wav" } }"#;
+        let (_, key, commit) = parse_for_test(json, &exe_dir);
+        assert_eq!(key.unwrap(), exe_dir.join("sound").join("k.wav"));
+        assert_eq!(commit.unwrap(), exe_dir.join("sound").join("b.wav"));
+        let _ = fs::remove_dir_all(&exe_dir);
     }
 }

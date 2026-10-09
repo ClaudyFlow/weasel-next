@@ -1,5 +1,7 @@
 #[path = "../build_support/icon.rs"]
 mod icon;
+#[path = "../build_support/manifest.rs"]
+mod manifest;
 fn main() {
     icon::embed();
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("renderer.manifest");
@@ -25,12 +27,7 @@ fn main() {
     } else {
         manifest
     };
-    println!("cargo:rustc-link-arg-bin=weasel-renderer=/MANIFEST:EMBED");
-    // renderer.manifest owns requestedExecutionLevel, including uiAccess.
-    // Disable the linker's default fragment so future changes cannot conflict.
-    println!("cargo:rustc-link-arg-bin=weasel-renderer=/MANIFESTUAC:NO");
-    println!(
-        "cargo:rustc-link-arg-bin=weasel-renderer=/MANIFESTINPUT:{}",
-        manifest.display()
-    );
+    // renderer.manifest owns requestedExecutionLevel, including uiAccess, so the
+    // MSVC linker must not merge its own default UAC fragment into it.
+    manifest::embed("weasel-renderer", &manifest, true);
 }

@@ -1,7 +1,15 @@
 #[path = "../build_support/icon.rs"]
 mod icon;
+#[path = "../build_support/manifest.rs"]
+mod manifest;
 
 fn main() {
+    // 只有构建 Slint 界面（`gui` 特性）时才生成 windows 绑定与 .slint 代码。
+    // Tauri 版以 default-features = false 依赖本包的库目标，不需要这些产物。
+    if std::env::var_os("CARGO_FEATURE_GUI").is_none() {
+        println!("cargo:rerun-if-env-changed=CARGO_FEATURE_GUI");
+        return;
+    }
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     windows_bindgen::builder()
         .input_default()
@@ -68,13 +76,15 @@ fn main() {
         icon::embed();
         let manifest =
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("settings.manifest");
-        println!("cargo:rerun-if-changed={}", manifest.display());
-        println!("cargo:rustc-link-arg-bin=weasel-settings=/MANIFEST:EMBED");
-        println!(
-            "cargo:rustc-link-arg-bin=weasel-settings=/MANIFESTINPUT:{}",
-            manifest.display()
-        );
+        // MSVC 用 /MANIFEST*，GNU 工具链改走 RT_MANIFEST 资源（见 build_support/manifest.rs）。
+        manifest::embed("weasel-settings", &manifest, false);
         // Slint 在 Windows 的调试构建需要较大的主线程栈，仅作用于设置程序。
-        println!("cargo:rustc-link-arg-bin=weasel-settings=/STACK:8000000");
+        // MSVC: /STACK:<n>；GNU: 交给 clang/gcc 驱动 -Wl,--stack,<n>。
+        let msvc = std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+        if msvc {
+            println!("cargo:rustc-link-arg-bin=weasel-settings=/STACK:8000000");
+        } else {
+            println!("cargo:rustc-link-arg-bin=weasel-settings=-Wl,--stack,8000000");
+        }
     }
 }

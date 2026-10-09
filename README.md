@@ -1,4 +1,4 @@
-# 小狼毫 RS 输入法
+﻿# 小狼毫 RS 输入法
 
 基于 中州韵输入法引擎 / Rime Input Method Engine 的 Windows 输入法
 
@@ -36,8 +36,8 @@ Rime 配置决定输入法的输入方案与交互，见 [Rime定制指南](http
 
 ```powershell
 # 首先下载构建所需要的组件
-.\scripts\download_librime.ps1
-.\scripts\download_vcredist.ps1
+.\script\download_librime.ps1
+.\script\download_vcredist.ps1
 cargo build --workspace --release
 ```
 
@@ -45,6 +45,6 @@ cargo build --workspace --release
 
 ```powershell
 # 构建输入法及安装包
-.\scripts\build-release.ps1
-.\scripts\build-installer.ps1
+.\script\build-release.ps1
+.\script\build-installer.ps1
 ```

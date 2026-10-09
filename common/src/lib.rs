@@ -1,4 +1,4 @@
-//! Shared messages and RPC transport for weasel-rs.
+﻿//! Shared messages and RPC transport for weasel-rs.
 
 pub mod about;
 #[cfg(windows)]
@@ -7,6 +7,7 @@ pub mod command_menu;
 #[cfg(windows)]
 pub mod comrt;
 pub mod data_frame;
+pub mod deploy_manifest;
 pub mod deploy_protocol;
 pub mod logging;
 pub mod message;

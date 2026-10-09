@@ -1,17 +1,15 @@
 //! 配置描述仅启动时读取；主题选择只改变单页分区显隐。
 #![windows_subsystem = "windows"]
-mod app_options;
 mod backdrop;
 mod bindings;
 mod broker;
-mod catalog;
 mod colors;
-mod config;
-mod form;
 mod frame;
-mod metadata;
 mod updater;
 mod wasm_modules;
+// 框架无关的设置核心来自 weasel_settings 库：与 Tauri 设置界面共用同一套实现
+// （配置文档读写与冲突检测、主题目录发现、表单字段模型、应用选项编辑）。
+use weasel_settings::{app_options, catalog, config, form};
 use slint::{ComponentHandle, Model, VecModel};
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
 use weasel_common::process::RuntimePaths;

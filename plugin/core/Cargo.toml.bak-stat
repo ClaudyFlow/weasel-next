@@ -1,0 +1,20 @@
+[package]
+name = "rime-input-stats-core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Rime 输入统计核心（由 rime-lua input_statistics.lua 合并而来），供 librime 原生插件使用"
+publish = false
+
+[lib]
+name = "rime_input_stats_core"
+# staticlib: 链接进 C++ 模块壳；cdylib: 直接做 C ABI 动态库；rlib: Rust 测试
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

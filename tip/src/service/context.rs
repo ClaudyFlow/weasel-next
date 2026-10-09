@@ -34,6 +34,14 @@ pub(super) struct ContextState {
     pub composition_epoch: AtomicU64,
     /// 最近成功应用到组合的布局响应修订号。
     pub applied_layout_revision: AtomicU64,
+    /// 最近**成功写入宿主**的提交响应所属连接代次；0 表示尚无记录。
+    ///
+    /// 与 [`Self::applied_commit_revision`] 一起构成 `(代次, 修订号)` 标识：TSF 在重入
+    /// 或重放同一项编辑工作时会把同一份 `commit_text` 再执行一遍，长提交文本（例如统计
+    /// 报表）会被重复插入宿主文档。携带提交文本的写入成功后记下该标识，重复执行时跳过。
+    pub applied_commit_generation: AtomicU64,
+    /// 最近成功写入宿主的提交响应修订号；0 表示尚无记录。
+    pub applied_commit_revision: AtomicU64,
     /// 断连组合清理请求是否已排队或正在执行，防止重复安排。
     pub disconnect_requested: AtomicBool,
     /// 最近应用到 TSF 的预编辑显示文本。
@@ -208,6 +216,8 @@ impl TextService {
             composition: Mutex::new(None),
             composition_epoch: AtomicU64::new(0),
             applied_layout_revision: AtomicU64::new(0),
+            applied_commit_generation: AtomicU64::new(0),
+            applied_commit_revision: AtomicU64::new(0),
             disconnect_requested: AtomicBool::new(false),
             composition_text: Mutex::new(String::new()),
             composition_content: Mutex::new(Default::default()),

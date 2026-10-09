@@ -1,0 +1,5 @@
+/target/
+/artifacts/
+node_modules/
+/themes/wasm/sdk-rust/target/
+/.wrangler/

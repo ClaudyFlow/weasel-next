@@ -1,4 +1,4 @@
-//! 离线解析并验证主题配置元数据及其 JSON Schema 子集。
+﻿//! 离线解析并验证主题配置元数据及其 JSON Schema 子集。
 //!
 //! 元数据和表单注解始终按数据处理，不执行其中的代码，也不访问远程引用。
 //! 解析、结构检查和实际值校验均受深度、节点、字段、字符串、字节数及工作量
@@ -706,7 +706,7 @@ mod tests {
             json!({"$ref":"https://example.com/schema"}),
             json!({"$defs":{"loop":{"$ref":"#/$defs/loop"}}}),
             json!({"$dynamicRef":"#x"}),
-            json!({"script":"run"}),
+            json!({"scripts":"run"}),
             json!({"type":"string","format":"email"}),
             json!({"pattern":"(?=bad)"}),
             json!({"minimum":"zero"}),

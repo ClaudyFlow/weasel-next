@@ -1,9 +1,9 @@
-!ifndef WEASEL_LAUNCH_BROKER_NSH
+﻿!ifndef WEASEL_LAUNCH_BROKER_NSH
 !define WEASEL_LAUNCH_BROKER_NSH
 Function LaunchBrokerUnelevated
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
-  File "${PROJECT_ROOT}\scripts\launch-broker.ps1"
+  File "${PROJECT_ROOT}\script\launch-broker.ps1"
   SetOutPath "$INSTDIR"
   ; A separate STA process avoids COM calls on NSIS's input-synchronous UI thread.
   ; ExecToStack captures the script's diagnostics; no elevated launch fallback.
@@ -21,7 +21,7 @@ FunctionEnd
 Function ProvisionCurrentUser
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
-  File "${PROJECT_ROOT}\scripts\launch-broker.ps1"
+  File "${PROJECT_ROOT}\script\launch-broker.ps1"
   SetOutPath "$SYSDIR"
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -File "$PLUGINSDIR\launch-broker.ps1" -InstallDirectory "$INSTDIR" -Mode PostInstall'
   Pop $0
@@ -38,7 +38,7 @@ FunctionEnd
 Function un.RemoveCurrentUserProvisioning
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
-  File "${PROJECT_ROOT}\scripts\launch-broker.ps1"
+  File "${PROJECT_ROOT}\script\launch-broker.ps1"
   SetOutPath "$SYSDIR"
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -File "$PLUGINSDIR\launch-broker.ps1" -InstallDirectory "$INSTDIR" -Mode PostUninstall'
   Pop $0

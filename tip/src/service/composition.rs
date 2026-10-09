@@ -308,6 +308,56 @@ impl TextService {
         Ok(())
     }
 
+    /// 提交时是否采用"**先结束组合、再插入文本**"的策略。
+    ///
+    /// 默认采用：微信 / QQ 这类自绘输入框对"活动组合内写入提交文本"的处理与记事本不一致，
+    /// 会把同一份文本落盘两次；先结束组合再插入可绕开。设 `WEASEL_LEGACY_COMMIT=1`
+    /// 退回旧的"替换组合文本"策略，仅用于对照排查。
+    fn commit_after_composition_end() -> bool {
+        std::env::var_os("WEASEL_LEGACY_COMMIT").is_none()
+    }
+
+    /// 提交响应的 `(连接代次, 修订号)` 标识；修订号为 0 时不具备可比性，返回 `None`。
+    ///
+    /// 服务端为每个响应分配单调递增的修订号，因此同一标识只代表同一次响应。
+    fn commit_identity(response: &KeyEventResponse) -> Option<(u64, u64)> {
+        if response.commit_text.is_empty() || response.revision == 0 {
+            return None;
+        }
+        let generation = response.token.as_ref().map(|token| token.generation)?;
+        Some((generation, response.revision))
+    }
+
+    /// 该响应携带的提交文本是否**已经成功写入过**宿主文档。
+    ///
+    /// TSF 可能重入或在新的编辑会话里重放同一项工作（[`Self::insert_commit`] 与
+    /// [`Self::commit_composition`] 都可能因此被同一响应触发两次）；此时重复写入会把
+    /// 提交文本插入两遍——长文本（例如统计报表）尤其明显。
+    fn commit_already_applied(
+        &self,
+        state: &ContextState,
+        response: &KeyEventResponse,
+    ) -> bool {
+        let Some((generation, revision)) = Self::commit_identity(response) else {
+            return false;
+        };
+        state.applied_commit_revision.load(Ordering::Acquire) == revision
+            && state.applied_commit_generation.load(Ordering::Acquire) == generation
+    }
+
+    /// 记录一次提交文本已成功写入宿主（先写代次、后写修订号，读取侧容忍该次序）。
+    fn record_commit_applied(&self, state: &ContextState, response: &KeyEventResponse) {
+        let Some((generation, revision)) = Self::commit_identity(response) else {
+            return;
+        };
+        state
+            .applied_commit_generation
+            .store(generation, Ordering::Release);
+        state
+            .applied_commit_revision
+            .store(revision, Ordering::Release);
+    }
+
     /// 在当前选择处插入非组合提交文本，并按响应要求继续建立组合。
     ///
     /// 插入由 TSF 编辑 Cookie 授权；插入后折叠范围到末尾并设置选择。若引擎
@@ -325,6 +375,10 @@ impl TextService {
         if !state.matches(response.token.as_ref())? {
             return Ok(());
         }
+        // 同一响应只写入一次：重入/重放的编辑工作不得把提交文本插两遍。
+        if self.commit_already_applied(&state, response) {
+            return Ok(());
+        }
 
         let insert: ITfInsertAtSelection = context.cast()?;
         let utf16: Vec<u16> = response.commit_text.encode_utf16().collect();
@@ -337,6 +391,7 @@ impl TextService {
                 utf16.len().try_into().unwrap_or(i32::MAX),
             )?
         };
+        self.record_commit_applied(&state, response);
         self.collapse_end(&range, ec)?;
         self.set_selection(context, ec, &range, 0)?;
         if response.composing {
@@ -371,6 +426,11 @@ impl TextService {
             return Ok(());
         }
 
+        // 同一响应只写入一次：重入/重放的编辑工作不得把组合替换成同一份提交文本两遍。
+        if self.commit_already_applied(&state, response) {
+            return Ok(());
+        }
+
         let active = self
             .lock(&state.composition)?
             .as_ref()
@@ -385,6 +445,7 @@ impl TextService {
         }
         self.lock(&state.composition_content)?.begin_commit();
         self.set_range_text(&range, ec, &response.commit_text)?;
+        self.record_commit_applied(&state, response);
         // A host termination callback may already have taken this composition
         // and invalidated its generation while SetText was executing.
         if !state.matches(response.token.as_ref())?
@@ -462,6 +523,15 @@ impl TextService {
                 EditStep::StartComposition,
                 session.clone(),
             )?;
+        } else if !response.commit_text.is_empty() {
+            // 组合已结束、预编辑已清除，现在把最终提交文本插入到选区。
+            // 幂等守卫按 `(连接代次, 修订号)` 记账，重复执行不会插第二遍。
+            self.request_edit_session(
+                context.clone(),
+                response.clone(),
+                EditStep::InsertCommit,
+                session.clone(),
+            )?;
         }
         Ok(())
     }
@@ -492,7 +562,17 @@ impl TextService {
                 }
                 let has_composition = self.lock(&state.composition)?.is_some();
                 let step = if !response.commit_text.is_empty() {
-                    if has_composition {
+                    if has_composition && Self::commit_after_composition_end() {
+                        // 提交文本一律在**组合结束之后**再插入：微信 / QQ 这类自绘输入框
+                        // 对"活动组合内的 SetText"处理与记事本不一致，会把同一份文本落盘
+                        // 两次（记事本正常）。这里先清掉组合里的预编辑并结束组合，再由
+                        // `end_composition` 排队插入最终文本；`WEASEL_LEGACY_COMMIT=1`
+                        // 可退回旧的"替换组合文本"策略以便对照排查。
+                        EditStep::EndComposition {
+                            clear: true,
+                            restart: false,
+                        }
+                    } else if has_composition {
                         EditStep::CommitComposition
                     } else {
                         EditStep::InsertCommit

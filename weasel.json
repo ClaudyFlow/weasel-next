@@ -8,6 +8,11 @@
   "input_mode_indicator": "switch_only",
   "input_mode_indicator_duration_ms": 800,
   "allow_rime_in_secure_fields": false,
+  "sound": {
+    "enabled": true,
+    "key": "sound/typewriter-key.wav",
+    "commit": "sound/typewriter-bell.wav"
+  },
   "themeSettings": {
     "abc": {},
     "eleven": {},

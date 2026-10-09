@@ -5,14 +5,47 @@
 //! 用于更新文字、marquee 进度条和按钮状态；对话框创建前发生的更新会被缓存并在
 //! `TDN_CREATED` 时应用。
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use windows_core::HRESULT;
-use windows_strings::{HSTRING, PCWSTR};
+use windows_strings::{HSTRING, PCWSTR, s, w};
 
 use crate::bindings::*;
 
 type HyperlinkHandler = Arc<dyn Fn(&str) + Send + Sync + 'static>;
+
+/// comctl32 v6 导出的 `TaskDialogIndirect` 签名。
+type TaskDialogIndirectFn = unsafe extern "system" fn(
+    *const TASKDIALOGCONFIG,
+    *mut i32,
+    *mut i32,
+    *mut windows_core::BOOL,
+) -> HRESULT;
+
+/// 按需解析 `TaskDialogIndirect`，不静态导入该符号。
+///
+/// 它只存在于通过清单激活 `Microsoft.Windows.Common-Controls` 6.0 的进程里（comctl32
+/// v6）；静态导入会让没有该清单的宿主进程整块 DLL 加载失败
+/// （`ERROR_PROC_NOT_FOUND`），而文本输入处理器会被 TSF 加载进任意应用进程。
+///
+/// 解析限制在 System32 内进行；宿主激活 v6 时激活上下文仍会把该名称指向 WinSxS
+/// 中的 v6 版本。解析不到时由调用方退回 [`MessageBoxW`]。
+fn task_dialog_indirect() -> Option<TaskDialogIndirectFn> {
+    static RESOLVED: OnceLock<Option<TaskDialogIndirectFn>> = OnceLock::new();
+    *RESOLVED.get_or_init(|| unsafe {
+        let module = LoadLibraryExW(
+            w!("comctl32.dll"),
+            None,
+            LOAD_LIBRARY_SEARCH_SYSTEM32 as u32,
+        );
+        if module.0.is_null() {
+            return None;
+        }
+        // 模块故意常驻：函数指针的有效期与进程相同，且 comctl32 本就不会卸载。
+        let symbol = GetProcAddress(module, s!("TaskDialogIndirect"))?;
+        Some(std::mem::transmute::<_, TaskDialogIndirectFn>(symbol))
+    })
+}
 
 /// Task Dialog 内置“确定”按钮的标识。
 pub const BUTTON_OK: i32 = IDOK;
@@ -341,6 +374,9 @@ impl TaskDialog {
     ///
     /// 消费配置对象可以避免同一份回调状态被并发用于多个原生窗口；此前取得的控制器
     /// 在对话框关闭后仍安全，但后续更新只会写入已经不可见的缓存。
+    ///
+    /// 宿主进程没有 comctl32 v6 时（见 [`task_dialog_indirect`]）退回系统消息框，
+    /// 此时动态文字、进度条和展开区域不可用。
     pub fn show(self) -> windows_core::Result<TaskDialogResult> {
         let initial = self
             .state
@@ -350,8 +386,8 @@ impl TaskDialog {
             .text
             .clone();
         let title = HSTRING::from(&self.title);
-        let main = HSTRING::from(initial.main_instruction);
-        let content = HSTRING::from(initial.content);
+        let main = HSTRING::from(initial.main_instruction.clone());
+        let content = HSTRING::from(initial.content.clone());
         let expanded = HSTRING::from(initial.expanded_information);
         let footer = HSTRING::from(initial.footer);
         let expanded_control = HSTRING::from(&self.expanded_control_text);
@@ -391,12 +427,15 @@ impl TaskDialog {
         let mut button = 0;
         let mut radio_button = 0;
         let mut verification_checked = windows_core::BOOL::default();
+        let Some(task_dialog) = task_dialog_indirect() else {
+            return Ok(self.message_box_fallback(&initial.main_instruction, &initial.content));
+        };
         unsafe {
-            TaskDialogIndirect(
+            task_dialog(
                 &config,
-                Some(&mut button),
-                Some(&mut radio_button),
-                Some(&mut verification_checked),
+                &mut button,
+                &mut radio_button,
+                &mut verification_checked,
             )
             .ok()?;
         }
@@ -405,6 +444,43 @@ impl TaskDialog {
             radio_button,
             verification_checked: verification_checked.as_bool(),
         })
+    }
+
+    /// 用系统消息框呈现主说明与正文，供没有 comctl32 v6 的宿主进程使用。
+    fn message_box_fallback(&self, main_instruction: &str, content: &str) -> TaskDialogResult {
+        let body = if content.is_empty() {
+            main_instruction.to_owned()
+        } else {
+            format!("{main_instruction}\n\n{content}")
+        };
+        let body = HSTRING::from(body);
+        let caption = HSTRING::from(&self.title);
+        let style = (match self.buttons {
+            TaskDialogButtons::Ok => MB_OK,
+            TaskDialogButtons::OkCancel => MB_OKCANCEL,
+        } | MB_SETFOREGROUND) as u32;
+        let owner = if self.owner == 0 {
+            None
+        } else {
+            Some(HWND(self.owner as *mut _))
+        };
+        let result = unsafe {
+            MessageBoxW(
+                owner,
+                PCWSTR::from_raw(body.as_ptr()),
+                PCWSTR::from_raw(caption.as_ptr()),
+                style,
+            )
+        };
+        TaskDialogResult {
+            button: if result == IDCANCEL {
+                BUTTON_CANCEL
+            } else {
+                BUTTON_OK
+            },
+            radio_button: 0,
+            verification_checked: false,
+        }
     }
 
     fn set_initial_text(&self, element: Element, text: String) {

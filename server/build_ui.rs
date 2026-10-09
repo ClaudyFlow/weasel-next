@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+#[path = "../build_support/manifest.rs"]
+mod manifest;
 
 pub fn generate() {
     let manifest_dir = PathBuf::from(
@@ -284,10 +286,5 @@ pub fn generate() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=metadata/xaml_transparency.rdl");
     println!("cargo:rerun-if-changed={}", native_rdl.display());
-    println!("cargo:rerun-if-changed={}", manifest.display());
-    println!("cargo:rustc-link-arg-bin=weasel-server=/MANIFEST:EMBED");
-    println!(
-        "cargo:rustc-link-arg-bin=weasel-server=/MANIFESTINPUT:{}",
-        manifest.display()
-    );
+    manifest::embed("weasel-server", &manifest, false);
 }

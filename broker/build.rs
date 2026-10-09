@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 #[path = "../build_support/icon.rs"]
 mod icon;
+#[path = "../build_support/manifest.rs"]
+mod manifest;
 
 fn main() {
     println!("cargo:rerun-if-env-changed=WINSPARKLE_APPCAST_URL");
@@ -96,10 +98,5 @@ fn main() {
         .flat()
         .write();
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed={}", manifest.display());
-    println!("cargo:rustc-link-arg-bin=weasel-broker=/MANIFEST:EMBED");
-    println!(
-        "cargo:rustc-link-arg-bin=weasel-broker=/MANIFESTINPUT:{}",
-        manifest.display()
-    );
+    manifest::embed("weasel-broker", &manifest, false);
 }

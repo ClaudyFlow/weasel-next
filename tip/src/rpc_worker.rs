@@ -27,6 +27,11 @@ use weasel_common::rpc::{RpcClient, RpcError, try_default_pipe_name};
 static NEXT_CONNECTION_EPOCH: AtomicU64 = AtomicU64::new(1);
 /// 单条 RPC 命令（包括连接握手）的最大处理预算。
 const COMMAND_TIMEOUT: Duration = Duration::from_millis(80);
+/// 冷启动 / 刚切到某程序时的**首个按键**要顺带完成"连接 + 握手 + open_input"，
+/// 80ms 的常规预算几乎必然超时 → 该键按英文回退直接交给应用，用户看到的就是
+/// "前几个字没进入输入法"。首键给更宽的预算：它已被输入法吞下，不会漏给应用，
+/// 只是可能晚几十毫秒出现在输入框里。
+const CONNECT_KEY_TIMEOUT: Duration = Duration::from_millis(500);
 /// 停止工作线程时等待原生线程退出的最长毫秒数。
 const STOP_TIMEOUT_MS: u32 = 100;
 
@@ -461,13 +466,18 @@ impl WorkerState {
             }
             self.discard_disconnected_client().await;
 
-            // Keep both the handshake and dispatch within the original budget.
-            // Await serially so key replies and context commands retain ordering.
+            // 建立连接时的首键：放宽预算，避免这一键被英文回退吞掉；
+            // 连接就绪后仍按常规预算，Await 串行以保证按键回复与上下文命令的顺序。
             let establishing = self.client.is_none();
+            let dispatch_deadline = if establishing {
+                Instant::now() + CONNECT_KEY_TIMEOUT
+            } else {
+                deadline
+            };
             let result = tokio::select! {
                 biased;
                 _ = &mut stop => break,
-                result = tokio::time::timeout_at(deadline.into(), self.dispatch(command)) => result,
+                result = tokio::time::timeout_at(dispatch_deadline.into(), self.dispatch(command)) => result,
             };
             if result.is_err() {
                 report(
@@ -1493,7 +1503,8 @@ mod tests {
                     _ => panic!("expected key"),
                 };
                 assert!(token.as_ref().unwrap().connection_epoch > 0);
-                tokio::time::sleep(Duration::from_millis(130)).await;
+                // 首键宽限已放宽到 500ms：这里必须睡更久，才能继续验证"超时→英文回退"。
+                tokio::time::sleep(Duration::from_millis(700)).await;
                 let _ = connection
                     .send_key_event_response(
                         key.request_id,

@@ -1,0 +1,98 @@
+﻿//
+// input_stat_module.cc — librime 模块注册。
+//
+// 与 librime 官方示例 `sample/src/sample_module.cc` 同一套路：模块初始化时把组件
+// 注册进全局 Registry，`RIME_REGISTER_MODULE(input_stat)` 生成
+// `rime_require_module_input_stat()`；在 GCC/Clang 下 `RIME_MODULE_INITIALIZER` 是
+// `__attribute__((constructor))`，因此**只要本对象被链进 rime.dll，注册就会在 DLL 加载时
+// 自动发生**（Windows 上 librime 不加载外部插件，所以本模块以静态库形式链入；见 README）。
+//
+// 插件名必须与库文件名一致（librime `PluginManager::plugin_name_of` 的规则），静态链接时
+// 模块名固定为 `input_stat`。
+//
+// 诊断：设置环境变量 `INPUT_STAT_DEBUG=1` 后，initialize/finalize 会把一行记录追加到
+// `%TEMP%\input-stat-module.log`。宿主（weasel-server）默认把 librime 的 stderr 日志吞掉，
+// 这个标记用于确认模块在被初始化时确实跑到了——例如排查方案里 `input_stat_translator`
+// 报"找不到组件"的问题。
+//
+
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+
+#include <rime/common.h>
+#include <rime/registry.h>
+#include <rime_api.h>
+
+#include "input_stat_translator.h"
+
+using namespace rime;
+
+namespace {
+
+/// 在 `INPUT_STAT_DEBUG` 打开时记录一行诊断信息；任何失败都不影响功能。
+void DebugTrace(const char* message) {
+  const char* enabled = std::getenv("INPUT_STAT_DEBUG");
+  if (enabled == nullptr || *enabled == '\0' || *enabled == '0') {
+    return;
+  }
+  const char* temp = std::getenv("TEMP");
+  if (temp == nullptr || *temp == '\0') {
+    return;
+  }
+  const std::string path = std::string(temp) + "\\input-stat-module.log";
+  if (FILE* file = std::fopen(path.c_str(), "a")) {
+    std::fprintf(file, "%s\n", message);
+    std::fclose(file);
+  }
+}
+
+}  // namespace
+
+static void rime_input_stat_initialize() {
+  LOG(INFO) << "registering components from module 'input_stat'.";
+  Registry& registry = Registry::instance();
+  registry.Register("input_stat_translator",
+                    new Component<input_stat::InputStatsTranslator>);
+  DebugTrace("input_stat: initialize() ran; component 'input_stat_translator' registered");
+}
+
+static void rime_input_stat_finalize() {
+  DebugTrace("input_stat: finalize() ran");
+}
+
+namespace {
+
+/// 直接把 translator 注册进全局 Registry。
+///
+/// librime 的标准模块协议是：`RIME_REGISTER_MODULE` 的构造函数调用 `RimeRegisterModule`，
+/// 之后由 librime 在初始化阶段回调 `module->initialize()` 完成组件注册。但静态链入时这条路径
+/// 在我们的环境里没有走通——实测 glog 里其他模块（core/dict/gears/levers）的组件都注册了，
+/// 唯独没有本模块，`initialize()` 从未被调用。
+///
+/// 因此这里用一个**普通 C++ 静态对象**做注册：静态对象构造在所有工具链（clang/GCC/MSVC）下
+/// 都必然在 DLL 加载时执行，不依赖 `__attribute__((constructor))` 或 MSVC 的 `.CRT$XCU` 段。
+/// 注册是幂等的（用 `registered` 标志防止与 initialize() 重复注册）。
+void RegisterTranslatorOnce(const char* source) {
+  static bool registered = false;
+  if (registered) {
+    return;
+  }
+  registered = true;
+  Registry::instance().Register("input_stat_translator",
+                                new Component<input_stat::InputStatsTranslator>);
+  DebugTrace(source);
+}
+
+struct TranslatorRegistrar {
+  TranslatorRegistrar() {
+    RegisterTranslatorOnce("input_stat: registrar ran; component 'input_stat_translator' registered");
+  }
+};
+
+TranslatorRegistrar g_translator_registrar;
+
+}  // namespace
+
+// 保留标准模块声明：若宿主的 librime 确实回调 initialize()，它只会走到幂等分支。
+RIME_REGISTER_MODULE(input_stat)

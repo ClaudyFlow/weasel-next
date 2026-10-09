@@ -1,6 +1,8 @@
-use std::path::PathBuf;
+﻿use std::path::PathBuf;
 #[path = "../build_support/version.rs"]
 mod version;
+#[path = "../build_support/toolchain.rs"]
+mod toolchain;
 
 fn main() {
     version::embed();
@@ -328,10 +330,20 @@ fn main() {
     println!("cargo:rerun-if-changed={}", manual_rdl.display());
     println!("cargo:rerun-if-changed={}", weasel_rdl.display());
     println!("cargo:rerun-if-changed={}", module_definition.display());
-    println!(
-        "cargo:rustc-cdylib-link-arg=/DEF:{}",
-        module_definition.display()
-    );
+    // MSVC's linker takes the module definition file with /DEF:; GNU ld reads a
+    // `.def` file directly as a linker input. Either way it supplies the
+    // PRIVATE COM exports on top of rustc's own generated export list.
+    if toolchain::is_msvc_target() {
+        println!(
+            "cargo:rustc-cdylib-link-arg=/DEF:{}",
+            module_definition.display()
+        );
+    } else {
+        println!(
+            "cargo:rustc-cdylib-link-arg=-Wl,{}",
+            module_definition.display()
+        );
+    }
 }
 
 fn embed_icons() {
@@ -353,7 +365,7 @@ fn embed_icons() {
     ]
     .into_iter()
     .map(|(name, file)| {
-        let path = root.join("../assets").join(file);
+        let path = root.join("../asset/icon").join(file);
         println!("cargo:rerun-if-changed={}", path.display());
         let path = path
             .to_str()

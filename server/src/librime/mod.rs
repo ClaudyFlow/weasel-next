@@ -281,6 +281,8 @@ impl RimeSession {
     /// `process_key` 缺失或调用失败时按未消费处理；状态和提交文本仍由
     /// `read_response` 根据可用 getter 获取。
     pub fn process_key(&mut self, event: &InputKey) -> KeyEventResponse {
+        // 记为最近一次按键，供按键音分派（空格单独一个音）使用。
+        crate::engine::sound::note_key(event.keycode);
         let mask = event.modifiers;
         let eaten = unsafe {
             self.api

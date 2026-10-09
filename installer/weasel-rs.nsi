@@ -1,4 +1,4 @@
-Unicode true
+﻿Unicode true
 ManifestDPIAware true
 RequestExecutionLevel admin
 !ifdef DEV_INSTALLER
@@ -19,7 +19,7 @@ RequestExecutionLevel admin
 ManifestSupportedOS all
 
 !ifndef PROJECT_ROOT
-  !error "Use scripts\build-installer.ps1 to supply PROJECT_ROOT."
+  !error "Use script\build-installer.ps1 to supply PROJECT_ROOT."
 !endif
 !ifndef PRODUCT_VERSION
   !error "Missing PRODUCT_VERSION."
@@ -45,8 +45,8 @@ VIAddVersionKey /LANG=2052 "FileVersion" "${PRODUCT_VERSION}"
 VIAddVersionKey /LANG=2052 "ProductVersion" "${PRODUCT_VERSION}"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "Weasel-RS contributors"
 
-!define MUI_ICON "${PROJECT_ROOT}\assets\weasel.ico"
-!define MUI_UNICON "${PROJECT_ROOT}\assets\weasel.ico"
+!define MUI_ICON "${PROJECT_ROOT}\asset\icon\weasel.ico"
+!define MUI_UNICON "${PROJECT_ROOT}\asset\icon\weasel.ico"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TEXT "欢迎安装小狼毫 RS，中州韵输入法的 Windows 文本服务框架前端。"
 !insertmacro MUI_PAGE_WELCOME
@@ -366,9 +366,9 @@ Section "Weasel-RS" SEC_MAIN
   SetOutPath "$INSTDIR"
   ClearErrors
   !insertmacro ManagedFile "${X64_RELEASE}\weasel-broker.exe" "weasel-broker.exe"
-  !insertmacro ManagedFile "${PROJECT_ROOT}\artifacts\winsparkle\WinSparkle.dll" "WinSparkle.dll"
-  !insertmacro ManagedFile "${PROJECT_ROOT}\artifacts\winsparkle\WinSparkle-LICENSE.txt" "WinSparkle-LICENSE.txt"
-  !insertmacro ManagedFile "${PROJECT_ROOT}\artifacts\winsparkle\WinSparkle-Expat-LICENSE.txt" "WinSparkle-Expat-LICENSE.txt"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\winsparkle\WinSparkle.dll" "WinSparkle.dll"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\winsparkle\WinSparkle-LICENSE.txt" "WinSparkle-LICENSE.txt"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\winsparkle\WinSparkle-Expat-LICENSE.txt" "WinSparkle-Expat-LICENSE.txt"
   !insertmacro ManagedFile "${X64_RELEASE}\weasel-server.exe" "weasel-server.exe"
   !insertmacro ManagedFile "${X64_RELEASE}\weasel-renderer.exe" "weasel-renderer.exe"
   Call PrepareUiAccessRenderer
@@ -393,7 +393,7 @@ Section "librime" SEC_LIBRIME
   SectionIn RO
   ClearErrors
   SetOutPath "$INSTDIR"
-  !insertmacro ManagedFile "${PROJECT_ROOT}\artifacts\librime\dist\lib\rime.dll" "rime.dll"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\librime\dist\lib\rime.dll" "rime.dll"
   SetOutPath "$INSTDIR\rime-data"
   !insertmacro RimePayload
   ${If} ${Errors}
@@ -495,7 +495,7 @@ Section /o "调试符号" SEC_SYMBOLS
   ${If} ${SectionIsSelected} ${SEC_SETTINGS}
     !insertmacro ManagedFile "${X64_RELEASE}\weasel_settings.pdb" "weasel_settings.pdb"
   ${EndIf}
-  !insertmacro ManagedFile "${PROJECT_ROOT}\artifacts\librime\dist\lib\rime.pdb" "rime.pdb"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\librime\dist\lib\rime.pdb" "rime.pdb"
   SetOutPath "$INSTDIR\x64"
   !insertmacro ManagedFile "${X64_RELEASE}\weasel_tip.pdb" "weasel_tip.pdb"
   SetOutPath "$INSTDIR\x86"

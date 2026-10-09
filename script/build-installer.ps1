@@ -1,0 +1,203 @@
+﻿#Requires -Version 5.1
+[CmdletBinding()]
+param(
+    # Build an uncompressed installer that installs all components without a selection page.
+    [switch]$Dev,
+    [switch]$Mini
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$projectRoot = Split-Path -Parent $PSScriptRoot
+
+try {
+    $compiler = (Get-Command makensis -CommandType Application -ErrorAction Stop).Source
+    # Read the same Cargo version used by the native version resources.
+    $manifest = Get-Content -LiteralPath (Join-Path $projectRoot 'tip\Cargo.toml') -Raw
+    $versionMatch = [regex]::Match($manifest, '(?m)^version\s*=\s*"(\d+\.\d+\.\d+)"\s*$')
+    if (-not $versionMatch.Success) {
+        throw 'TIP Cargo.toml must have a numeric major.minor.patch version.'
+    }
+    $version = $versionMatch.Groups[1].Value
+
+    $requiredFiles = @(
+        'weasel.json',
+        'target\x86_64-pc-windows-msvc\release\weasel-broker.exe',
+        'artifact\winsparkle\WinSparkle.dll',
+        'artifact\winsparkle\WinSparkle-LICENSE.txt',
+        'artifact\winsparkle\WinSparkle-Expat-LICENSE.txt',
+        'target\x86_64-pc-windows-msvc\release\weasel-server.exe',
+        'target\x86_64-pc-windows-msvc\release\weasel-renderer.exe',
+        'target\x86_64-pc-windows-msvc\release\uiaccess\weasel-renderer.exe',
+        'target\x86_64-pc-windows-msvc\release\uiaccess\weasel_renderer.pdb',
+        'script\sign-renderer.ps1',
+        'target\x86_64-pc-windows-msvc\release\weasel-settings.exe',
+        'target\x86_64-pc-windows-msvc\release\weasel_tip.dll',
+        'target\i686-pc-windows-msvc\release\weasel_tip.dll',
+        'artifact\smoke\rime.dll',
+        'asset\rime-data\default.yaml',
+                'target\x86_64-pc-windows-msvc\release\weasel_broker.pdb',
+        'target\x86_64-pc-windows-msvc\release\weasel_server.pdb',
+        'target\x86_64-pc-windows-msvc\release\weasel_renderer.pdb',
+        'target\x86_64-pc-windows-msvc\release\weasel_settings.pdb',
+        'target\x86_64-pc-windows-msvc\release\weasel_tip.pdb',
+        'target\i686-pc-windows-msvc\release\weasel_tip.pdb',
+        'artifact\vcredist\vc_redist.x86.exe',
+        'artifact\vcredist\vc_redist.x64.exe',
+        'asset\icon\weasel.ico',
+        'server\src\styles-LICENSE.txt',
+        'LICENSE',
+        'THIRD-PARTY-LICENSES.txt',
+        'THIRD-PARTY-GPL-3.0.txt',
+        'settings\LICENSE-NOTICE.txt',
+        'installer\weasel-rs.nsi',
+        'script\launch-broker.ps1'
+    )
+    foreach ($theme in @('ten', 'eleven', 'abc', 'void')) {
+        foreach ($extension in @('dll', 'pdb')) {
+            $requiredFiles += "target\x86_64-pc-windows-msvc\release\weasel_theme_$theme.$extension"
+        }
+    }
+    foreach ($theme in @('abc', 'eleven')) {
+        $requiredFiles += "target\x86_64-pc-windows-msvc\release\themes\weasel_theme_$theme.settings.json"
+    }
+    if ($Mini) {
+        $requiredFiles = @($requiredFiles | Where-Object { $_ -notlike '*.pdb' })
+        $requiredFiles += 'script\download-runtime.ps1'
+    }
+    foreach ($relativePath in $requiredFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $projectRoot $relativePath) -PathType Leaf)) {
+            throw "Missing $relativePath. Run script\build-release.ps1, script\download_librime.ps1 and script\download_vcredist.ps1 first."
+        }
+    }
+
+    $outputDirectory = Join-Path $projectRoot 'artifact\installer'
+    $null = New-Item -ItemType Directory -Path $outputDirectory -Force
+    # Expand recursive payloads at build time, never scan the installed directory.
+    # Install and removal macros are generated from the same file set so nested
+    # payloads cannot silently outlive an uninstall or a failed fresh install.
+    $payloadInclude = Join-Path $outputDirectory 'payload-files.nsh'
+    $payloadLines = [Collections.Generic.List[string]]::new()
+    $payloadInstallPaths = [Collections.Generic.List[string]]::new()
+    $payloadRemovalPaths = [Collections.Generic.List[string]]::new()
+    $payloadDestinations = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($payload in @(
+        @{ Macro = 'RimePayload'; RemoveMacro = 'RemoveRimePayload'; ValidateMacro = 'ValidateRimePayloadRemoval'; Source = 'asset\rime-data'; Target = 'rime-data' },
+        @{ Macro = 'WasmPayload'; RemoveMacro = 'RemoveWasmPayload'; ValidateMacro = 'ValidateWasmPayloadRemoval'; Source = 'artifact\theme-wasm'; Target = 'theme-wasm' },
+        # 按键/上屏音效：随包安装到 $INSTDIR\sound，服务端按 exe 同级目录解析 sound/。
+        @{ Macro = 'SoundsPayload'; RemoveMacro = 'RemoveSoundsPayload'; ValidateMacro = 'ValidateSoundsPayloadRemoval'; Source = 'asset\sound'; Target = 'sound' }
+    )) {
+        $files = @()
+        $payloadLines.Add('!macro ' + $payload.Macro)
+        $sourceDirectory = Join-Path $projectRoot $payload.Source
+        if (Test-Path -LiteralPath $sourceDirectory) {
+            $entries = @(Get-Item -LiteralPath $sourceDirectory) + @(Get-ChildItem -LiteralPath $sourceDirectory -Recurse -Force)
+            if ($entries | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) {
+                throw "Payload contains a reparse point: $sourceDirectory"
+            }
+            $files = @(Get-ChildItem -LiteralPath $sourceDirectory -Recurse -File | Sort-Object FullName)
+            foreach ($file in $files) {
+                if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Payload contains a reparse point: $($file.FullName)" }
+                $relative = $file.FullName.Substring($sourceDirectory.Length + 1)
+                if ($relative -match '[\$"\r\n]' -or $file.FullName -match '[\$"\r\n]') { throw "Unsupported payload filename: $relative" }
+                $parent = Split-Path -Parent $relative
+                $destination = $payload.Target
+                if ($parent) { $destination += '\' + $parent }
+                $installedPath = $payload.Target + '\' + $relative
+                if (-not $payloadDestinations.Add($installedPath)) {
+                    throw "Duplicate payload destination: $installedPath"
+                }
+                $payloadInstallPaths.Add($installedPath)
+                $payloadLines.Add('SetOutPath "$INSTDIR\' + $destination + '"')
+                $payloadLines.Add('!insertmacro ManagedFile "' + $file.FullName + '" "' + $file.Name + '"')
+            }
+        }
+        $payloadLines.Add('!macroend')
+
+        $payloadLines.Add('!macro ' + $payload.RemoveMacro)
+        $directories = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        $null = $directories.Add($payload.Target)
+        foreach ($file in $files) {
+            $relative = $file.FullName.Substring($sourceDirectory.Length + 1)
+            $installedPath = $payload.Target + '\' + $relative
+            $payloadRemovalPaths.Add($installedPath)
+            $payloadLines.Add('Delete /REBOOTOK "$INSTDIR\' + $installedPath + '"')
+            $parent = Split-Path -Parent $installedPath
+            while ($parent) {
+                $null = $directories.Add($parent)
+                if ($parent -eq $payload.Target) { break }
+                $parent = Split-Path -Parent $parent
+            }
+        }
+        foreach ($directory in $directories | Sort-Object @{ Expression = { ($_ -split '[\\/]').Count }; Descending = $true }, @{ Expression = { $_ }; Descending = $true }) {
+            $payloadLines.Add('RMDir /REBOOTOK "$INSTDIR\' + $directory + '"')
+        }
+        $payloadLines.Add('!macroend')
+
+        $payloadLines.Add('!macro ' + $payload.ValidateMacro)
+        foreach ($directory in $directories | Sort-Object @{ Expression = { ($_ -split '[\\/]').Count }; Descending = $false }, @{ Expression = { $_ }; Descending = $false }) {
+            $payloadLines.Add('!insertmacro AssertSafeUninstallDirectory "$INSTDIR\' + $directory + '"')
+        }
+        $payloadLines.Add('!macroend')
+    }
+    $payloadDifference = @(Compare-Object -ReferenceObject $payloadInstallPaths -DifferenceObject $payloadRemovalPaths)
+    if ($payloadDifference.Count -ne 0) {
+        throw "Generated payload install/removal sets differ: $($payloadDifference | Out-String)"
+    }
+    [IO.File]::WriteAllLines($payloadInclude, $payloadLines, [Text.UTF8Encoding]::new($false))
+    $buildSuffix = if ($Dev) { '-dev' } else { '' }
+    if ($Mini) { $buildSuffix += '-mini' }
+    $outputFile = Join-Path $outputDirectory "Weasel-RS-$version-x64$buildSuffix-setup.exe"
+    $runtimeDefinitions = @()
+    foreach ($architecture in @('x86', 'x64')) {
+        $runtimePath = Join-Path $projectRoot "artifact\vcredist\vc_redist.$architecture.exe"
+        $signature = Get-AuthenticodeSignature -LiteralPath $runtimePath
+        if ($signature.Status -ne 'Valid' -or
+            $null -eq $signature.SignerCertificate -or
+            $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation(?:,|$)') {
+            throw "Invalid Microsoft signature: $runtimePath"
+        }
+        $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($runtimePath)
+        if ($info.FileMajorPart -ne 14) {
+            throw "Expected VC14 redistributable: $runtimePath"
+        }
+        $runtimeVersion = '{0}.{1}.{2}.{3}' -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart
+        $runtimeDefinitions += "/DVC_$($architecture.ToUpperInvariant())_VERSION=$runtimeVersion"
+        Write-Host "Required $architecture VC++ runtime: $runtimeVersion"
+    }
+    if ($Mini) {
+        Write-Host 'Mini: VC++ runtimes downloaded during installation; debug symbols excluded.'
+    } else {
+        Write-Host 'Full: VC++ runtimes bundled; debug symbols available as an optional component.'
+    }
+    # WASM artifacts are optional; NSIS recursively includes them when present.
+    Write-Host 'Optional WASM modules: artifact\theme-wasm (no build is triggered).'
+    $arguments = @(
+        '/V3', '/INPUTCHARSET', 'UTF8',
+        "/DPROJECT_ROOT=$projectRoot",
+        "/DPRODUCT_VERSION=$version",
+        "/DOUTPUT_FILE=$outputFile",
+        "/DPAYLOAD_INCLUDE=$payloadInclude",
+        (Join-Path $projectRoot 'installer\weasel-rs.nsi')
+    )
+    $buildDefinitions = @()
+    if ($Mini) { $buildDefinitions += '/DMINI_INSTALLER' }
+    if (Test-Path -LiteralPath (Join-Path $projectRoot 'target\x86_64-pc-windows-msvc\release\weasel_theme_wasm.dll') -PathType Leaf) {
+        $buildDefinitions += '/DHAVE_WASM_THEME'
+    }
+    if ($Dev) {
+        $buildDefinitions += '/DDEV_INSTALLER'
+        Write-Host 'Dev installer: compression disabled; component selection skipped (all components selected).'
+    }
+    & $compiler @runtimeDefinitions @buildDefinitions @arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "NSIS compilation failed (exit code $LASTEXITCODE)."
+    }
+    if (-not (Test-Path -LiteralPath $outputFile -PathType Leaf)) {
+        throw 'NSIS did not produce the expected installer.'
+    }
+    Write-Host "Installer built: $outputFile"
+} catch {
+    Write-Error -ErrorRecord $_ -ErrorAction Continue
+    exit 1
+}

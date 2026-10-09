@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "weasel-common"
 version = "0.1.8"
 edition = "2024"
@@ -12,6 +12,7 @@ wasm-metadata = ["dep:wasmparser"]
 
 [dependencies]
 prost = "0.14"
+sha2 = "0.10"
 serde = "1"
 serde_json = "1"
 wasmparser = { version = "0.258", optional = true }

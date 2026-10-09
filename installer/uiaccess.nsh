@@ -1,4 +1,4 @@
-!ifndef WEASEL_UIACCESS_NSH
+﻿!ifndef WEASEL_UIACCESS_NSH
 !define WEASEL_UIACCESS_NSH
 Var UseUiAccess
 
@@ -6,7 +6,7 @@ Var UseUiAccess
 !macro CleanupUiAccessCertificate RECEIPT
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
-  File "${PROJECT_ROOT}\scripts\sign-renderer.ps1"
+  File "${PROJECT_ROOT}\script\sign-renderer.ps1"
   SetOutPath "$SYSDIR"
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\sign-renderer.ps1" -Mode Cleanup -CertificatePath "${RECEIPT}"'
   Pop $0
@@ -24,7 +24,7 @@ Function PrepareUiAccessRenderer
   sign_renderer:
   SetOutPath "$PLUGINSDIR"
   ClearErrors
-  File "${PROJECT_ROOT}\scripts\sign-renderer.ps1"
+  File "${PROJECT_ROOT}\script\sign-renderer.ps1"
   File /oname=renderer-uiaccess.exe "${X64_RELEASE}\uiaccess\weasel-renderer.exe"
   ${If} ${Errors}
     Abort

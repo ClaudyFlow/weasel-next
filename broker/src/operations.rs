@@ -162,9 +162,55 @@ async fn bounded_operation<T>(
     }
 }
 
+/// 部署提示：在独立线程里弹一个 TaskDialog，避免阻塞 broker 的工作流程。
+///
+/// 部署可能持续数分钟（字典全量重建），用户需要知道"正在进行 / 已完成 / 无需部署"，
+/// 否则会以为程序卡住了。
+fn notify_deploy(main: &str, content: String) {
+    let main = main.to_string();
+    std::thread::spawn(move || {
+        let _ = weasel_common::task_dialog::TaskDialog::new("小狼毫RS", main)
+            .icon(weasel_common::task_dialog::TaskDialogIcon::Information)
+            .content(content)
+            .buttons(weasel_common::task_dialog::TaskDialogButtons::Ok)
+            .show();
+    });
+}
+
 /// 执行部署 UI 工作流，并在部署方释放数据后恢复普通 server。
 fn deploy(services: &mut OperationServices) -> OperationOutcome {
     let result = (|| -> Result<(), String> {
+
+        // 源文件内容哈希未变时整段跳过部署：不关 server、零停机、零耗时。
+        // librime 只比对 mtime；源文件被 touch（内容一个字节没变）也会触发分钟级全量重建。
+        {
+            use std::io::Write as _;
+            let manifest_path =
+                weasel_common::deploy_manifest::manifest_path(&services.paths.user_data);
+            if let Ok(current) =
+                weasel_common::deploy_manifest::collect(&services.paths.user_data)
+            {
+                let stored = weasel_common::deploy_manifest::load(&manifest_path);
+                if weasel_common::deploy_manifest::is_unchanged(stored.as_ref(), &current) {
+                    let mut log = ComponentLogger::for_paths(&services.paths, "broker-deploy")
+                        .map_err(|error| error.to_string())?;
+                    let _ = writeln!(
+                        log,
+                        "[broker] 源文件哈希未变（{} 项），无需部署，已跳过",
+                        current.len()
+                    );
+                    let _ = log.flush();
+                    notify_deploy(
+                        "无需部署",
+                        format!(
+                            "源文件内容未变化（{} 项哈希一致），已跳过部署 ✓",
+                            current.len()
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
+        }
         service_supervisor::shutdown_server(services)?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -217,6 +263,20 @@ fn deploy(services: &mut OperationServices) -> OperationOutcome {
         })?;
         Ok(())
     })();
+
+    // 部署成功后记录源文件清单：下次内容未变即可整段跳过。
+    if result.is_ok() {
+        if let Ok(current) = weasel_common::deploy_manifest::collect(&services.paths.user_data) {
+            let path = weasel_common::deploy_manifest::manifest_path(&services.paths.user_data);
+            let _ = weasel_common::deploy_manifest::store(&path, &current);
+        }
+    }
+
+    // 用户可见的结果提示：完成 / 失败（失败带原因，便于自助排查）。
+    match &result {
+        Ok(()) => notify_deploy("部署完成", "方案部署完成 ✓".to_string()),
+        Err(error) => notify_deploy("部署失败", error.clone()),
+    }
 
     let mut restoration = Ok(());
     if services.server.is_none() {

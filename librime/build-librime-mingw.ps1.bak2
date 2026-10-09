@@ -1,0 +1,244 @@
+﻿<#
+.SYNOPSIS
+    用 llvm-mingw（clang + libc++）从源码构建 librime，并把 input_stat 统计插件静态链进去，
+    产出一个**自带统计插件**的 rime.dll——与 weasel-rs 其余部分同一套 mingw ABI。
+
+.DESCRIPTION
+    Windows 上 librime 不加载外部 DLL 插件（plugins/plugins_module.cc 的 _WIN32 分支为空），
+    唯一可行路径是把模块静态链进 rime.dll。官方 `build.bat` 的依赖构建写死了 MSVC 专用参数
+    （`-llibcmt`、`/MT` 覆盖文件、`-T v142`），因此这里复刻它的**依赖选项**但换成
+    `MinGW Makefiles` + clang。
+
+    四个步骤（可单独执行）：
+      boost   下载好的 boost 源码里编译 `boost_regex`（librime 的 calculus/encoder 需要它）
+      deps    glog / leveldb / yaml-cpp / marisa-trie / opencc，安装到 librime 源码根
+      librime 配置并构建 librime，注入插件子目录 + RIME_SETUP_EXTRA_MODULES=input_stat
+      all     依次执行以上三步
+
+    前置：
+      * librime 源码 + 子模块：`git submodule update --init --recursive`
+      * boost 源码（只需头文件 + 编译出的 regex）：默认 C:\code\deps-cache\boost_1_89_0
+      * Rust 核心的 mingw 静态库：`cargo build --release --manifest-path core/Cargo.toml --target x86_64-pc-windows-gnu`
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File scripts\build-librime-mingw.ps1 -Step all
+    powershell -ExecutionPolicy Bypass -File scripts\build-librime-mingw.ps1 -Step boost -Jobs 16
+#>
+[CmdletBinding()]
+param(
+    [ValidateSet('boost', 'deps', 'librime', 'all')][string]$Step = 'all',
+    [string]$Librime = 'C:\code\librime',
+    [string]$BoostRoot = 'C:\code\deps-cache\boost_1_89_0',
+    [string]$CoreLib,
+    [string]$BuildDir,
+    [int]$Jobs = 16,
+    [switch]$Clean
+)
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+if (-not $CoreLib) {
+    $CoreLib = Join-Path $root 'target\x86_64-pc-windows-gnu\release\librime_input_stat_core.a'
+}
+if (-not $BuildDir) { $BuildDir = Join-Path $Librime 'build-mingw' }
+$prefix = $Librime          # 依赖安装到 librime 源码根（与 build.bat 的 deps_install_prefix 一致）
+# 用无空格路径的 junction（C:\llvm-mingw -> C:\Program Files\llvm-mingw）：既规避 boost
+# 批处理脚本的空格 bug，也让 CMake 拿到明确的编译器全路径。
+$cc = 'C:\llvm-mingw\bin\clang.exe'
+$cxx = 'C:\llvm-mingw\bin\clang++.exe'
+if (-not (Test-Path -LiteralPath $cxx)) {
+    $found = Get-Command clang++ -ErrorAction SilentlyContinue
+    if (-not $found) { throw 'PATH 中找不到 clang++（llvm-mingw）' }
+    $cxx = $found.Source
+    $cc = (Get-Command clang -ErrorAction SilentlyContinue).Source
+}
+$cmake = (Get-Command cmake -ErrorAction SilentlyContinue).Source
+if (-not $cmake) { throw 'PATH 中找不到 cmake' }
+$mingwMake = (Get-Command mingw32-make -ErrorAction SilentlyContinue).Source
+if (-not $mingwMake) { throw 'PATH 中找不到 mingw32-make（llvm-mingw 自带）' }
+
+function Invoke-CMakeBuild {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Source,
+        [string[]]$Options = @()
+    )
+    $build = Join-Path $Source 'build-mingw'
+    if ($Clean -and (Test-Path -LiteralPath $build)) { Remove-Item -LiteralPath $build -Recurse -Force }
+    Write-Host "== 构建 $Name ==" -ForegroundColor Cyan
+    # 注意：-D 参数必须显式加引号，否则 PowerShell 会把 $cxx 当字面量传给 CMake。
+    & $cmake -S $Source -B $build -G 'MinGW Makefiles' `
+        '-DCMAKE_BUILD_TYPE=Release' `
+        "-DCMAKE_C_COMPILER=$cc" "-DCMAKE_CXX_COMPILER=$cxx" `
+        "-DCMAKE_INSTALL_PREFIX=$prefix" @Options
+    if ($LASTEXITCODE -ne 0) { throw "$Name 配置失败（exit $LASTEXITCODE）" }
+    & $cmake --build $build -j $Jobs --target install
+    if ($LASTEXITCODE -ne 0) { throw "$Name 构建/安装失败（exit $LASTEXITCODE）" }
+}
+
+function Build-Boost {
+    # 不走 b2，也不走 boost 的 CMake：这份 boost_1_89_0 源码包是纯 b2 发行版（没有顶层
+    # CMakeLists.txt），而 bootstrap.bat 会把带空格的 clang 路径截断成 "C:/Program" 而失败。
+    # Boost.Regex 在该版本只有 libs/regex/src 下极少数源文件，直接用 clang++ 编成
+    # libboost_regex.a，正好满足 librime 的 find_package(Boost REQUIRED COMPONENTS regex)。
+    if (-not (Test-Path -LiteralPath (Join-Path $BoostRoot 'boost\regex.hpp'))) {
+        throw "找不到 boost 源码：$BoostRoot（可从 archives.boost.io 下载 boost_1_89_0.tar.gz 解压）"
+    }
+    $source = Join-Path $BoostRoot 'libs\regex\src'
+    $output = Join-Path (Split-Path -Parent $BoostRoot) 'boost-libs'
+    New-Item -ItemType Directory -Force -Path $output | Out-Null
+    Write-Host '== 手工构建 boost_regex（静态）==' -ForegroundColor Cyan
+    $objects = @()
+    foreach ($file in Get-ChildItem -LiteralPath $source -File -Filter '*.cpp') {
+        $object = Join-Path $output ($file.BaseName + '.o')
+        & $cxx -std=c++17 -O2 -DNDEBUG -DBOOST_ALL_NO_LIB "-I$BoostRoot" -c $file.FullName -o $object
+        if ($LASTEXITCODE -ne 0) { throw "boost.regex 编译失败：$($file.Name)" }
+        $objects += $object
+    }
+    $library = Join-Path $output 'libboost_regex.a'
+    & llvm-ar rcs $library $objects
+    if ($LASTEXITCODE -ne 0) { throw 'llvm-ar 打包 boost_regex 失败' }
+
+    # 用 librime 实际使用的那几个入口做一次真实链接 + 运行，确认库可用。
+    $probe = Join-Path $output 'regex_probe.cpp'
+    @'
+#include <boost/regex.hpp>
+#include <iostream>
+int main() {
+  boost::regex pattern("(\\d+)-(\\d+)");
+  std::string text = "ab 12-34 cd";
+  std::cout << boost::regex_replace(text, pattern, "$2/$1") << "\n";
+  try { boost::regex bad("("); } catch (const boost::regex_error& e) { std::cout << "regex_error ok\n"; }
+  return 0;
+}
+'@ | Set-Content -LiteralPath $probe -Encoding UTF8
+    $probeExe = Join-Path $output 'regex_probe.exe'
+    & $cxx -std=c++17 -O2 "-I$BoostRoot" $probe $library -o $probeExe
+    if ($LASTEXITCODE -ne 0) { throw 'boost_regex 链接验证失败' }
+    & $probeExe | ForEach-Object { Write-Host ("   " + $_) }
+    Write-Host ("boost_regex 就绪：{0}（{1:N0} 字节）" -f $library, (Get-Item -LiteralPath $library).Length)
+}
+
+function Build-Deps {
+    $deps = Join-Path $Librime 'deps'
+    Invoke-CMakeBuild -Name 'glog' -Source (Join-Path $deps 'glog') `
+        -Options @('-DBUILD_TESTING=OFF', '-DWITH_GFLAGS=OFF')
+    Invoke-CMakeBuild -Name 'leveldb' -Source (Join-Path $deps 'leveldb') `
+        -Options @('-DLEVELDB_BUILD_BENCHMARKS=OFF', '-DLEVELDB_BUILD_TESTS=OFF')
+    Invoke-CMakeBuild -Name 'yaml-cpp' -Source (Join-Path $deps 'yaml-cpp') `
+        -Options @('-DYAML_CPP_BUILD_CONTRIB=OFF', '-DYAML_CPP_BUILD_TESTS=OFF', '-DYAML_CPP_BUILD_TOOLS=OFF')
+    Invoke-CMakeBuild -Name 'marisa-trie' -Source (Join-Path $deps 'marisa-trie') `
+        -Options @('-DCMAKE_POSITION_INDEPENDENT_CODE=ON', '-DBUILD_TESTING=OFF', '-DENABLE_TOOLS=OFF')
+    Invoke-CMakeBuild -Name 'opencc' -Source (Join-Path $deps 'opencc') `
+        -Options @('-DBUILD_TESTING=OFF')
+}
+
+function Repair-LibrimeForMingw {
+    # librime 的 cmake/AddRCInfo.cmake 认为"编译器是 Clang ⇒ 用 llvm-rc"（假设 clang 是
+    # MSVC 风格的 clang-cl）。我们是 GNU 驱动的 clang（mingw），CMake 会用 GNU 风格参数调用
+    # llvm-rc，直接报 "Exactly one input file should be provided."。让该分支只在 MSVC 下生效，
+    # mingw 继续用 CMake 默认的 windres。
+    $addRc = Join-Path $Librime 'cmake\AddRCInfo.cmake'
+    $text = Get-Content -LiteralPath $addRc -Raw
+    $needle = 'if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")'
+    $marker = '# rime-speed-stats: clang+mingw 走 windres，只有 MSVC 风格的 clang 才用 llvm-rc'
+    if ($text.Contains($marker)) { return }
+    if (-not $text.Contains($needle)) {
+        Write-Warning "AddRCInfo.cmake 结构与预期不同，跳过 RC 补丁：$addRc"
+        return
+    }
+    $backup = "$addRc.bak-input-stats"
+    if (-not (Test-Path -LiteralPath $backup)) { Copy-Item -LiteralPath $addRc -Destination $backup }
+    $text = $text.Replace($needle, "$marker`r`nif(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL `"Clang`")")
+    Set-Content -LiteralPath $addRc -Value $text -NoNewline
+    Write-Host '已修补 AddRCInfo.cmake（mingw 改用 windres）' -ForegroundColor Cyan
+}
+
+function Build-Librime {
+    Repair-LibrimeForMingw
+    if (-not (Test-Path -LiteralPath $CoreLib)) {
+        throw "找不到 Rust 核心静态库：$CoreLib（先 cargo build --release --target x86_64-pc-windows-gnu）"
+    }
+    $pluginPath = (Resolve-Path -LiteralPath (Join-Path $root 'plugin')).Path.Replace('\', '/')
+    $markerBegin = '# >>> rime-speed-stats input_stat plugin (build-librime-mingw.ps1) >>>'
+    $markerEnd = '# <<< rime-speed-stats input_stat plugin <<<'
+    $cmakeLists = Join-Path $Librime 'src\CMakeLists.txt'
+    $text = Get-Content -LiteralPath $cmakeLists -Raw
+    $block = @(
+        $markerBegin,
+        'if(RIME_INPUT_STAT_CORE_LIB)',
+        "  add_subdirectory(`"$pluginPath`" `"`${CMAKE_BINARY_DIR}/rime-input-stat`")",
+        '  target_link_libraries(rime rime-input-stat)  # plain 签名：librime 自己第 84 行用的是 plain',
+        '  # RIME_MODULE_INITIALIZER 在 GCC/Clang 下是 __attribute__((constructor))：只要插件对象',
+        '  # 被链进来，注册就会在 DLL 加载时自动发生。但静态库对象默认不会被拉入（librime 传下来的',
+        '  # RIME_EXTRA_MODULES 在 MinGW 下是空串，没有任何未定义符号引用它），因此这里生成一个',
+        '  # 强制引用，保证 rime_require_module_input_stat 所在的 .o 进入 rime.dll。',
+        '  set(_force "${CMAKE_BINARY_DIR}/rime-input-stat/force_link.cc")',
+        '  file(WRITE "${_force}"',
+        '    "void rime_require_module_input_stat();\n"',
+        '    "namespace { struct ForceInputStatsLink { ForceInputStatsLink() { rime_require_module_input_stat(); } } force_input_stat_link; }\n")',
+        '  target_sources(rime PRIVATE "${_force}")',
+        'endif()',
+        $markerEnd
+    ) -join "`n"
+    if ($text.Contains($markerBegin)) {
+        $pattern = [regex]::Escape($markerBegin) + '(?s).*?' + [regex]::Escape($markerEnd)
+        $text = [regex]::Replace($text, $pattern, $block)
+    } else {
+        $backup = "$cmakeLists.bak-input-stats"
+        if (-not (Test-Path -LiteralPath $backup)) { Copy-Item -LiteralPath $cmakeLists -Destination $backup }
+        $text = $text.TrimEnd() + "`n`n" + $block + "`n"
+    }
+    Set-Content -LiteralPath $cmakeLists -Value $text -NoNewline
+    Write-Host "已注入插件子目录到 $cmakeLists" -ForegroundColor Cyan
+
+    $boostLibs = Join-Path (Split-Path -Parent $BoostRoot) 'boost-libs'
+    if (-not (Test-Path -LiteralPath (Join-Path $boostLibs 'libboost_regex.a'))) {
+        throw "找不到 libboost_regex.a：$boostLibs（先跑 -Step boost）"
+    }
+    if ($Clean -and (Test-Path -LiteralPath $BuildDir)) { Remove-Item -LiteralPath $BuildDir -Recurse -Force }
+    Write-Host '== 配置 librime（含 input_stat 模块）==' -ForegroundColor Cyan
+    & $cmake -S $Librime -B $BuildDir -G 'MinGW Makefiles' `
+        '-DCMAKE_BUILD_TYPE=Release' `
+        "-DCMAKE_C_COMPILER=$cc" "-DCMAKE_CXX_COMPILER=$cxx" `
+        "-DCMAKE_PREFIX_PATH=$prefix" `
+        "-DCMAKE_INSTALL_PREFIX=$(Join-Path $Librime 'dist-mingw')" `
+        '-DBUILD_STATIC=ON' '-DBUILD_SHARED_LIBS=ON' '-DBUILD_TEST=OFF' '-DENABLE_LOGGING=ON' `
+        '-DRIME_SETUP_EXTRA_MODULES=input_stat' `
+        "-DRIME_INPUT_STAT_CORE_LIB=$CoreLib" `
+        "-DBOOST_ROOT=$BoostRoot" "-DBOOST_LIBRARYDIR=$boostLibs" `
+        '-DBoost_NO_SYSTEM_PATHS=ON'
+    if ($LASTEXITCODE -ne 0) { throw "librime 配置失败（exit $LASTEXITCODE）" }
+    Write-Host '== 构建 librime ==' -ForegroundColor Cyan
+    & $cmake --build $BuildDir -j $Jobs --target rime
+    if ($LASTEXITCODE -ne 0) { throw "librime 构建失败（exit $LASTEXITCODE）" }
+
+    # MinGW 下产物名是 librime.dll（目标名 rime 带 lib 前缀），weasel-rs 期望 rime.dll。
+    $dll = Get-ChildItem -LiteralPath (Join-Path $BuildDir 'bin') -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -in @('librime.dll', 'rime.dll') } |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($dll) {
+        Write-Host ''
+        Write-Host ("产物：{0}（{1:N1} MB）" -f $dll.FullName, ($dll.Length / 1MB)) -ForegroundColor Green
+        $stage = Join-Path (Split-Path -Parent $root) 'weasel-rs\artifacts\smoke'
+        Write-Host '部署（注意：必须先把 weasel-rs 的栈停掉，否则 rime.dll 被占用无法替换）：'
+        Write-Host ("  1) & '{0}' --shutdown" -f (Join-Path $stage 'weasel-broker.exe'))
+        Write-Host ("  2) Copy-Item '{0}' '{1}' -Force   # 改名成 rime.dll" -f $dll.FullName, (Join-Path $stage 'rime.dll'))
+        Write-Host '  3) 同时需要把 libc++.dll / libunwind.dll / libglog.dll / libopencc.dll 放在同目录（见 README）'
+        Write-Host ("  4) 启动 '{0}'（它会拉起 server 与 renderer）" -f (Join-Path $stage 'weasel-broker.exe'))
+        Write-Host '  5) 方案补丁（<方案>.custom.yaml）：'
+        Write-Host '       patch:'
+        Write-Host '         engine/translators/+: [input_stat_translator]'
+        Write-Host "         recognizer/patterns/punct: '^/(/[0-9]+|[A-Za-z]+)\$'"
+    } else {
+        Write-Warning ("构建结束但没在 {0}\bin 下找到 rime.dll/librime.dll" -f $BuildDir)
+    }
+}
+
+switch ($Step) {
+    'boost' { Build-Boost }
+    'deps' { Build-Deps }
+    'librime' { Build-Librime }
+    'all' { Build-Boost; Build-Deps; Build-Librime }
+}
+Write-Host '完成。' -ForegroundColor Green

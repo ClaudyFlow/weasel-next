@@ -1,9 +1,10 @@
 //! 展示并编辑主题配置中的 WASM 模块条目，包括模块选择及字段覆盖管理。
 //! 本模块只更新配置文档，不读取模块路径，也不执行 WASM。
-use crate::{SettingsWindow, State, WasmEntry, form};
+use crate::{SettingsWindow, State, WasmEntry};
 use serde_json::{Value, json};
 use slint::{Model, VecModel};
 use std::{collections::BTreeSet, rc::Rc};
+use weasel_settings::form;
 
 /// 构造模块条目在覆盖配置中的完整路径。
 fn path(id: &str) -> Vec<String> {

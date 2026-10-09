@@ -1,0 +1,8 @@
+node_modules
+dist
+.vite
+*.log
+
+# Tauri build 输出
+settings-tauri/src-tauri/target
+settings-tauri/src-tauri/gen

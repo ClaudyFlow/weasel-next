@@ -1,4 +1,4 @@
-import { Button, VerticalBox, HorizontalBox, ComboBox, ScrollView, LineEdit, TextEdit, Switch, Palette } from "std-widgets.slint";
+﻿import { Button, VerticalBox, HorizontalBox, ComboBox, ScrollView, LineEdit, TextEdit, Switch, Palette } from "std-widgets.slint";
 import { AppOptions, AppEntry, IconAction } from "app-options.slint";
 import { ColorEditor } from "color-editor.slint";
 import { WasmModules, WasmEntry } from "wasm-modules.slint";
@@ -9,7 +9,7 @@ export component SettingsWindow inherits Window {
     default-font-family: "Segoe UI";
     in property <bool> mica-enabled: false;
     background: root.mica-enabled ? transparent : Palette.background;
-    icon: @image-url("../../assets/weasel.ico");
+    icon: @image-url("../../asset/icon/weasel.ico");
     preferred-width: 760px;
     preferred-height: 640px;
     min-width: 500px;

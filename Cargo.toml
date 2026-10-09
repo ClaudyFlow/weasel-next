@@ -1,11 +1,16 @@
-[workspace]
+﻿[workspace]
 resolver = "2"
 members = [
+    "plugin/core",
     "tip",
     "broker",
     "server",
     "renderer",
+    # Both settings front ends ship side by side: the Slint one (weasel-settings)
+    # is feature complete, the Tauri one (weasel-settings-tauri) is the newer
+    # experimental panel. Keep both buildable so either can be launched.
     "settings",
+    "settings-tauri/src-tauri",
     "common",
     "theme-api",
     "themes/support",
@@ -18,3 +23,12 @@ members = [
 
 [workspace.package]
 license = "BSD-3-Clause"
+
+# llvm-mingw's `windres` front-end cannot preprocess the quoted string defines
+# that build_support/version.rs and tip/build.rs pass for VERSIONINFO/icon
+# resources, and it rejects the llvm-rc style flags upstream uses for the
+# preprocessed file. The vendored copy below preprocesses with the C compiler
+# and then drives `windres` with GNU syntax. See
+# vendor/embed-resource/PATCH-NOTES.md.
+[patch.crates-io]
+embed-resource = { path = "vendor/embed-resource" }

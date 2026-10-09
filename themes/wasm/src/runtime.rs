@@ -1,4 +1,4 @@
-//! 在宿主与 WASM 主题之间建立受限的 Wasmtime 调用边界。
+﻿//! 在宿主与 WASM 主题之间建立受限的 Wasmtime 调用边界。
 //!
 //! 宿主通过 `Linker<HostState>` 暴露绘制、视图查询、资源测量和交互导入；主题只能
 //! 通过这些导入访问宿主能力。宿主则校验 ABI 与导出签名，再以类型化函数调用主题。
@@ -2109,7 +2109,7 @@ mod tests {
         let mut state = HostState::default();
         state.options = serde_json::json!({"color":{"hilited_candidate_back":"#123456"}});
         state.resources.asset_root =
-            Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("theme-weaselui/assets"));
+            Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("theme-weaselui/asset"));
         let mut rt = WasmRuntime::with_state(&bytes, state).unwrap();
         rt.configure(true).unwrap(); // TODO: guest implements external preedit later.
         assert_eq!(rt.store.data().options["layout"]["margin_x"], 12);
