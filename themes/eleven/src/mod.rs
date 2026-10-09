@@ -356,11 +356,20 @@ unsafe fn create_window(mode: UiMode) -> Result<HWND, String> {
     // and no WS_EX_NOACTIVATE (so it can be activated and closed). Live keeps the
     // invisible, non-activating tool window.
     let (ex_style, title) = match mode {
+        // 注意：这里**不能**加 WS_EX_NOREDIRECTIONBITMAP(0x00200000)。
+        // 它告诉 DWM"本窗口没有重定向表面"，而窗口侧真正的模糊
+        // （ACCENT_ENABLE_ACRYLICBLURBEHIND）恰恰作用在重定向表面上 → 两者互斥：
+        // 加上它只会得到"全透明但完全不糊"（背景文字清晰穿过，看着什么都不是）。
         UiMode::Live => (
             (WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE) as u32,
             WINDOW_CLASS,
         ),
-        UiMode::Preview => ((WS_EX_TOPMOST) as u32, w!("Weasel-RS 皮肤预览")),
+        // 预览窗与实时窗保持**完全相同的扩展样式**（否则"预览正常、实时异常"就无法在
+        // 不触发真实输入的情况下复现）。同样不加 WS_EX_NOREDIRECTIONBITMAP（见上）。
+        UiMode::Preview => (
+            (WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) as u32,
+            w!("Weasel-RS 皮肤预览"),
+        ),
     };
     let window = CreateWindowExW(
         ex_style,
@@ -387,6 +396,9 @@ unsafe fn create_window(mode: UiMode) -> Result<HWND, String> {
     if mode != UiMode::Live {
         apply_taskbar_icon(window, icon);
     }
+    // 让 `AcrylicBackgroundSource::HostBackdrop` 真正有"底"可透：
+    // 没有这一步，WinUI 会退回 acrylic_base() 的不透明兜底色（深色背景上看起来就是黑的）。
+    apply_host_backdrop(window);
     Ok(window)
 }
 
@@ -642,6 +654,61 @@ fn apply_dwm_theme(state: &UiState) {
             value,
             size,
         );
+    }
+}
+
+/// 让宿主窗口具备"宿主背景"合成策略，`HostBackdrop` 亚克力才有可透之底。
+///
+/// DWM 的 `DWMWA_SYSTEMBACKDROP_TYPE` 对 `WS_POPUP` 工具窗不生效，因此这里走
+/// 非公开但长期稳定的 `SetWindowCompositionAttribute(WCA_ACCENT_POLICY)` +
+/// `ACCENT_ENABLE_HOSTBACKDROP`。调用失败只记录诊断，不阻止主题创建。
+fn apply_host_backdrop(window: HWND) {
+    #[repr(C)]
+    struct AccentPolicy {
+        state: i32,
+        flags: i32,
+        gradient_color: u32,
+        animation_id: i32,
+    }
+    #[repr(C)]
+    struct WindowCompositionAttributeData {
+        attribute: i32,
+        data: *mut core::ffi::c_void,
+        size: usize,
+    }
+    const WCA_ACCENT_POLICY: i32 = 19;
+    /// 2 = `ACCENT_ENABLE_TRANSPARENTGRADIENT`：只有**透**、**不做模糊** ✓
+    /// （4 = ACRYLICBLURBEHIND 会加磨砂 ✗，用户明确不要磨砂）。
+    /// 颜色由 `gradient_color` 决定，A=0 时窗口背景完全透明。
+    const ACCENT_ENABLE_TRANSPARENTGRADIENT: i32 = 2;
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SetWindowCompositionAttribute(
+            hwnd: HWND,
+            data: *mut WindowCompositionAttributeData,
+        ) -> i32;
+    }
+
+    let mut policy = AccentPolicy {
+        state: ACCENT_ENABLE_TRANSPARENTGRADIENT,
+        flags: 2,
+        // AABBGGRR：A=0 → 窗口背景完全透明（不磨砂、不加色罩）。若要一点保底对比度，
+        // 把 A 从 0x00 调到 0x20 左右即可（文字在亮背景下的可读性靠它）。
+        gradient_color: 0x0000_0000,
+        animation_id: 0,
+    };
+    let mut data = WindowCompositionAttributeData {
+        attribute: WCA_ACCENT_POLICY,
+        data: &mut policy as *mut _ as *mut core::ffi::c_void,
+        size: core::mem::size_of::<AccentPolicy>(),
+    };
+    unsafe {
+        if SetWindowCompositionAttribute(window, &mut data) == 0 {
+            crate::diagnostics::record(format_args!(
+                "host backdrop accent policy rejected; acrylic may fall back to a solid color"
+            ));
+        }
     }
 }
 

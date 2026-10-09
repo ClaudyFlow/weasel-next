@@ -215,7 +215,8 @@ impl CandidateTheme {
             B: 0,
         })?;
         let panel_background = self.brush(palette.acrylic_base())?;
-        let panel_border = self.brush(with_alpha(palette.foreground, 0x24))?;
+        // 玻璃棱边：比原来 0x24 / 0x3c 再亮一点，在糊底上形成可辨的"玻璃边"。
+        let panel_border = self.brush(with_alpha(palette.foreground, 0x55))?;
         self.candidate_font()?;
         // Validate the icon font factory as well as the candidate font.
         FontFamily::CreateInstanceWithName(&HSTRING::from(icon_font()))?;
@@ -227,7 +228,8 @@ impl CandidateTheme {
             Bottom: 0.0,
         })?;
         root.SetMinWidth(140.0)?;
-        root.SetCornerRadius(corner_radius(8.0))?;
+        // 玻璃感的第二层：圆角加大（8 → 12），更接近"液态玻璃"的柔和轮廓。
+        root.SetCornerRadius(corner_radius(12.0))?;
         root.SetBorderThickness(thickness(1.0, 1.0, 1.0, 1.0))?;
         root.SetBorderBrush(&panel_border)?;
         root.SetRequestedTheme(if palette.dark {
@@ -236,6 +238,15 @@ impl CandidateTheme {
             ElementTheme::Light
         })?;
         apply_panel_background(root, &palette, &panel_background)?;
+
+    // 【按用户要求：透明、不磨砂】面板背景完全透明，背后的内容**原样**可见。
+    // 模糊/磨砂已由窗口侧关闭（改用 ACCENT_ENABLE_TRANSPARENTGRADIENT）。
+    root.SetBackground(&self.brush(Color {
+        A: 0x00,
+        R: 0x00,
+        G: 0x00,
+        B: 0x00,
+    })?)?;
 
         candidate_panel.SetVisibility(Visibility::Visible)?;
         mode_indicator.panel.SetVisibility(Visibility::Collapsed)?;
@@ -705,8 +716,22 @@ fn apply_panel_background(
 
     let result = (|| -> windows_core::Result<()> {
         acrylic.SetBackgroundSource(AcrylicBackgroundSource::HostBackdrop)?;
-        acrylic.SetFallbackColor(palette.acrylic_base())?;
-        acrylic.SetTintColor(palette.acrylic_base())?;
+        // 照 HIG：玻璃色罩是"极淡的白"（glassColor ≈ 5.5% 白，即 #0EFFFFFF），
+        // 而不是暗色 tint。原来 fallback/tint 都用 acrylic_base()：暗色模式下它是
+        // 0x1c1c1c ✗ —— 铺在深色背景上就成了一块暗板（用户看到的"黑的"）。
+        // 改成白色极淡色罩后，暗色背景下也能"透亮"而不是发黑。
+        let glass_wash = Color {
+            A: 0x0e,
+            R: 0xff,
+            G: 0xff,
+            B: 0xff,
+        };
+        // 兜底色同样必须"透"：它只在 WinUI 判定宿主背景不可用时用来垫底 ✗
+        // —— 原来给的是 `with_alpha(acrylic_base(), 0xd8)`（暗色 + 85% 不透明 ✗），
+        // 于是拿不到背景模糊时整块面板就是一块黑板（用户看到的"黑的"）。
+        // 这里降到 0x50：即使背景模糊真的拿不到，面板也仍是可透视的玻璃，而非实色板。
+        acrylic.SetFallbackColor(with_alpha(palette.acrylic_base(), 0x50))?;
+        acrylic.SetTintColor(glass_wash)?;
         acrylic.SetTintOpacity(
             palette
                 .background
@@ -714,7 +739,10 @@ fn apply_panel_background(
                     c.A as f64 / 255.0
                 }),
         )?;
-        acrylic.SetTintLuminosityOpacity(Some(if palette.dark { 0.92 } else { 0.9 }))?;
+        // 照 iOS 26 / HIG 的液态玻璃配额：色罩极淡（glassColor ≈ 5.5% 白）、模糊很小，
+        // "折射/边缘高光才是主角"。原先的 0.9/0.92 把面板提成了实色 ✗，0.4/0.45 仍偏实 ✗；
+        // 这里降到 0.12/0.14，让背景真正透上来（配合窗口侧的 HostBackdrop 合成策略）。
+        acrylic.SetTintLuminosityOpacity(Some(if palette.dark { 0.14 } else { 0.12 }))?;
         root.SetBackground(&acrylic)
     })();
 
