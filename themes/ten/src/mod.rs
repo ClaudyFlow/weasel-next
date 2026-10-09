@@ -1,4 +1,4 @@
-//! Windows 10 候选栏主题后端，使用 Direct2D/DirectWrite 绘制独立弹出窗口。
+﻿//! Windows 10 候选栏主题后端，使用 Direct2D/DirectWrite 绘制独立弹出窗口。
 //!
 //! HWND、图形资源和输入状态均由本模块内部管理；窗口消息回调与主题接口共享稳定的
 //! [`Window`] 分配，所有原生窗口和图形操作都应在创建它们的 UI 线程执行。
@@ -311,7 +311,7 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
             ) -> i32;
         }
         let mut policy = AccentPolicy {
-            state: ACCENT_ENABLE_ACRYLICBLURBEHIND,
+            state: 0, // ACCENT_DISABLED：液态玻璃不要磨砂，只保留 DwmEnableBlurBehindWindow 的轻微模糊
             flags: 2,
             gradient_color: 0x66ff_ffff,
             animation_id: 0,
@@ -516,7 +516,7 @@ impl Window {
             // 配合 PREMULTIPLIED 像素格式，DWM 才能把背后的模糊合成进来。
             // 想让文字在任何背景上都看得清时，把 a 调到 0.4~0.5 即可（半透明底色）。
             let mut glass = color(p.background);
-            glass.a = 0.35;
+            glass.a = 0.15;
             target.Clear(Some(&glass));
             if let Some(c) = &app.content {
                 if let Some(indicator) = &c.snapshot.mode_indicator {
