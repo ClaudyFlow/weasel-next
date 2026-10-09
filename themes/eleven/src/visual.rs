@@ -215,8 +215,9 @@ impl CandidateTheme {
             B: 0,
         })?;
         let panel_background = self.brush(palette.acrylic_base())?;
-        // 玻璃棱边：比原来 0x24 / 0x3c 再亮一点，在糊底上形成可辨的"玻璃边"。
-        let panel_border = self.brush(with_alpha(palette.foreground, 0x55))?;
+        // 透明液态玻璃的"边"：在完全透明的面板上，质感全靠这一圈棱边体现。
+        // 亮度提到 0x99（原 0x55）：透底上才有可辨的玻璃棱与高光感。
+        let panel_border = self.brush(with_alpha(palette.foreground, 0x99))?;
         self.candidate_font()?;
         // Validate the icon font factory as well as the candidate font.
         FontFamily::CreateInstanceWithName(&HSTRING::from(icon_font()))?;
@@ -230,7 +231,7 @@ impl CandidateTheme {
         root.SetMinWidth(140.0)?;
         // 玻璃感的第二层：圆角加大（8 → 12），更接近"液态玻璃"的柔和轮廓。
         root.SetCornerRadius(corner_radius(12.0))?;
-        root.SetBorderThickness(thickness(1.0, 1.0, 1.0, 1.0))?;
+        root.SetBorderThickness(thickness(1.5, 1.5, 1.5, 1.5))?;
         root.SetBorderBrush(&panel_border)?;
         root.SetRequestedTheme(if palette.dark {
             ElementTheme::Dark
