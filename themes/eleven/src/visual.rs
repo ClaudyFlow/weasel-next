@@ -231,7 +231,9 @@ impl CandidateTheme {
         root.SetMinWidth(140.0)?;
         // 玻璃感的第二层：圆角加大（8 → 12），更接近"液态玻璃"的柔和轮廓。
         root.SetCornerRadius(corner_radius(12.0))?;
-        root.SetBorderThickness(thickness(1.5, 1.5, 1.5, 1.5))?;
+        // 【纯粹透明】面板外框厚度置 0：不画边、不加深色底，只留文字浮在背景上。
+        // 内部元素的分隔线仍用 panel_border（保持候选区与快捷操作区的分界）。
+        root.SetBorderThickness(thickness(0.0, 0.0, 0.0, 0.0))?;
         root.SetBorderBrush(&panel_border)?;
         root.SetRequestedTheme(if palette.dark {
             ElementTheme::Dark
