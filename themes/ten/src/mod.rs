@@ -476,7 +476,7 @@ impl Window {
             // 配合 PREMULTIPLIED 像素格式，DWM 才能把背后的模糊合成进来。
             // 想让文字在任何背景上都看得清时，把 a 调到 0.4~0.5 即可（半透明底色）。
             let mut glass = color(p.background);
-            glass.a = 0.0;
+            glass.a = 0.35;
             target.Clear(Some(&glass));
             if let Some(c) = &app.content {
                 if let Some(indicator) = &c.snapshot.mode_indicator {
