@@ -1,4 +1,4 @@
-﻿//! Windows 10 候选栏主题后端，使用 Direct2D/DirectWrite 绘制独立弹出窗口。
+//! Windows 10 候选栏主题后端，使用 Direct2D/DirectWrite 绘制独立弹出窗口。
 //!
 //! HWND、图形资源和输入状态均由本模块内部管理；窗口消息回调与主题接口共享稳定的
 //! [`Window`] 分配，所有原生窗口和图形操作都应在创建它们的 UI 线程执行。
@@ -283,6 +283,46 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
         };
         unsafe {
             let _ = DwmEnableBlurBehindWindow(hwnd, &blur);
+        }
+        // 玻璃加强：在"逐像素 alpha + 透明清屏"都已具备的前提下，再上
+        // ACCENT_ENABLE_ACRYLICBLURBEHIND —— 这才是**强糊**（Aero/亚克力那种），
+        // 而 DwmEnableBlurBehindWindow 的模糊很弱、在纯色背景上几乎看不出来。
+        // tint 用 40% 淡白（AABBGGRR）：既保住白字可读，又让面板是一块可辨的玻璃。
+        #[repr(C)]
+        struct AccentPolicy {
+            state: i32,
+            flags: i32,
+            gradient_color: u32,
+            animation_id: i32,
+        }
+        #[repr(C)]
+        struct WindowCompositionAttributeData {
+            attribute: i32,
+            data: *mut core::ffi::c_void,
+            size: usize,
+        }
+        const WCA_ACCENT_POLICY: i32 = 19;
+        const ACCENT_ENABLE_ACRYLICBLURBEHIND: i32 = 4;
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn SetWindowCompositionAttribute(
+                hwnd: HWND,
+                data: *mut WindowCompositionAttributeData,
+            ) -> i32;
+        }
+        let mut policy = AccentPolicy {
+            state: ACCENT_ENABLE_ACRYLICBLURBEHIND,
+            flags: 2,
+            gradient_color: 0x66ff_ffff,
+            animation_id: 0,
+        };
+        let mut data = WindowCompositionAttributeData {
+            attribute: WCA_ACCENT_POLICY,
+            data: &mut policy as *mut _ as *mut core::ffi::c_void,
+            size: core::mem::size_of::<AccentPolicy>(),
+        };
+        unsafe {
+            let _ = SetWindowCompositionAttribute(hwnd, &mut data);
         }
         window.dpi.set(GetDpiForWindow(hwnd).max(1));
         if preview {
