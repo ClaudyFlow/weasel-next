@@ -165,3 +165,31 @@ C:\Program Files\Weasel-Next\
   T3 weasel-server 启动时加载 plugin.dll（可选，缺失则静默跳过）。
   T4 统计插件保持静态编进 rime.dll（librime 链约束），只在文档里说明它为何不是独立 DLL。
   T5 安装器把 plugin.dll 放进程序文件夹；用户目录建立 plugin\ 空目录 + README（已有）。
+
+## 插件宿主定名与 C++ 动态插件可行性（已定）
+
+- 宿主 DLL 定名 **`weasel-plugin.dll`**（程序文件夹）。
+- C++ 完全能做动态插件：Win32 `LoadLibraryW` + `GetProcAddress` + 纯 `extern "C"` 函数表
+  （ABI 稳定，Rust 侧用 `#[no_mangle] extern "C"` 同样能实现）。
+
+两条链分开对待：
+1. librime 链上的插件（统计插件）—— Windows 上 librime 没有插件加载器，必须静态编进 rime.dll。
+2. 我们自己的插件体系 —— 由 weasel-plugin.dll 当宿主，动态加载 用户目录\plugin\<名>\<名>.dll。
+
+推荐实现（兼顾两者）：
+```
+rime.dll  (静态, C++)  ← librime 强制要求静态的薄适配层
+   └─ 运行时 LoadLibraryW("weasel-plugin.dll")
+        └─ weasel-plugin.dll (宿主, C++ 或 Rust)
+             ├─ 统计插件实现（报表/存储，真正的逻辑）
+             └─ 动态加载 用户目录\plugin\<名>\<名>.dll（C++/Rust 任意）
+```
+即：统计逻辑跑在真正的动态 DLL 里，rime.dll 只留几十行胶水。
+
+落地顺序（替换原 T1/T2）：
+  S1 定义宿主 ABI：weasel_plugin_host_api（版本、日志、Rime 查询、定时器）+
+     weasel_plugin_entry(const host_api*) 入口约定；C 头文件放 plugin\core\include。
+  S2 新建 weasel-plugin 宿主 crate/工程，输出 weasel-plugin.dll；实现扫描、加载、版本校验、隔离。
+  S3 rime.dll 的 C++ 适配层改为调用 weasel-plugin.dll（找不到宿主时退化为内置实现，保证不崩）。
+  S4 weasel-server 启动时确保宿主已加载（可选）。
+  S5 安装器把 weasel-plugin.dll 放进程序文件夹；用户目录 plugin\<名>\ 放插件 DLL。
