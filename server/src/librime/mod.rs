@@ -1,9 +1,11 @@
 //! 管理 librime 动态库、引擎实例与输入会话，并将宿主事件和引擎状态相互转换。
 
-/// 把 `<shared>/eassy/**/*.eassy.toml` 与 `<user>/eassy/**/*.eassy.toml` 归并成
-/// `<user>/essay.txt`（librime 的 preset vocabulary 只认这个 txt）。
+/// 把 `<shared>/eassy/**/*.eassy.toml` 与 `<user>/eassy/**/*.eassy.toml`（若存在）归并成
+/// `<shared>/eassy/essay.txt`（librime 的 preset vocabulary 只认这个 txt）。
 ///
-/// 仓库里只放 `.eassy.toml`；txt 是部署产物，因此在每次初始化/部署前重新生成。
+/// 布局约定：`eassy\` 只存在于**代码目录与程序文件夹**，用户目录不建这个文件夹；
+/// 因此 TOML 是出厂源、`essay.txt` 是**程序文件夹里的部署产物**，每次初始化/部署前重新生成。
+/// 用户目录若自行放了 `eassy\`（可选扩展），其词条也会被一并归并进来。
 fn generate_essay_txt(shared_dir: &std::path::Path, user_dir: &std::path::Path) {
     let mut merged = std::collections::BTreeMap::new();
     for root in [shared_dir, user_dir] {
@@ -22,7 +24,7 @@ fn generate_essay_txt(shared_dir: &std::path::Path, user_dir: &std::path::Path) 
         tracing::warn!("eassy: 没有找到任何 *.eassy.toml，essay.txt 未生成");
         return;
     }
-    let target = user_dir.join("essay.txt");
+    let target = shared_dir.join("eassy").join("essay.txt");
     match weasel_common::eassy::write_essay_txt(&target, &merged) {
         Ok(count) => tracing::info!("eassy: 已由 TOML 归并生成 {}（{count} 条）", target.display()),
         Err(error) => tracing::warn!("eassy: 写出 {} 失败: {error}", target.display()),

@@ -296,3 +296,21 @@ Lua 插件的落位（按官方约定 ✓）：
 - 迁移顺序：先做主题化外壳（窗口/圆角/玻璃）→ 再逐页迁移（常规/外观/按键/词典/关于）→ 最后删除 Slint 依赖。
 - 性能约定：设置界面同样采用 D2D1_ALPHA_MODE_PREMULTIPLIED + DwmEnableBlurBehindWindow，
   与候选窗共用一份 D2D 绑定（themes\support\build_d2d.rs 生成的绑定）。
+## 安装期两件独立任务（已定：并行、互不牵制）
+
+1. **部署**：`weasel-server.exe --deploy --silent`（由 broker 的 post-install 发起）。
+2. **解压语言模型**：用 `7z\7z.exe` 把 `Rime-Next\model\*.gram.7z`（含分卷 .001/.002）解到 `Rime-Next\model\`。
+
+约定：
+- 这两件**互相独立**，可同时进行，不依赖用户配置、不依赖方案、不依赖对方先完成。
+- 部署本身会在 librime 初始化前由 `server\librime\mod.rs` 的 `generate_essay_txt()` 从
+  `eassy\**\*.eassy.toml` 归并生成 `eassy\essay.txt`，因此不需要预先准备 txt。
+- 若解压尚未完成，部署会照常进行（模型缺失只影响语言模型打分，不阻断方案编译）。
+
+## eassy 的位置（已定）
+
+- **代码目录与程序文件夹**各有 `Rime-Next\eassy\<名字>\<名字>.eassy.toml`（出厂源）。
+- **用户目录不建 `eassy\`**；`essay.txt` 是**程序文件夹里的部署产物**
+  （`<程序>\Rime-Next\eassy\essay.txt`），由部署/初始化时从 TOML 归并生成。
+- 用户若想扩展，可自行在 `<用户目录>\eassy\` 放 `*.eassy.toml`，会被一并归并（可选）。
+- librime 的 `*.txt` 资源规则指向 `<root>/eassy/`。
