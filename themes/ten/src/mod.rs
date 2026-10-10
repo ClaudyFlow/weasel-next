@@ -525,9 +525,11 @@ impl Window {
                 if width > 0.0 && height > 0.0 {
                     // 圆角半径 = 高度的四分之一（用户指定），并保证不超出半宽。
                     let radius = (height / 4.0).min(width / 2.0);
-                    // 面板本体：圆角矩形 + 15% 淡罩
+                    // 面板本体：圆角矩形 + 40% 淡罩。
+                    // 原来 15% 在深色背景上几乎看不出轮廓 → 圆角"像没了" ✗；
+                    // 透明度低一点（40%）才既有玻璃感、又能看清圆角形状。
                     let mut fill = color(p.background);
-                    fill.a = 0.15;
+                    fill.a = 0.40;
                     brush.SetColor(&fill);
                     target.FillRoundedRectangle(
                         &D2D1_ROUNDED_RECT {
