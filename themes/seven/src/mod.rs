@@ -563,21 +563,21 @@ impl Window {
                     brush.SetColor(&highlight);
                     // ★ Aero 招牌：顶部**高光带**（不是一条线 ✗）—— 24 层渐隐细线模拟线性渐变，
 // 顶部 alpha 0.72 二次衰减到 0，覆盖上半 48% 高度（无需渐变画刷 API ✓ 低风险 ✓）
-                    let band_end = height * 0.48;
+                    let band_end = height * 0.52;   // 高光带再宽一点 ✓
                     let steps = 24u32;
                     let band_h = band_end / steps as f32;
                     for i in 0..steps {
                         let f = i as f32 / steps as f32;
                         let mut hl = color(0xffffff);
-                        hl.a = 0.22 * (1.0 - f) * (1.0 - f);   // 黑底上收细：0.72 会成白雾 ✗
+                        hl.a = 0.40 * (1.0 - f) * (1.0 - f);   // ★ 宽白高光：黑底上要看得见 ✓
                         brush.SetColor(&hl);
                         let y0 = i as f32 * band_h;
-                        target.FillRectangle(&rect(radius, y0, width - radius, y0 + band_h), &brush);   // 高光带铺满（含左右上角附近 ✓ 左右对称 ✓）
+                        target.FillRectangle(&rect(0.0, y0, width, y0 + band_h), &brush);   // ★ 全宽高光带（溢出圆角的部分由 SetWindowRgn 裁掉 ✓）
                     }
                     let mut hl_line = color(0xffffff);
-                    hl_line.a = 0.42;
+                    hl_line.a = 0.62;   // 顶部亮线加强 ✓
                     brush.SetColor(&hl_line);
-                    target.FillRectangle(&rect(radius, 0.0, width - radius, 1.0), &brush);
+                    target.FillRectangle(&rect(0.0, 0.0, width, 1.0), &brush);   // 全宽顶线 ✓
                     // 左右淡边（同样内缩 radius，止于上下圆角之间）
                     highlight.a = 0.20;   // 黑底上侧边也要收细 ✓
                     brush.SetColor(&highlight);
