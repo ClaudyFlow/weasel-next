@@ -352,7 +352,7 @@ FunctionEnd
   Delete /REBOOTOK "$INSTDIR\weasel-installer-helper.exe"
   RMDir /REBOOTOK "$INSTDIR\x86"
   RMDir /REBOOTOK "$INSTDIR\x64"
-  RMDir /REBOOTOK "$INSTDIR\rime-data"
+  RMDir /REBOOTOK "$INSTDIR\Rime-Next\rime-data"
   RMDir /REBOOTOK "$INSTDIR\theme-wasm"
   RMDir /REBOOTOK "$INSTDIR"
 !macroend
@@ -381,7 +381,7 @@ Section "Weasel-Next" SEC_MAIN
   !insertmacro ManagedFile "${X64_RELEASE}\weasel_tip.dll" "weasel_tip.dll"
   SetOutPath "$INSTDIR\x86"
   !insertmacro ManagedFile "${X86_RELEASE}\weasel_tip.dll" "weasel_tip.dll"
-  CreateDirectory "$INSTDIR\rime-data"
+  CreateDirectory "$INSTDIR\Rime-Next\rime-data"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 Weasel-Next 文件，请检查磁盘空间和文件权限。" /SD IDOK
     SetErrorLevel 1
@@ -394,7 +394,7 @@ Section "librime" SEC_LIBRIME
   ClearErrors
   SetOutPath "$INSTDIR"
   !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\librime\dist\lib\rime.dll" "rime.dll"
-  SetOutPath "$INSTDIR\rime-data"
+  SetOutPath "$INSTDIR\Rime-Next\rime-data"
   !insertmacro RimePayload
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 librime，请检查磁盘空间和文件权限。" /SD IDOK

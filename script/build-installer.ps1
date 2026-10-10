@@ -84,7 +84,7 @@ try {
     foreach ($payload in @(
         @{ Macro = 'RimePayload'; RemoveMacro = 'RemoveRimePayload'; ValidateMacro = 'ValidateRimePayloadRemoval'; Source = 'asset\Rime-Next\rime-data'; Target = 'Rime-Next\rime-data' },
         @{ Macro = 'WasmPayload'; RemoveMacro = 'RemoveWasmPayload'; ValidateMacro = 'ValidateWasmPayloadRemoval'; Source = 'artifact\theme-wasm'; Target = 'theme-wasm' },
-        # 按键/上屏音效：随包安装到 $INSTDIR\sound，服务端按 exe 同级目录解析 sound/。
+        # 按键/上屏音效：随包安装到 $INSTDIR\Rime-Next\sound，服务端按配置的 asset 目录解析 sound/。
         @{ Macro = 'SoundsPayload'; RemoveMacro = 'RemoveSoundsPayload'; ValidateMacro = 'ValidateSoundsPayloadRemoval'; Source = 'asset\Rime-Next\sound'; Target = 'Rime-Next\sound' }
     )) {
         $files = @()
