@@ -1,4 +1,4 @@
-﻿use std::time::Duration;
+use std::time::Duration;
 
 mod support;
 use support::{ClientProtocol as _, ConnectionProtocol as _};

@@ -1,4 +1,4 @@
-﻿!ifndef WEASEL_LAUNCH_BROKER_NSH
+!ifndef WEASEL_LAUNCH_BROKER_NSH
 !define WEASEL_LAUNCH_BROKER_NSH
 Function LaunchBrokerUnelevated
   InitPluginsDir

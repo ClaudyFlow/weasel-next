@@ -1,4 +1,4 @@
-﻿// 语法检查用桩：仅覆盖本插件用到的 librime API，签名照抄 src/rime/*.h。
+// 语法检查用桩：仅覆盖本插件用到的 librime API，签名照抄 src/rime/*.h。
 #pragma once
 #include <iostream>
 #include <memory>

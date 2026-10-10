@@ -1,4 +1,4 @@
-﻿; Persist machine-install diagnostics independently of both $PLUGINSDIR and
+; Persist machine-install diagnostics independently of both $PLUGINSDIR and
 ; the administrator account used for UAC.
 Var InstallLog
 Var InstallLogHandle

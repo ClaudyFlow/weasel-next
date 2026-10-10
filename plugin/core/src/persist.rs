@@ -1,4 +1,4 @@
-﻿//! 持久化：与 Lua 版统计文件**同一语法**（`input_stat = { ... }` 的 Lua 表字面量）。
+//! 持久化：与 Lua 版统计文件**同一语法**（`input_stat = { ... }` 的 Lua 表字面量）。
 //!
 //! 规范依据 `docs/lua-parity-spec.md` §4：
 //! * 路径 `<user_data_dir>/lua/input_stat_<schema_id>.lua`（[`file_name`]）；

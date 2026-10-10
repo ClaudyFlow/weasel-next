@@ -1,4 +1,4 @@
-﻿//! 为 TSF 组合文本提供显示属性，并把该属性应用到宿主文本范围。
+//! 为 TSF 组合文本提供显示属性，并把该属性应用到宿主文本范围。
 use super::*;
 
 #[implement(ITfDisplayAttributeInfo)]

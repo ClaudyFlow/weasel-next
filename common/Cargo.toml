@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "weasel-common"
 version = "0.1.8"
 edition = "2024"

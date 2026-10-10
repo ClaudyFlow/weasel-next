@@ -1,4 +1,4 @@
-﻿#![allow(unsafe_op_in_unsafe_fn)]
+#![allow(unsafe_op_in_unsafe_fn)]
 
 //! Windows 11 候选窗主题的原生窗口与 XAML Island 后端。
 //!

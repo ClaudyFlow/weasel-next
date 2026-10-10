@@ -1,4 +1,4 @@
-﻿/*
+/*
  * abi_smoke.c — Rust 核心 C ABI 的冒烟测试。
  *
  * 用途：在**不依赖 librime/MSVC** 的前提下验证 `plugin/include/rime_input_stat.h`

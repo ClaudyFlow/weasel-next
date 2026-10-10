@@ -1,4 +1,4 @@
-﻿import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const moduleName = process.argv[2];

@@ -1,4 +1,4 @@
-﻿# C++ 壳的语法检查（无需 MSVC / boost / librime 头文件）
+# C++ 壳的语法检查（无需 MSVC / boost / librime 头文件）
 #
 # 用途：用 plugin/tests/stub 下按真实 librime 源码签名手写的桩头文件，对插件壳做
 # `-fsyntax-only`，可以抓住自己代码里的语法/类型/ABI 调用错误（抓不到的是 MSVC ABI 链接问题）。

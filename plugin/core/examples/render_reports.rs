@@ -1,4 +1,4 @@
-﻿//! 生成样例报表，便于人工核对文案与排版（也可写入文档）。
+//! 生成样例报表，便于人工核对文案与排版（也可写入文档）。
 //!
 //! * 打印：`cargo run --release --example render_reports`
 //! * 写文件：`cargo run --release --example render_reports -- docs/sample-reports.md`

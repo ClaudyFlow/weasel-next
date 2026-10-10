@@ -1,4 +1,4 @@
-﻿//! Shared executable icon resource; manifests remain owned by each binary.
+//! Shared executable icon resource; manifests remain owned by each binary.
 #[path = "version.rs"]
 mod version;
 

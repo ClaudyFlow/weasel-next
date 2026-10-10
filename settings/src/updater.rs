@@ -1,4 +1,4 @@
-﻿//! 只访问 WinSparkle 的用户偏好；设置应用不初始化更新检查器。
+//! 只访问 WinSparkle 的用户偏好；设置应用不初始化更新检查器。
 use libloading::Library;
 use std::path::Path;
 

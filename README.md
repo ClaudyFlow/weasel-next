@@ -1,4 +1,4 @@
-﻿# 小狼毫 RS 输入法
+# 小狼毫 RS 输入法
 
 基于 中州韵输入法引擎 / Rime Input Method Engine 的 Windows 输入法
 

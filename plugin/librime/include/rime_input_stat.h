@@ -1,4 +1,4 @@
-﻿/*
+/*
  * rime_input_stat.h — librime 原生插件（input_stat）所用 Rust 核心的 C ABI。
  *
  * 与 Rust 侧 `core/src/capi.rs` 一一对应：任何一侧新增/改名都必须同步另一侧。

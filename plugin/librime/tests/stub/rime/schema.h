@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <rime/common.h>
 namespace rime {
 class Config;

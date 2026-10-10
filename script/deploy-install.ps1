@@ -1,4 +1,4 @@
-﻿# deploy-install.ps1 — 编译并直接安装到安装路径
+# deploy-install.ps1 — 编译并直接安装到安装路径
 #
 # 用法（普通权限即可，内部会用 sudo 提权做写入）：
 #   powershell -ExecutionPolicy Bypass -File script\deploy-install.ps1

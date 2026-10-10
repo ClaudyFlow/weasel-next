@@ -1,4 +1,4 @@
-﻿//! Native file properties shared by EXEs and the TIP DLL.
+//! Native file properties shared by EXEs and the TIP DLL.
 pub fn embed() {
     let package = std::env::var("CARGO_PKG_NAME").expect("Cargo package name");
     let (description, filename, dll) = match package.as_str() {

@@ -1,4 +1,4 @@
-﻿!ifndef WEASEL_UIACCESS_NSH
+!ifndef WEASEL_UIACCESS_NSH
 !define WEASEL_UIACCESS_NSH
 Var UseUiAccess
 

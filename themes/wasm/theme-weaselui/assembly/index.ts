@@ -1,4 +1,4 @@
-﻿import {
+import {
   ABI_VERSION, Action, Capability, ErrorCode, EventKind, FrameResult, PointerPhase,
   Image, SurfaceKind, View, create_surface, destroy_surface, draw_text, event_surface,
   measure_text, readView, roundedRect, select_surface, send_action, set_size, set_visible,

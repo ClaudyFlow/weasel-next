@@ -1,4 +1,4 @@
-﻿//! “关于”对话框相关功能的实现
+//! “关于”对话框相关功能的实现
 
 use windows_strings::{HSTRING, PCWSTR, w};
 

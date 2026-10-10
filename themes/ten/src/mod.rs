@@ -1,4 +1,4 @@
-﻿//! Windows 10 候选栏主题后端，使用 Direct2D/DirectWrite 绘制独立弹出窗口。
+//! Windows 10 候选栏主题后端，使用 Direct2D/DirectWrite 绘制独立弹出窗口。
 //!
 //! HWND、图形资源和输入状态均由本模块内部管理；窗口消息回调与主题接口共享稳定的
 //! [`Window`] 分配，所有原生窗口和图形操作都应在创建它们的 UI 线程执行。

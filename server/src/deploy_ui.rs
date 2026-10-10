@@ -1,4 +1,4 @@
-﻿//! 提供 Rime 部署的 Windows/XAML 进度窗口，并在初始化失败时回退到原生 Task Dialog。
+//! 提供 Rime 部署的 Windows/XAML 进度窗口，并在初始化失败时回退到原生 Task Dialog。
 //!
 //! 窗口及 XAML 对象由调用线程创建和销毁；部署工作线程通过有界邮箱回传日志与最终状态。
 #![allow(unsafe_op_in_unsafe_fn)]

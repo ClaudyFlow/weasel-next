@@ -1,4 +1,4 @@
-﻿!include WordFunc.nsh
+!include WordFunc.nsh
 
 !ifndef VC_X86_VERSION
   !error "Missing VC_X86_VERSION; use script\build-installer.ps1."

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <rime/common.h>
 #include <rime/ticket.h>
 #include <rime/translation.h>

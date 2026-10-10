@@ -1,4 +1,4 @@
-﻿//! 应用菜单相关功能
+//! 应用菜单相关功能
 
 pub const BROKER_WINDOW_CLASS: &str = "weasel-next-broker";
 pub const DEPLOY: u32 = 1001;

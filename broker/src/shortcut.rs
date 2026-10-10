@@ -1,4 +1,4 @@
-﻿//! 仅供安装流程调用的 Windows 快捷方式创建功能。
+//! 仅供安装流程调用的 Windows 快捷方式创建功能。
 //!
 //! Windows Toast 通知需要系统上存在具有 AppUserModel ID 的快捷方式
 use std::path::Path;

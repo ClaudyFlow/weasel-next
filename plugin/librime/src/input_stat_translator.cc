@@ -1,4 +1,4 @@
-﻿//
+//
 // input_stat_translator.cc — 见头文件说明。
 //
 

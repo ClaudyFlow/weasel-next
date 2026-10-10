@@ -1,4 +1,4 @@
-﻿//! 原生外观预览控制器。
+//! 原生外观预览控制器。
 
 use crate::{d2d_bindings::*, theme_api::UiMode, ui_runtime::UiHandle};
 use std::{cell::Cell, sync::mpsc, thread};

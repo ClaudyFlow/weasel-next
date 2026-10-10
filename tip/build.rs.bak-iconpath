@@ -1,4 +1,4 @@
-﻿use std::path::PathBuf;
+use std::path::PathBuf;
 #[path = "../build_support/version.rs"]
 mod version;
 #[path = "../build_support/toolchain.rs"]

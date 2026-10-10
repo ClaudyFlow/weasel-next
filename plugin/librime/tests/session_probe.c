@@ -1,4 +1,4 @@
-﻿// session_probe.c —— 直接驱动 librime 的 C API，验证 input_stat 插件是否真的生效。
+// session_probe.c —— 直接驱动 librime 的 C API，验证 input_stat 插件是否真的生效。
 //
 // 与 weasel-rs 的 server 做法一致：设置 shared/user data 目录 → setup → initialize →
 // 开会话 → 选方案 → 输入命令 → 打印候选。若统计 translator 正常，输入 /rtj 时应看到

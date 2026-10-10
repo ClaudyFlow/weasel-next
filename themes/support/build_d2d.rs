@@ -1,4 +1,4 @@
-﻿/// Shared native projection for D2D candidate themes.
+/// Shared native projection for D2D candidate themes.
 pub fn generate() {
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     // The SDK interop interface is absent from windows-default 0.100 metadata.

@@ -1,4 +1,4 @@
-﻿// richschema 是人工维护的约束与界面描述；schema 仅包含标准 JSON Schema。
+// richschema 是人工维护的约束与界面描述；schema 仅包含标准 JSON Schema。
 // 默认值来自同名 .json，绝不反向写入默认配置。
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';

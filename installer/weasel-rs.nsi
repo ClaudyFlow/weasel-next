@@ -1,4 +1,4 @@
-﻿Unicode true
+Unicode true
 ManifestDPIAware true
 RequestExecutionLevel admin
 !ifdef DEV_INSTALLER

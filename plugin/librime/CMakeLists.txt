@@ -1,4 +1,4 @@
-﻿# rime-input-stat 插件（librime 模块 + Rust 核心）
+# rime-input-stat 插件（librime 模块 + Rust 核心）
 #
 # 两种用法：
 #   1) 作为 librime 的子目录（推荐，Windows 上唯一可行）：

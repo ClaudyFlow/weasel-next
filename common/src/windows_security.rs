@@ -1,4 +1,4 @@
-﻿//! Windows 运行身份与本地对象安全设施。
+//! Windows 运行身份与本地对象安全设施。
 
 /// Win32 `SECURITY_ATTRIBUTES` 的公共类型别名。
 pub use crate::bindings::SECURITY_ATTRIBUTES as SecurityAttributes;

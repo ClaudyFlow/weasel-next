@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 // 桩：只保留本插件用到的成员（真实头文件里的结构体字段顺序不影响语法检查）。
 #include <cstddef>
 #include <cstdint>

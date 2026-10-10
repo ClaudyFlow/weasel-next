@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 [CmdletBinding()]
 param(
     # Keep release outputs/optimizations, but enable Rust incremental compilation.

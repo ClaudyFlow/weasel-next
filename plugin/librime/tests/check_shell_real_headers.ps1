@@ -1,4 +1,4 @@
-﻿# 用**真实的 librime / boost 头文件**对插件 C++ 壳做语法检查（不需要 MSVC，也不需要编译 librime）
+# 用**真实的 librime / boost 头文件**对插件 C++ 壳做语法检查（不需要 MSVC，也不需要编译 librime）
 #
 # 与 check_shell_syntax.ps1 的区别：
 #   * check_shell_syntax.ps1 用 plugin/tests/stub 下手写的桩头，离线可用，只验证"自己代码的语法"；

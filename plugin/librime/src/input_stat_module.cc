@@ -1,4 +1,4 @@
-﻿//
+//
 // input_stat_module.cc — librime 模块注册。
 //
 // 与 librime 官方示例 `sample/src/sample_module.cc` 同一套路：模块初始化时把组件

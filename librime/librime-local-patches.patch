@@ -1,4 +1,4 @@
-﻿warning: in the working copy of 'src/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
 diff --git a/.clang-format b/.clang-format
 index 5cb4553..744dd97 100644
 --- a/.clang-format

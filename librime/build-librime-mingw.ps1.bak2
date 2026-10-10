@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     用 llvm-mingw（clang + libc++）从源码构建 librime，并把 input_stat 统计插件静态链进去，
     产出一个**自带统计插件**的 rime.dll——与 weasel-rs 其余部分同一套 mingw ABI。

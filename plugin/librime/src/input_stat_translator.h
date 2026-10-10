@@ -1,4 +1,4 @@
-﻿//
+//
 // input_stat_translator.h — librime 原生输入统计 translator。
 //
 // 职责（全部业务逻辑在 Rust 核心，见 core/src/capi.rs）：

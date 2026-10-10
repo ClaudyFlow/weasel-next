@@ -1,4 +1,4 @@
-﻿//! Shared messages and RPC transport for weasel-next.
+//! Shared messages and RPC transport for weasel-next.
 
 pub mod about;
 #[cfg(windows)]

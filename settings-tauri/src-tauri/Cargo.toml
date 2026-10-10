@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "weasel-settings-tauri"
 version = "0.1.0"
 description = "Tauri-based settings panel for weasel-next (experimental, co-exists with Slint)"

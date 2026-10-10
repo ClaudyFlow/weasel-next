@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 param(
     [Parameter(Mandatory)][ValidateSet('x86', 'x64')][string]$Architecture,
     [Parameter(Mandatory)][string]$Destination,

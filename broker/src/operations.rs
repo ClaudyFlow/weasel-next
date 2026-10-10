@@ -1,4 +1,4 @@
-﻿//! Broker 后台部署与服务重启操作。
+//! Broker 后台部署与服务重启操作。
 
 use std::{
     process::Stdio,

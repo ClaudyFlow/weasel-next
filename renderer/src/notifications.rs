@@ -1,4 +1,4 @@
-﻿//! 将主题通知记录到本地诊断日志，并异步转发给 broker。
+//! 将主题通知记录到本地诊断日志，并异步转发给 broker。
 
 use std::{
     sync::{OnceLock, mpsc},

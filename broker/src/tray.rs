@@ -1,4 +1,4 @@
-﻿//! Windows 通知区域图标、隐藏窗口和菜单消息循环。
+//! Windows 通知区域图标、隐藏窗口和菜单消息循环。
 
 use std::{
     cell::RefCell,

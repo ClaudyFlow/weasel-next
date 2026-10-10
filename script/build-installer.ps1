@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 [CmdletBinding()]
 param(
     # Build an uncompressed installer that installs all components without a selection page.
