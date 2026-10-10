@@ -18,8 +18,8 @@ pub const SPLITOR_LEN: usize = 14;
 pub const SPLITOR_CHAR: char = '─';
 /// 脚本版本（Lua `SCRIPT_VERSION`）。
 pub const SCRIPT_VERSION: &str = "₂₀₂₆0718・A";
-/// 脚本行前缀（Lua 长款槽 20：`'脚本：❄🐐🪶' .. SCRIPT_VERSION`）。
-pub const SCRIPT_LINE_PREFIX: &str = "脚本：❄🐐🪶";
+/// 脚本行前缀（Lua 长款槽 20：`'脚本：🐐🪶' .. SCRIPT_VERSION`）。
+pub const SCRIPT_LINE_PREFIX: &str = "脚本：🐐🪶";
 
 /// 分隔线：14 个 `─`。
 pub fn splitor() -> String {
@@ -577,7 +577,7 @@ pub fn format_new_words(
     slots[4] = splitor();
     slots[5] = words.iter().cloned().collect::<Vec<_>>().join("，");
     slots[6] = splitor();
-    slots[7] = format!("{}{}", SCRIPT_LINE_PREFIX, SCRIPT_VERSION);
+    slots[7] = format!("{}{}❄", SCRIPT_LINE_PREFIX, SCRIPT_VERSION);
 
     let joined = (1..=7)
         .map(|index| slots[index].clone())
@@ -750,7 +750,7 @@ mod tests {
         assert_eq!(lines[15], "◉ 方案：luna_pinyin");
         assert_eq!(lines[16], "◉ 平台：💻Weasel 1.0");
         assert_eq!(lines[17], "──────────────");
-        assert_eq!(lines[18], format!("脚本：❄🐐🪶{}", SCRIPT_VERSION));
+        assert_eq!(lines[18], format!("脚本：🐐🪶{}❄", SCRIPT_VERSION));
         assert_eq!(lines[19], "──────────────");
         assert_eq!(lines[20], "名言一句");
     }
@@ -790,7 +790,7 @@ mod tests {
         assert!(text.contains("自 2023/11/15"), "本地时间行：{text}");
         assert!(text.contains("共记录到生字/词 2 个"));
         assert!(text.contains("世界，你好"), "集合按字典序（有意偏离 Lua 的哈希序）：{text}");
-        assert!(text.contains(&format!("脚本：❄🐐🪶{SCRIPT_VERSION}")));
+        assert!(text.contains(&format!("脚本：🐐🪶{SCRIPT_VERSION}❄")));
 
         assert_eq!(
             format_new_words(&BTreeSet::new(), 0, 8 * 3600),
