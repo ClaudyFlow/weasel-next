@@ -544,8 +544,8 @@ impl Window {
                         &brush,
                     );
                     // 圆角描边：加厚到 2px、更亮 —— 轮廓清楚（内缩半个描边宽，避免被裁）。
-                    let mut outline = color(p.border);   // 黑底外描边：深灰 ✓
-                    outline.a = 0.85;
+                    let mut outline = color(p.border);   // 黑底外描边 ✓（下面把 alpha 调淡，避免顶部像一条黑边 ✗）
+                    outline.a = 0.45;   // ★ 调淡：顶部不再是一条黑 ✓
                     brush.SetColor(&outline);
                     target.DrawRoundedRectangle(
                         &D2D1_ROUNDED_RECT {
@@ -563,8 +563,8 @@ impl Window {
                     brush.SetColor(&highlight);
                     // ★ Aero 招牌：顶部**高光带**（不是一条线 ✗）—— 24 层渐隐细线模拟线性渐变，
 // 顶部 alpha 0.72 二次衰减到 0，覆盖上半 48% 高度（无需渐变画刷 API ✓ 低风险 ✓）
-                    let band_start = height * 0.10;   // ★ 下移：顶部先留一小段暗边 ✓
-                    let band_end = height * 0.60;     // ★ 高光覆盖到 60% 高度 ✓
+                    let band_start = 0.0;   // ★ 去掉顶部暗边：高光从最顶端开始 ✓
+                    let band_end = height * 0.58;   // 覆盖到 58% ✓
                     let steps = 24u32;
                     let band_h = (band_end - band_start) / steps as f32;
                     for i in 0..steps {
