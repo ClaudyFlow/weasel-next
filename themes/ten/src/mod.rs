@@ -926,7 +926,7 @@ unsafe fn apply_round_region(hwnd: HWND, width: f32, height: f32) {
     }
     // 分层窗口：让整个（已裁剪为圆角的）窗口带一点透明度（LWA_ALPHA 是统一 alpha ✓）
     const LWA_ALPHA: u32 = 0x2;
-    SetLayeredWindowAttributes(hwnd, 0, 236, LWA_ALPHA);
+    SetLayeredWindowAttributes(hwnd, 0, 205, LWA_ALPHA);   // 更透：205/255 ≈ 80%（236 偏实 ✗）
 }
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     // Catch every Rust callback, including paint and event delivery, before ABI return.
