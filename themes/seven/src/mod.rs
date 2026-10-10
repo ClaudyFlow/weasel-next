@@ -544,7 +544,7 @@ impl Window {
                         &brush,
                     );
                     // 圆角描边：加厚到 2px、更亮 —— 轮廓清楚（内缩半个描边宽，避免被裁）。
-                    let mut outline = color(p.border);   // Aero 外描边：蓝灰（不用纯白 ✗）
+                    let mut outline = color(p.border);   // 黑底外描边：深灰 ✓
                     outline.a = 0.85;
                     brush.SetColor(&outline);
                     target.DrawRoundedRectangle(
@@ -569,21 +569,21 @@ impl Window {
                     for i in 0..steps {
                         let f = i as f32 / steps as f32;
                         let mut hl = color(0xffffff);
-                        hl.a = 0.72 * (1.0 - f) * (1.0 - f);
+                        hl.a = 0.22 * (1.0 - f) * (1.0 - f);   // 黑底上收细：0.72 会成白雾 ✗
                         brush.SetColor(&hl);
                         let y0 = i as f32 * band_h;
                         target.FillRectangle(&rect(radius, y0, width - radius, y0 + band_h), &brush);   // 高光带铺满（含左右上角附近 ✓ 左右对称 ✓）
                     }
                     let mut hl_line = color(0xffffff);
-                    hl_line.a = 0.85;
+                    hl_line.a = 0.42;
                     brush.SetColor(&hl_line);
                     target.FillRectangle(&rect(radius, 0.0, width - radius, 1.0), &brush);
                     // 左右淡边（同样内缩 radius，止于上下圆角之间）
-                    highlight.a = 0.34;   // 左右竖边更明显（原来 0.22 太弱 ✗）
+                    highlight.a = 0.20;   // 黑底上侧边也要收细 ✓
                     brush.SetColor(&highlight);
                     // ★ 左右两侧对称的高光蓝边（Aero 的玻璃侧壁反光 ✓）
-                    let mut edge_blue = color(p.active);   // 上上版颜色: 淡蓝（#DCEFFC ✓）
-                    edge_blue.a = 0.30;
+                    let mut edge_blue = color(0xFFFFFF);   // 黑底高亮：侧边用白色细高光 ✓
+                    edge_blue.a = 0.22;
                     brush.SetColor(&edge_blue);
                     target.FillRectangle(&rect(0.0, radius, 2.0, height - radius), &brush);
                     target.FillRectangle(&rect(width - 2.0, radius, width, height - radius), &brush);

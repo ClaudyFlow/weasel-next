@@ -222,39 +222,41 @@ impl Palette {
     /// 色板对齐 **Windows 7 Aero 玻璃**：底色偏冷蓝、外框蓝灰、内描边亮白，
     /// 选中项是"上浅下深"的淡蓝渐变块（Aero 的招牌观感）。
     pub fn new(dark: bool) -> Self {
+        // 用户要求：面板**黑色**（深色玻璃），候选**高亮**（纯白文字 + 亮蓝选中块）。
+        // dark/light 两个分支都按黑底设计，只是黑度略不同，避免跟随系统变回白底 ✗。
         if dark {
             Self {
-                background: 0x1B2733,
-                border: 0x3E5568,
-                active: 0x2A5F84,
-                hover: 0x243645,
-                text: 0xF2F6FA,
-                secondary: 0xAFC3D4,
-                active_number: 0xD6EDFF,
-                disabled: 0x7A8A98,
+                background: 0x050505,
+                border: 0x3C3C3C,
+                active: 0x2F6FBF,
+                hover: 0x1E1E1E,
+                text: 0xFFFFFF,
+                secondary: 0xC8C8C8,
+                active_number: 0xFFFFFF,
+                disabled: 0x707070,
             }
         } else {
             Self {
-                background: 0xEAF3FB,
-                border: 0x93B4D4,
-                active: 0xDCEFFC,
-                hover: 0xE3F1FC,
-                text: 0x1A1A1A,
-                secondary: 0x4A5A6A,
-                active_number: 0x2C4A66,
-                disabled: 0xA0A8B0,
+                background: 0x0A0A0A,
+                border: 0x454545,
+                active: 0x3A82D2,
+                hover: 0x222222,
+                text: 0xFFFFFF,
+                secondary: 0xD0D0D0,
+                active_number: 0xFFFFFF,
+                disabled: 0x787878,
             }
         }
     }
 
     /// Aero 选中项的下半段颜色（上浅下深渐变的下端）。
     pub fn active_bottom(dark: bool) -> u32 {
-        if dark { 0x17405C } else { 0xB6DDF5 }
+        if dark { 0x1B4F86 } else { 0x2A5F9E }
     }
 
     /// Aero 选中项的描边色（比外框更亮的蓝）。
     pub fn active_border(dark: bool) -> u32 {
-        if dark { 0x4E8CB8 } else { 0x7EB4E2 }
+        if dark { 0x5FA8E8 } else { 0x6FB4F0 }
     }
 }
 
