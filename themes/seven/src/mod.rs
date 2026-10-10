@@ -234,10 +234,10 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
         // findable and closable: no WS_EX_TOOLWINDOW (task-bar button) and no
         // WS_EX_NOACTIVATE (activatable, so it can be closed).
         let (ex_style, title) = if preview {
-            ((WS_EX_TOPMOST) as u32, w!("Weasel-Next 皮肤预览"))
+            ((WS_EX_TOPMOST | WS_EX_LAYERED) as u32, w!("Weasel-Next 皮肤预览"))
         } else {
             (
-                (WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) as u32,
+                (WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED) as u32,
                 w!("Weasel candidates"),
             )
         };
@@ -522,6 +522,8 @@ impl Window {
             if let Some(c) = &app.content {
                 let width = c.layout.width;
                 let height = c.layout.height;
+                    // 圆角裁剪 + 分层透明度：每次渲染都按当前尺寸重裁（圆角不能只在第一帧对 ✗）
+                    unsafe { apply_round_region(self.hwnd.get(), width, height); }
                 if width > 0.0 && height > 0.0 {
                     // 圆角半径 = 高度的四分之一（用户指定），并保证不超出半宽。
                     let radius = (height / 4.0).min(width / 2.0);
@@ -914,6 +916,40 @@ impl Drop for DrawGuard<'_> {
 }
 
 /// Windows 窗口过程的 ABI 边界；捕获 Rust panic，避免展开穿过系统回调。
+/// 把窗口裁剪成**圆角矩形**，并开启分层窗口的统一透明度。
+///
+/// 为什么必须这么做：当前用的是 `ID2D1HwndRenderTarget`，它**不会**把逐像素 alpha 交给 DWM ✗，
+/// 于是"清屏 alpha=0"的圆角外区域会以 RGB(0,0,0) **不透明**地显示出来 —— 就是用户看到的
+/// "圆角边上多一层黑角" ✓。用 `SetWindowRgn` 在系统层面裁掉圆角之外，圆角就一定是干净的 ✓。
+/// 真正的逐像素玻璃（面板半透明）需要 `ID2D1DCRenderTarget` + 32 位 DIB + `UpdateLayeredWindow` ✓（下一步）。
+/// 分层窗口扩展样式（0x00080000）。d2d 绑定集里没有导出它，这里本地定义 ✓
+/// 只有设了它，`SetLayeredWindowAttributes` 才生效（整窗统一透明度 ✓）。
+const WS_EX_LAYERED: i32 = 0x0008_0000;
+unsafe fn apply_round_region(hwnd: HWND, width: f32, height: f32) {
+    #[link(name = "gdi32")]
+    unsafe extern "system" {
+        fn CreateRoundRectRgn(x1: i32, y1: i32, x2: i32, y2: i32, w: i32, h: i32) -> isize;
+    }
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SetWindowRgn(hwnd: HWND, rgn: isize, redraw: i32) -> i32;
+        fn SetLayeredWindowAttributes(hwnd: HWND, key: u32, alpha: u8, flags: u32) -> i32;
+    }
+    if width <= 0.0 || height <= 0.0 {
+        return;
+    }
+    // 与绘制保持同一个半径：高度四分之一（logic 里的圆角算法一致 ✓）
+    let radius = (height / 4.0).max(2.0);
+    let d = (radius * 2.0).round() as i32;
+    let rgn = CreateRoundRectRgn(0, 0, width.round() as i32 + 1, height.round() as i32 + 1, d, d);
+    if rgn != 0 {
+        // SetWindowRgn 接管 region 所有权，不需要再 DeleteObject ✓
+        SetWindowRgn(hwnd, rgn, 1);
+    }
+    // 分层窗口：让整个（已裁剪为圆角的）窗口带一点透明度（LWA_ALPHA 是统一 alpha ✓）
+    const LWA_ALPHA: u32 = 0x2;
+    SetLayeredWindowAttributes(hwnd, 0, 236, LWA_ALPHA);
+}
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     // Catch every Rust callback, including paint and event delivery, before ABI return.
     match catch_unwind(AssertUnwindSafe(|| unsafe { dispatch(hwnd, msg, wp, lp) })) {

@@ -28,18 +28,67 @@ pub type Vocabulary = BTreeMap<String, u64>;
 ///
 /// 只读取 `[words]` 表，其余表忽略；值必须为正整数，非正整数条目跳过（不视为错误）。
 pub fn parse(text: &str) -> Result<Vocabulary, toml::de::Error> {
-    let value: toml::Value = toml::from_str(text)?;
-    let mut out = Vocabulary::new();
-    if let Some(words) = value.get("words").and_then(|v| v.as_table()) {
-        for (word, entry) in words {
-            if let Some(freq) = entry.as_integer() {
-                if freq > 0 {
-                    *out.entry(word.clone()).or_insert(0) += freq as u64;
+    match toml::from_str::<toml::Value>(text) {
+        Ok(value) => {
+            let mut out = Vocabulary::new();
+            if let Some(words) = value.get("words").and_then(|v| v.as_table()) {
+                for (word, entry) in words {
+                    if let Some(freq) = entry.as_integer() {
+                        if freq > 0 {
+                            *out.entry(word.clone()).or_insert(0) += freq as u64;
+                        }
+                    }
                 }
+            }
+            Ok(out)
+        }
+        // 重复键等严格 TOML 无法接受的情况：退回逐行宽容解析（同词频次相加 ✓）
+        Err(cause) => Ok(parse_lenient(text, cause)),
+    }
+}
+
+/// 宽容解析：逐行认 `"词" = 频次`，重复词频次**相加**；注释与其它键忽略。
+///
+/// 实测 `default.eassy.toml` 有 5 处重复键（軟麪筋 / 鋪 / 𪡏 / 𪢮 / 𪻐）——TOML 规范禁止重复键，
+/// 但词库由多来源合并生成，重复是正常的。宽容解析保证这类数据**不会让整份词库作废**，
+/// 且合并口径（同词求和）与本模块一致。
+fn parse_lenient(text: &str, _cause: toml::de::Error) -> Vocabulary {
+    let mut out = Vocabulary::new();
+    let mut in_words = false;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            in_words = line.contains("words");
+            continue;
+        }
+        if !in_words {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let word = key.trim().trim_matches('"').trim_matches('\'').to_string();
+        if word.is_empty() {
+            continue;
+        }
+        let digits: String = value
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if digits.is_empty() {
+            continue;
+        }
+        if let Ok(freq) = digits.parse::<u64>() {
+            if freq > 0 {
+                *out.entry(word).or_insert(0) += freq;
             }
         }
     }
-    Ok(out)
+    out
 }
 
 /// 读取一份 `*.eassy.toml` 文件。
@@ -140,6 +189,16 @@ mod tests {
         dir
     }
 
+
+    /// 重复键不再让整份词库作废：宽容解析按同词求和。
+    #[test]
+    fn tolerates_duplicate_keys() {
+        let text = "[words]\n\"好\" = 3\n\"好\" = 4\n\"你\" = 1\n";
+        let v = parse(text).expect("重复键不应报错");
+        assert_eq!(v.get("好"), Some(&7), "重复键应求和");
+        assert_eq!(v.get("你"), Some(&1));
+        assert_eq!(v.len(), 2);
+    }
     #[test]
     fn merges_same_word_by_summing_frequencies() {
         let a = parse("[words]\n\"好\" = 3\n\"你好\" = 5\n").unwrap();
