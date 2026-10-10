@@ -13,6 +13,9 @@ pub const NUMBER: f32 = 40.0 * SCALE;
 /// 候选项右侧留白，单位为 DIP。
 pub const PAD: f32 = 18.0 * SCALE;
 
+/// 底部留白：与左右内边距**同高**，避免候选与选中块压到面板下边缘（观感 ✓）。
+pub const BOTTOM_PAD: f32 = PAD;
+
 /// Direct2D 设备丢失后的有限重试状态。
 ///
 /// 每次失败最多安排一次延迟重绘；成功绘制会清零连续失败计数。

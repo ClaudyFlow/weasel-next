@@ -412,7 +412,7 @@ impl Window {
                     // monitor instead of anchoring to a rect.
                     app.content.as_ref().map(|c| {
                         let width = pixels(c.layout.width, dpi);
-                        let height = pixels(c.layout.height, dpi);
+                        let height = pixels(c.layout.height + logic::BOTTOM_PAD, dpi);   // 窗口加高：底部留白 ✓
                         let (x, y) = crate::presentation::preview_position(width, height);
                         (x, y, width, height)
                     })
@@ -424,7 +424,7 @@ impl Window {
                             .filter(|a| a.valid)
                             .map(|anchor| {
                                 let width = pixels(c.layout.width, dpi);
-                                let height = pixels(c.layout.height, dpi);
+                                let height = pixels(c.layout.height + logic::BOTTOM_PAD, dpi);   // 窗口加高：底部留白 ✓
                                 let (x, y) =
                                     crate::presentation::popup_position(anchor, width, height);
                                 (x, y, width, height)
@@ -521,7 +521,7 @@ impl Window {
             target.Clear(Some(&glass));
             if let Some(c) = &app.content {
                 let width = c.layout.width;
-                let height = c.layout.height;
+                let height = c.layout.height + logic::BOTTOM_PAD;   // 面板加高：底部留白 ✓
                     // 圆角裁剪 + 分层透明度：每次渲染都按当前尺寸重裁（圆角不能只在第一帧对 ✗）
                     unsafe { apply_round_region(self.hwnd.get(), width, height); }
                 if width > 0.0 && height > 0.0 {
