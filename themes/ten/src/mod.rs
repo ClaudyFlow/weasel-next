@@ -1,4 +1,4 @@
-﻿//! Windows 10 候选栏主题后端，使用 Direct2D/DirectWrite 绘制独立弹出窗口。
+//! Windows 10 候选栏主题后端，使用 Direct2D/DirectWrite 绘制独立弹出窗口。
 //!
 //! HWND、图形资源和输入状态均由本模块内部管理；窗口消息回调与主题接口共享稳定的
 //! [`Window`] 分配，所有原生窗口和图形操作都应在创建它们的 UI 线程执行。
@@ -518,6 +518,24 @@ impl Window {
             let mut glass = color(p.background);
             glass.a = 0.15;
             target.Clear(Some(&glass));
+            // 液态玻璃的“边”：面板几乎全透，质感全靠边缘 ——
+            // 顶部一道镜面高光（对应 HIG lightIntensity 0.85）+ 底部一道暗边（厚度感 / ambient）。
+            // 只用本文件已有的 FillRectangle + SetColor，不引入新 API。
+            if let Some(c) = &app.content {
+                let width = c.layout.width;
+                let height = c.layout.height;
+                if width > 0.0 && height > 0.0 {
+                    let mut highlight = color(0xffffff);
+                    highlight.a = 0.45;
+                    brush.SetColor(&highlight);
+                    target.FillRectangle(&rect(0.0, 0.0, width, 1.0), &brush);
+                    let mut shade = color(0x000000);
+                    shade.a = 0.30;
+                    brush.SetColor(&shade);
+                    target.FillRectangle(&rect(0.0, height - 1.0, width, height), &brush);
+                    brush.SetColor(&color(p.text));
+                }
+            }
             if let Some(c) = &app.content {
                 if let Some(indicator) = &c.snapshot.mode_indicator {
                     text(
