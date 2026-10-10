@@ -113,3 +113,23 @@ C:\Program Files\Weasel-Next\
 ```
 
 由此：程序文件夹不再散落配置 ✓，活动配置只有 `%APPDATA%\Rime-Next\` 一处 ✓。
+## 安装时直接部署（已定：A 方案 + 异步，不卡向导）
+
+目标：装完就能打字，但安装向导**绝不能被部署卡住**。
+
+做法：
+1. 用户在向导里**选好安装目录**（`$INSTDIR`）后即确定所有路径；
+2. 文件复制完成后，用 **`Exec`（分离进程）**而不是 `ExecWait` 拉起部署助手：
+   - `nsExec::Exec` / `Exec` 启动 `launch-broker.ps1 -Mode PostInstall`，立刻返回；
+   - 助手做两件事：
+     a) 若 `%APPDATA%\Rime-Next` 不存在 → 从 `<INSTDIR>\Rime-Next` 整棵复制（初始化配置）；
+     b) 调 `weasel-broker.exe --deploy --silent`（现成入口：`broker\src\installer.rs:35`）。
+   - 助手是独立进程（broker 本身也是独立受监督进程），因此**向导继续显示"完成/快捷方式/注册"等步骤时不卡**；
+3. 完成页显示"正在后台部署…可以开始打字"；
+4. 兜底：broker 首次启动再检查一次（`build\` 产物 + `installation.yaml` 是否存在），未部署则补部署；
+5. 托盘气泡提示"正在部署 / 部署完成 / 部署失败"（`broker\src\notifications.rs` 现成）。
+
+注意：
+- NSIS 本身是单线程、无真正线程原语 → "双线程"用**分离进程**实现，效果等同（互不阻塞）；
+- 首次方案编译耗时较长（`pinyin_simp.dict.yaml` 31 MB），所以必须异步；
+- 若部署失败，安装仍然算成功，由首次启动兜底重试，避免"装到一半失败"。
