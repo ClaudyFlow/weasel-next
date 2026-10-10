@@ -74,7 +74,7 @@ impl HashTree {
             files: BTreeMap::new(),
         };
         // 递归自底向上：每个文件夹算完自己的哈希后登记，并把结果交给父级。
-        let root_hash = walk(root, "", "", skip, &mut tree)?;
+        let root_hash = walk(root, "", root, skip, &mut tree)?;
         tree.folders.insert(String::new(), root_hash);
         Ok(tree)
     }
