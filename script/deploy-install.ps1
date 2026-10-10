@@ -102,7 +102,29 @@ if (-not $NoRestart) {
         ForEach-Object { try { $_.WaitForExit(3000) } catch { } }
     Start-Sleep -Seconds 3
     $env:WEASEL_TRACE_COMMIT = '1'
-    Start-Process -FilePath (Join-Path $InstallDir 'weasel-broker.exe') -WorkingDirectory $InstallDir
+    # 用 WMI 启动：父进程是 WmiPrvSE，脱离调用方进程树。
+    # 用 Start-Process / cmd start 会被调用方的会话回收，服务端随即消失（2026-10-10 故障总根源）。
+    $broker = Join-Path $InstallDir 'weasel-broker.exe'
+    $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "`"$broker`"" }
+    if ($created.ReturnValue -ne 0) { Write-Warn2 ('WMI 启动失败，返回码 {0}' -f $created.ReturnValue) }
+    else { Write-Ok ('已用 WMI 启动 broker（PID {0}）' -f $created.ProcessId) }
+    Start-Sleep -Seconds 15
+    # 三关校验：进程 / 命名管道 / 管道可连
+    $missing = @()
+    foreach ($name in 'weasel-broker', 'weasel-server', 'weasel-renderer') {
+        if (-not (Get-Process -Name $name -ErrorAction SilentlyContinue)) { $missing += $name }
+    }
+    if ($missing.Count -gt 0) { Write-Warn2 ('未起来的组件: ' + ($missing -join ', ')) } else { Write-Ok '三个组件都在 ✓' }
+    $pipes = @(Get-ChildItem '\\.\pipe\' -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'weasel-next' })
+    Write-Ok ('命名管道 {0} 条' -f $pipes.Count)
+    foreach ($pipe in ($pipes | Where-Object { $_.Name -match 'server' })) {
+        try {
+            $client = New-Object System.IO.Pipes.NamedPipeClientStream('.', $pipe.Name, [System.IO.Pipes.PipeDirection]::InOut)
+            $client.Connect(2000)
+            $client.Dispose()
+            Write-Ok '服务端管道可连 ✓（输入法可用）'
+        } catch { Write-Warn2 ('服务端管道连不上: ' + $_.Exception.Message) }
+    }
     Start-Sleep -Seconds 12
     Get-Process -Name 'weasel-broker', 'weasel-server', 'weasel-renderer' -ErrorAction SilentlyContinue |
         ForEach-Object { Write-Ok ("{0} PID {1}  {2}" -f $_.ProcessName, $_.Id, $_.Path) }
