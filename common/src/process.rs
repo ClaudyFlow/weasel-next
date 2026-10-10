@@ -229,8 +229,8 @@ mod path_tests {
             Some(base.join("local")),
         )
         .unwrap();
-        assert_eq!(installed.user_data, base.join("roaming/Weasel-Next/Rime"));
-        assert_eq!(installed.logs, base.join("local/Weasel-Next/Logs"));
+        assert_eq!(installed.user_data, base.join("roaming/Rime-Next"));
+        assert_eq!(installed.logs, base.join("local/Rime-Next/Logs"));
         assert!(RuntimePaths::select(base.clone(), Some(base.clone()), None).is_err());
         assert!(RuntimePaths::select(base.clone(), Some(base), Some("relative".into())).is_err());
     }

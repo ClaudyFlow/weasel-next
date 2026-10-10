@@ -251,7 +251,8 @@ mod tests {
 
         assert_ne!(before.folders.get("a"), after.folders.get("a"), "a 分支应变");
         assert_eq!(before.folders.get("b"), after.folders.get("b"), "b 分支不应变");
-        assert_eq!(before.folders.get(""), after.folders.get(""), "根因 a 变化而变化");
+        // 根哈希覆盖所有子项，因此 a 变了根也会变（这正是"自根向下逐层定位"的依据）
+        assert_ne!(before.folders.get(""), after.folders.get(""), "根哈希应因 a 变化而变化");
         assert_eq!(after.diff(&before), vec!["a/one.txt".to_string()]);
         assert_eq!(after.changed_branches(&before), vec!["a".to_string()]);
         let _ = fs::remove_dir_all(&root);
