@@ -35,7 +35,7 @@ model/<名字>.gram                   语言模型    （直接放好，librime 
 - 全量改名：`Weasel-RS` → `Weasel-Next`、`weasel-rs` → `weasel-next`、`weaselrs` → `weaselnext`、`小狼毫RS` → `小狼毫Next`。
 - 代码目录改名：`C:\code\weasel-rs` → `C:\code\Weasel-Next`（TIP 注册表已同步指向新路径）。
 - 用户目录：`%APPDATA%\Rime-Next\`（大写保留）、日志 `%LOCALAPPDATA%\Rime-Next\Logs\`；`lua\` → `plugin\`。
-- `sound` 移出用户目录：声音用**程序文件夹**的 `asset\sound\*.wav`。
+- `sound` 移出用户目录：声音用**程序文件夹**的 `Rime-Next\sound\*.wav`。
 - librime 补丁两个（已归档进 `librime/librime-local-patches.patch`，并在 `C:\code\librime` 提交）：
   1. `level_db.cc` 的 `weasel_userdb_path()`：所有 `*.userdb` 统一进 `<用户目录>/userdb/`；
   2. `resource.cc` 的 `ResourceResolver::ResolvePath`：`*.bin` 编译产物按方案进子目录 `build/<方案>/<方案>.<类型>.bin`（其余资源保持扁平，缺则回退扁平）。
