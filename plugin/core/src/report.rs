@@ -533,7 +533,13 @@ pub fn format_report(input: &ReportInput<'_>) -> String {
             SCRIPT_LINE_PREFIX, SCRIPT_VERSION
         );
         if let Some(quote) = input.quote {
-            let _ = write!(slots[21], "{}\n{}", splitor(), quote);
+            // 名言之前固定加一行箴言（用户要求）。
+            let _ = write!(
+                slots[21],
+                "{}\n知识从我而来，问题到我为止。\n{}",
+                splitor(),
+                quote
+            );
         }
     } else {
         let _ = write!(
