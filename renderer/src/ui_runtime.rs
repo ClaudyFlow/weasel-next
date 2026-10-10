@@ -800,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn first_success_stops_registration_and_failure_falls_back() {
+    fn first_success_stops_registration() {
         let mut attempted = Vec::new();
         let selected = select_first(&candidates(), |candidate| {
             attempted.push(candidate.name());
