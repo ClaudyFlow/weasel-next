@@ -629,7 +629,7 @@ impl Window {
                         let mut divider = color(0xFFFFFF);
                         divider.a = 0.10;
                         brush.SetColor(&divider);
-                        target.FillRectangle(&rect(cell.left, 4.0, cell.left + 1.0, c.layout.height - 4.0), &brush);
+                        target.FillRectangle(&rect_with(rect, cell.left, 4.0, cell.left + 1.0, c.layout.height - 4.0), &brush);   // 用 rect_with ✓ 此处 rect 是局部变量 ✓
                         brush.SetColor(&color(p.text));
                     }                    match cell.hit {
                         Hit::Candidate(i) => {
@@ -654,7 +654,7 @@ impl Window {
                                 &app.graphics.text,
                                 &item.primary_text,
                                 rect_with(rect, cell.left + NUMBER, cell.right - logic::PAD),
-                                color(0xB0B0B0),   // 箭头/表情：暗灰 ✓ 对齐截图（比候选暗一点 ✓）
+                                0xB0B0B0,   // 箭头/表情：暗灰 ✓（text() 要 u32 色值 ✓）
                             );
                             if !item.secondary_text.is_empty() {
                                 text(
@@ -686,7 +686,7 @@ impl Window {
                                 &app.graphics.number,   // 箭头与表情改用正文/数字字体 ✓ 保证有字形 ✓
                                 glyph,
                                 icon_rect,
-                                color(0xB0B0B0),   // 箭头/表情：暗灰 ✓ 对齐截图（比候选暗一点 ✓）
+                                0xB0B0B0,   // 箭头/表情：暗灰 ✓（text() 要 u32 色值 ✓）
                             );
                         }
                     }
