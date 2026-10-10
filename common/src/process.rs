@@ -94,8 +94,7 @@ impl RuntimePaths {
         let user_data = appdata
             .filter(|path| path.is_absolute())
             .ok_or_else(|| io::Error::other("APPDATA must be set to an absolute directory"))?
-            .join("Rime-Next")
-            .join("Rime");
+            .join("Rime-Next");
         let logs = local_appdata
             .filter(|path| path.is_absolute())
             .ok_or_else(|| io::Error::other("LOCALAPPDATA must be set to an absolute directory"))?
@@ -248,7 +247,7 @@ mod path_tests {
             )
             .unwrap()
             .user_data,
-            roaming.join("Rime-Next").join("Rime")
+            roaming.join("Rime-Next")
         );
     }
 
