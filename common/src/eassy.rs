@@ -1,7 +1,8 @@
 //! 细胞词库（`*.eassy.toml`）的读取与归并。
 //!
 //! 约定（与用户目录分类一致）：
-//! - 每份词库放在 `<根>/dict/<名字>/<名字>.eassy.toml`（例如 `dict/default/default.eassy.toml`）。
+//! - `eassy/<名字>/<名字>.eassy.toml`（首选）或 `dict/<名字>/<名字>.eassy.toml`（兼容旧位置）。
+//! - 也接受直接放在根目录的 `*.eassy.toml`。
 //! - 文件格式为 TOML 的 `[words]` 表：键是词，值是频次。
 //!
 //! ```toml
@@ -25,7 +26,7 @@ pub type Vocabulary = BTreeMap<String, u64>;
 
 /// 从一份 `*.eassy.toml` 文本解析出词表。
 ///
-/// 只读取 `[words]` 表，其余表忽略；值必须是正整数，非整数条目跳过（不视为错误）。
+/// 只读取 `[words]` 表，其余表忽略；值必须为正整数，非正整数条目跳过（不视为错误）。
 pub fn parse(text: &str) -> Result<Vocabulary, toml::de::Error> {
     let value: toml::Value = toml::from_str(text)?;
     let mut out = Vocabulary::new();
@@ -47,37 +48,40 @@ pub fn read_file(path: &Path) -> io::Result<Vocabulary> {
     parse(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
 }
 
-/// 扫描 `<root>/dict/*/*.eassy.toml`（以及 `<root>/dict/*.eassy.toml`、`<root>/*.eassy.toml`），
-/// 按词归并求和。文件不存在时返回空词表（不报错）。
-pub fn collect(root: &Path) -> io::Result<Vocabulary> {
-    let mut merged = Vocabulary::new();
-    let dir = root.join("dict");
-    let mut files: Vec<PathBuf> = Vec::new();
-    if dir.is_dir() {
-        for entry in fs::read_dir(&dir)? {
-            let path = entry?.path();
-            if path.is_dir() {
-                for inner in fs::read_dir(&path)? {
-                    let candidate = inner?.path();
-                    if is_eassy(&candidate) {
-                        files.push(candidate);
-                    }
+/// 把 `dir` 本身与 `dir/*/` 下的 `*.eassy.toml` 收进 `files`。
+fn collect_into(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            for inner in fs::read_dir(&path)? {
+                let candidate = inner?.path();
+                if is_eassy(&candidate) {
+                    files.push(candidate);
                 }
-            } else if is_eassy(&path) {
-                files.push(path);
             }
+        } else if is_eassy(&path) {
+            files.push(path);
         }
     }
-    // 兼容：直接放在根目录的 *.eassy.toml
-    if root.is_dir() {
-        for entry in fs::read_dir(root)? {
-            let candidate = entry?.path();
-            if is_eassy(&candidate) {
-                files.push(candidate);
-            }
-        }
+    Ok(())
+}
+
+/// 扫描一份根下的全部 `*.eassy.toml` 并按词归并求和。
+///
+/// 扫描位置：`<root>/eassy/*/`、`<root>/eassy/`、`<root>/dict/*/`、`<root>/dict/`、`<root>/`。
+/// 目录不存在时跳过（不报错）。
+pub fn collect(root: &Path) -> io::Result<Vocabulary> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for dir in [root.join("eassy"), root.join("dict"), root.to_path_buf()] {
+        collect_into(&dir, &mut files)?;
     }
     files.sort();
+    files.dedup();
+
+    let mut merged = Vocabulary::new();
     for file in files {
         let words = read_file(&file)?;
         for (word, freq) in words {
@@ -113,7 +117,7 @@ pub fn write_essay_txt(path: &Path, vocabulary: &Vocabulary) -> io::Result<usize
     Ok(entries.len())
 }
 
-/// 一步到位：从 `<source_root>` 收集并归并，写出 `essay.txt` 到 `<target_root>/essay.txt`。
+/// 一步到位：从 `source_root` 收集并归并，写出 `essay.txt` 到 `target_root/essay.txt`。
 ///
 /// 词表为空时不写文件（避免把已有的 txt 清空）。
 pub fn deploy(source_root: &Path, target_root: &Path) -> io::Result<Option<(PathBuf, usize)>> {
@@ -130,6 +134,12 @@ pub fn deploy(source_root: &Path, target_root: &Path) -> io::Result<Option<(Path
 mod tests {
     use super::*;
 
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("weasel-eassy-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        dir
+    }
+
     #[test]
     fn merges_same_word_by_summing_frequencies() {
         let a = parse("[words]\n\"好\" = 3\n\"你好\" = 5\n").unwrap();
@@ -145,19 +155,18 @@ mod tests {
     }
 
     #[test]
-    fn ignores_other_tables_and_non_integer_values() {
+    fn ignores_other_tables_and_non_positive_values() {
         let v = parse("[meta]\nname = \"x\"\n\n[words]\n\"甲\" = 2\n\"乙\" = \"x\"\n\"丙\" = -1\n").unwrap();
         assert_eq!(v.len(), 1);
         assert_eq!(v.get("甲"), Some(&2));
     }
 
     #[test]
-    fn writes_tab_separated_sorted_by_frequency() {
-        let dir = std::env::temp_dir().join(format!("weasel-eassy-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("dict/default")).unwrap();
+    fn writes_tab_separated_sorted_by_frequency_desc() {
+        let dir = temp_dir("write");
+        fs::create_dir_all(dir.join("eassy/default")).unwrap();
         fs::write(
-            dir.join("dict/default/default.eassy.toml"),
+            dir.join("eassy/default/default.eassy.toml"),
             "[words]\n\"少\" = 1\n\"多\" = 9\n",
         )
         .unwrap();
@@ -168,11 +177,24 @@ mod tests {
         )
         .unwrap();
 
-        let out = dir.join("essay.txt");
-        let (_, count) = deploy(&dir, &dir).unwrap().expect("should produce essay.txt");
+        let (_, count) = deploy(&dir, &dir).unwrap().expect("应生成 essay.txt");
         assert_eq!(count, 2);
-        let text = fs::read_to_string(&out).unwrap();
+        let text = fs::read_to_string(dir.join("essay.txt")).unwrap();
         assert_eq!(text, "多\t10\n少\t1\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 两种布局（eassy/ 与 dict/）都要被扫到。
+    #[test]
+    fn collects_from_both_eassy_and_dict_dirs() {
+        let dir = temp_dir("both");
+        fs::create_dir_all(dir.join("eassy/one")).unwrap();
+        fs::create_dir_all(dir.join("dict/two")).unwrap();
+        fs::write(dir.join("eassy/one/one.eassy.toml"), "[words]\n\"甲\" = 1\n").unwrap();
+        fs::write(dir.join("dict/two/two.eassy.toml"), "[words]\n\"乙\" = 2\n").unwrap();
+        let v = collect(&dir).unwrap();
+        assert_eq!(v.get("甲"), Some(&1));
+        assert_eq!(v.get("乙"), Some(&2));
         let _ = fs::remove_dir_all(&dir);
     }
 }

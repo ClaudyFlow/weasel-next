@@ -1,4 +1,6 @@
-/// 把 `<shared>/dict/**/*.eassy.toml` 与 `<user>/dict/**/*.eassy.toml` 归并成
+//! 管理 librime 动态库、引擎实例与输入会话，并将宿主事件和引擎状态相互转换。
+
+/// 把 `<shared>/eassy/**/*.eassy.toml` 与 `<user>/eassy/**/*.eassy.toml` 归并成
 /// `<user>/essay.txt`（librime 的 preset vocabulary 只认这个 txt）。
 ///
 /// 仓库里只放 `.eassy.toml`；txt 是部署产物，因此在每次初始化/部署前重新生成。
@@ -12,21 +14,20 @@ fn generate_essay_txt(shared_dir: &std::path::Path, user_dir: &std::path::Path) 
                 }
             }
             Err(error) => {
-                log::warn!("eassy: 读取 {} 下的词库失败: {error}", root.display());
+                tracing::warn!("eassy: 读取 {} 下的词库失败: {error}", root.display());
             }
         }
     }
     if merged.is_empty() {
-        log::warn!("eassy: 没有找到任何 *.eassy.toml，essay.txt 未生成");
+        tracing::warn!("eassy: 没有找到任何 *.eassy.toml，essay.txt 未生成");
         return;
     }
     let target = user_dir.join("essay.txt");
     match weasel_common::eassy::write_essay_txt(&target, &merged) {
-        Ok(count) => log::info!("eassy: 已由 TOML 归并生成 {}（{count} 条）", target.display()),
-        Err(error) => log::warn!("eassy: 写出 {} 失败: {error}", target.display()),
+        Ok(count) => tracing::info!("eassy: 已由 TOML 归并生成 {}（{count} 条）", target.display()),
+        Err(error) => tracing::warn!("eassy: 写出 {} 失败: {error}", target.display()),
     }
 }
-//! 管理 librime 动态库、引擎实例与输入会话，并将宿主事件和引擎状态相互转换。
 
 mod api;
 mod loader;
