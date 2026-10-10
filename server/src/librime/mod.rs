@@ -133,8 +133,23 @@ impl Librime {
     /// DLL、API 表、路径或必需入口不可用时返回错误。成功后返回的引擎由其会话
     /// 共同持有；最后一个持有者释放时调用 `finalize` 并卸载 DLL。
     pub fn load(base_dir: &Path, user_data_dir: &Path) -> Result<Self, String> {
-        // 由 dict/**/*.eassy.toml 归并生成 essay.txt（仓库只放 TOML，txt 是部署产物）
+        // 由 eassy/**/*.eassy.toml 归并生成 essay.txt（仓库只放 TOML，txt 是部署产物）
         generate_essay_txt(&base_dir.join("Rime-Next"), user_data_dir);
+        // 布局规范化：把根目录里扁平的 *.schema.yaml / *.dict.yaml / *.eassy.toml / *.gram
+        // 搬进嵌套分类（schema\<方案>\、eassy\<名字>\、model\），并清掉搬走后的扁平残留。
+        // 两处都做：程序文件夹（出厂内容）与用户目录（用户自加内容）。
+        for root in [base_dir.join("Rime-Next"), user_data_dir.to_path_buf()] {
+            match weasel_common::rime_layout::normalize(&root) {
+                Ok(moves) if !moves.is_empty() => {
+                    for m in &moves {
+                        let _ = &m.from;
+                        tracing::info!("rime_layout: 归类 {} → {}", m.from.display(), m.to.display());
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!("rime_layout: 规范化 {} 失败: {error}", root.display()),
+            }
+        }
         let library = RimeLibrary::load(&base_dir.join("rime.dll"))?;
         let api = unsafe { RimeLibraryApi::load(library.api().as_ptr(), false)? };
         let app_name = CString::new("rime.weasel-next").expect("static app name has no NUL");
@@ -168,8 +183,23 @@ impl Librime {
     /// 成功完成部署后先调用 `finalize` 再返回；部署函数返回非真值、必需入口
     /// 缺失或加载/路径配置失败时返回错误。
     pub fn deploy(base_dir: &Path, user_data_dir: &Path) -> Result<(), String> {
-        // 由 dict/**/*.eassy.toml 归并生成 essay.txt（仓库只放 TOML，txt 是部署产物）
+        // 由 eassy/**/*.eassy.toml 归并生成 essay.txt（仓库只放 TOML，txt 是部署产物）
         generate_essay_txt(&base_dir.join("Rime-Next"), user_data_dir);
+        // 布局规范化：把根目录里扁平的 *.schema.yaml / *.dict.yaml / *.eassy.toml / *.gram
+        // 搬进嵌套分类（schema\<方案>\、eassy\<名字>\、model\），并清掉搬走后的扁平残留。
+        // 两处都做：程序文件夹（出厂内容）与用户目录（用户自加内容）。
+        for root in [base_dir.join("Rime-Next"), user_data_dir.to_path_buf()] {
+            match weasel_common::rime_layout::normalize(&root) {
+                Ok(moves) if !moves.is_empty() => {
+                    for m in &moves {
+                        let _ = &m.from;
+                        tracing::info!("rime_layout: 归类 {} → {}", m.from.display(), m.to.display());
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!("rime_layout: 规范化 {} 失败: {error}", root.display()),
+            }
+        }
         let library = RimeLibrary::load(&base_dir.join("rime.dll"))?;
         let api = unsafe { RimeLibraryApi::load(library.api().as_ptr(), true)? };
         let app_name = CString::new("rime.weasel-next").expect("static app name has no NUL");
