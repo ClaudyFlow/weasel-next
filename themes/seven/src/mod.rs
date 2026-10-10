@@ -582,8 +582,8 @@ impl Window {
                     highlight.a = 0.34;   // 左右竖边更明显（原来 0.22 太弱 ✗）
                     brush.SetColor(&highlight);
                     // ★ 左右两侧对称的高光蓝边（Aero 的玻璃侧壁反光 ✓）
-                    let mut edge_blue = color(p.active_number);   // ★ 用户要求: 侧边用**深蓝色**（#2C4A66 ✓）
-                    edge_blue.a = 0.40;
+                    let mut edge_blue = color(p.active);   // 上上版颜色: 淡蓝（#DCEFFC ✓）
+                    edge_blue.a = 0.30;
                     brush.SetColor(&edge_blue);
                     target.FillRectangle(&rect(0.0, radius, 2.0, height - radius), &brush);
                     target.FillRectangle(&rect(width - 2.0, radius, width, height - radius), &brush);
