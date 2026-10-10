@@ -525,6 +525,8 @@ impl Window {
                 if width > 0.0 && height > 0.0 {
                     // 圆角半径 = 高度的四分之一（用户指定），并保证不超出半宽。
                     let radius = (height / 4.0).min(width / 2.0);
+                    // 圆角要"切干净"：显式用逐图元抗锯齿，边缘平滑无锯齿。
+                    target.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                     // 面板本体：圆角矩形 + 40% 淡罩。
                     // 原来 15% 在深色背景上几乎看不出轮廓 → 圆角"像没了" ✗；
                     // 透明度低一点（40%）才既有玻璃感、又能看清圆角形状。
@@ -539,18 +541,18 @@ impl Window {
                         },
                         &brush,
                     );
-                    // 圆角描边：沿圆角勾一道亮边 —— 轮廓明确，不再依赖填充对比度。
+                    // 圆角描边：加厚到 2px、更亮 —— 轮廓清楚（内缩半个描边宽，避免被裁）。
                     let mut outline = color(0xffffff);
-                    outline.a = 0.35;
+                    outline.a = 0.50;
                     brush.SetColor(&outline);
                     target.DrawRoundedRectangle(
                         &D2D1_ROUNDED_RECT {
-                            rect: rect(0.5, 0.5, width - 0.5, height - 0.5),
+                            rect: rect(1.0, 1.0, width - 1.0, height - 1.0),
                             radiusX: radius,
                             radiusY: radius,
                         },
                         &brush,
-                        1.0,
+                        2.0,
                         None,
                     );
                     // 镜面高光：顶边 2px 亮线（沿直线段内缩 radius，避免戳出圆角）
