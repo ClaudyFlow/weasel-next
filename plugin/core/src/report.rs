@@ -1,4 +1,4 @@
-﻿//! 报表排版（规范 §6）。
+//! 报表排版（规范 §6）。
 //!
 //! 逐字符对齐 Lua 版：槽位模型 1..21、短款/长款差异、`progressBar` 阈值阶梯、居中分隔线、
 //! 最终拼装（折叠连续换行 → 去首尾换行 → trim）。已登记的**有意偏离**：
@@ -359,10 +359,29 @@ pub fn format_report(input: &ReportInput<'_>) -> String {
     } else {
         0.0
     };
+    // 键准 = 有效按键 / 按键（有效按键即不含空格的码长合计）。
+    // 由它可以直接推出「理论」值：理论击键/理论码长 = 实际值 × 键准
+    // （因为 击键 = 按键/用时、码长 = 按键/字数，把“按键”换成“有效按键”即可）。
+    let accuracy = if input.bucket.key_touch_cnt > 0 {
+        input.bucket.total_code_len_without_space as f64 / input.bucket.key_touch_cnt as f64
+    } else {
+        1.0
+    };
+    let avg_touch = stats.avg_spd * stats.avg_code_len / 60.0;
     let _ = write!(
         slots[6],
-        "\n误触按键 {} 次，误触率 {:.0}%",
-        err_count, err_ratio
+        "\n误触按键 {} 次，误触率 {:.0}%，键准 {:.0}%",
+        err_count,
+        err_ratio,
+        accuracy * 100.0
+    );
+    let _ = write!(
+        slots[6],
+        "\n实际击键 {:.1}，理论击键 {:.1}，实际码长 {:.1}，理论码长 {:.1}",
+        avg_touch,
+        avg_touch * accuracy,
+        stats.avg_code_len,
+        stats.avg_code_len * accuracy
     );
     if long && !input.avg_code_len_desc.is_empty() {
         slots[6].push('\n');
