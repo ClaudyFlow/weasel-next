@@ -341,17 +341,31 @@ pub fn format_report(input: &ReportInput<'_>) -> String {
         "上屏 {} 次，输入 {} 字",
         input.bucket.count, input.bucket.length
     );
+    // 键准 = 有效按键 / 按键（有效按键即不含空格的码长合计）。
+    // 理论值 = 实际值 × 键准：因为 击键 = 按键/用时、码长 = 按键/字数，
+    // 把“按键”换成“有效按键”就得到理论击键 / 理论码长。
+    let accuracy = if input.bucket.key_touch_cnt > 0 {
+        input.bucket.total_code_len_without_space as f64 / input.bucket.key_touch_cnt as f64
+    } else {
+        1.0
+    };
     let _ = write!(
         slots[5],
-        "极速 {:.1}，击键{:.1}，码长{:.1}",
-        stats.fastest.spd, stats.fastest.key_touch_spd, stats.fastest.avg_code_len
+        "极速 {:.1}，击键{:.1}（理论{:.1}），码长{:.1}（理论{:.1}）",
+        stats.fastest.spd,
+        stats.fastest.key_touch_spd,
+        stats.fastest.key_touch_spd * accuracy,
+        stats.fastest.avg_code_len,
+        stats.fastest.avg_code_len * accuracy
     );
     let _ = write!(
         slots[6],
-        "均速 {:.1}，击键{:.1}，码长{:.1}",
+        "均速 {:.1}，击键{:.1}（理论{:.1}），码长{:.1}（理论{:.1}）",
         stats.avg_spd,
         stats.avg_spd * stats.avg_code_len / 60.0,
-        stats.avg_code_len
+        stats.avg_spd * stats.avg_code_len / 60.0 * accuracy,
+        stats.avg_code_len,
+        stats.avg_code_len * accuracy
     );
     let err_count = (input.bucket.key_touch_cnt - input.bucket.total_code_len_without_space).max(0);
     let err_ratio = if input.bucket.key_touch_cnt > 0 {
