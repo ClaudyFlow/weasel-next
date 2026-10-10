@@ -1,70 +1,76 @@
 # Weasel-Next 主题参数（TOML 约定 v1）
 #
 # 位置约定：theme/<主题名>/<主题名>.theme.toml
-#   · 文件名 = 文件夹名 = 主题名；DLL 为 themes/weasel_theme_<主题名>.dll
-#   · 本文件是**参数快照**：把当前实现的参数保存下来，供主题引擎按参数绘制
-#   · 颜色统一写 0xRRGGBB（不透明基准色）；透明度写在 [glass] / [shadow] 里
+# 本文件 = "ten"：**Windows 10 输入法候选条**观感（已按此实现 ✓）
 #
-# 本文件 = 当前正在使用的 "ten" 主题（自绘 Direct2D 玻璃，非 Win11/WinUI）
+# Win10 的特征（与 Win7 Aero / Win11 亚克力的区别）：
+#   1. **不透明**：浅灰实底（#F2F2F2），没有背景模糊、没有玻璃
+#   2. 1px 细灰描边（#B8B8B8），**小圆角（4px）**、**几乎无投影**
+#   3. 选中项 = **纯色中蓝块**（#CFE8F8，无渐变、无高光）
+#   4. 紧凑：行高矮、留白小，文字纯黑
+#   5. 不做亚克力的噪点、也不做 Aero 的顶部高光
+#
+# 想要玻璃：把 [glass] blur/tint_opacity 打开、highlight 调大（→ Aero，见 theme/seven）
+# 想要亚克力：见 theme/eleven（模糊 + 半透明 + 细噪点）
 
 schema_version = 1
 name = "ten"
-title = "十 · 自绘 D2D 玻璃"
+title = "十 · Windows 10 扁平"
 style = "d2d"
-variant = "auto"            # auto | light | dark（auto = 跟随系统深浅色）
+variant = "auto"
 
 [geometry]
-# 与 themes/ten/src/logic.rs 的常量一一对应
+# 与 themes/ten/src/logic.rs 的常量对应
 scale = 0.6764706           # SCALE = 46.0 / 68.0
-height = 46.0               # HEIGHT，行高（DIP）
-indicator = 36.0            # INDICATOR_SIZE，模式指示器尺寸
-number_size = 27.058823     # NUMBER = 40.0 * SCALE，候选序号字号
-pad = 12.176470             # PAD = 18.0 * SCALE，左右内边距
-corner_radius = 8.0         # 圆角半径（DIP）
-item_gap = 0.0              # 候选间距
+height = 46.0               # HEIGHT（行高，DIP）
+indicator = 36.0            # INDICATOR_SIZE
+number_size = 27.058823     # NUMBER = 40.0 * SCALE
+pad = 12.176470             # PAD = 18.0 * SCALE
+corner_radius = 4.0         # ★ Win10：小圆角（Aero 6 / Win11 8）
+item_gap = 0.0
 
 [light]
-background = 0xF8F8F8
-border = 0xD9D9D9
-active = 0xA6D8FF
-hover = 0xDCDCDC
-text = 0x111111
-secondary = 0x555555
-active_number = 0x3E4A52
-disabled = 0xA5A5A5
+background = 0xF2F2F2       # ★ Win10 候选条底：不透明浅灰
+border = 0xB8B8B8           # ★ 1px 细灰描边
+active = 0xCFE8F8           # ★ 选中：纯色中蓝（无渐变）
+hover = 0xE8E8E8
+text = 0x000000             # Win10 正文纯黑
+secondary = 0x5A5A5A
+active_number = 0x1F4E79    # 选中序号：深蓝
+disabled = 0xA0A0A0
 
 [dark]
-background = 0x202020
-border = 0x484848
-active = 0x164E70
-hover = 0x383838
-text = 0xF5F5F5
-secondary = 0xBEBEBE
-active_number = 0xD6EDFF
-disabled = 0x777777
+background = 0x2B2B2B
+border = 0x4A4A4A
+active = 0x0F548C
+hover = 0x3A3A3A
+text = 0xFFFFFF
+secondary = 0xC5C5C5
+active_number = 0xDCEBFA
+disabled = 0x8A8A8A
 
 [glass]
-# 现在 ten 的做法：DwmEnableBlurBehindWindow + 半透明底 + 高光描边
-enabled = true
-blur = true                 # 背景模糊（DWM blur behind）
-tint = 0xFFFFFF             # 玻璃着色
-tint_opacity = 0.55         # 玻璃底不透明度（0..1）
-highlight = 0.55            # 顶部高光强度（0..1）
-highlight_height = 0.5      # 高光覆盖比例（0..1，从顶部往下）
-refraction = 0.0            # 折射强度（px）—— ten 未启用（0）
-chromatic = 0.0             # 色散强度（px）—— ten 未启用（0）
-thickness = 0.0             # 玻璃厚度（影响折射位移换算）—— ten 未启用（0）
-border_light = 0xFFFFFF     # 内高光描边
-border_dark = 0x000000      # 外描边
+# ★ Win10 候选条**不是玻璃**：全关（这是与 seven / eleven 最本质的差别）
+enabled = false
+blur = false
+tint = 0xF2F2F2
+tint_opacity = 1.0
+highlight = 0.0
+highlight_height = 0.0
+refraction = 0.0
+chromatic = 0.0
+thickness = 0.0
+border_light = 0xFFFFFF
+border_dark = 0xB8B8B8
 
 [shadow]
-enabled = true
+enabled = false             # Win10 候选条基本无投影（最多 1px 硬边）
 color = 0x000000
-opacity = 0.28
-radius = 12.0
-offset_y = 4.0
+opacity = 0.0
+radius = 0.0
+offset_y = 0.0
 
 [layout]
-direction = "horizontal"    # 候选排列方向
-number_style = "plain"      # 序号样式：plain | dotted | none
-comment_position = "after"  # 注释（如拼音）位置：after | above | none
+direction = "horizontal"
+number_style = "plain"
+comment_position = "after"

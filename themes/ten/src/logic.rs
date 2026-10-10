@@ -215,28 +215,31 @@ pub struct Palette {
 }
 impl Palette {
     /// 根据系统外观选择一组完整色板。
+    ///
+    /// 色板对齐 **Windows 10 默认输入法候选条**：不透明浅灰底 + 细灰描边 + 纯蓝选中块，
+    /// 不用高光、不用冷暖色偏（那是 Win7 Aero / Win11 亚克力的事）。
     pub fn new(dark: bool) -> Self {
         if dark {
             Self {
-                background: 0x202020,
-                border: 0x484848,
-                active: 0x164E70,
-                hover: 0x383838,
-                text: 0xF5F5F5,
-                secondary: 0xBEBEBE,
-                active_number: 0xD6EDFF,
-                disabled: 0x777777,
+                background: 0x2B2B2B,
+                border: 0x4A4A4A,
+                active: 0x0F548C,
+                hover: 0x3A3A3A,
+                text: 0xFFFFFF,
+                secondary: 0xC5C5C5,
+                active_number: 0xDCEBFA,
+                disabled: 0x8A8A8A,
             }
         } else {
             Self {
-                background: 0xF8F8F8,
-                border: 0xD9D9D9,
-                active: 0xA6D8FF,
-                hover: 0xDCDCDC,
-                text: 0x111111,
-                secondary: 0x555555,
-                active_number: 0x3E4A52,
-                disabled: 0xA5A5A5,
+                background: 0xF2F2F2,
+                border: 0xB8B8B8,
+                active: 0xCFE8F8,
+                hover: 0xE8E8E8,
+                text: 0x000000,
+                secondary: 0x5A5A5A,
+                active_number: 0x1F4E79,
+                disabled: 0xA0A0A0,
             }
         }
     }
