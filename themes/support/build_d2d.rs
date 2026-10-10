@@ -1,4 +1,4 @@
-/// Shared native projection for D2D candidate themes.
+﻿/// Shared native projection for D2D candidate themes.
 pub fn generate() {
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     // The SDK interop interface is absent from windows-default 0.100 metadata.
@@ -119,7 +119,7 @@ pub fn generate() {
             "Windows.Win32.D2D1_ANTIALIAS_MODE",
             "Windows.Win32.ID2D1RenderTarget::{SetTextAntialiasMode,SetAntialiasMode}",
             "Windows.Win32.D2D1_TEXT_ANTIALIAS_MODE",
-            "Windows.Win32.ID2D1RenderTarget::{SetDpi,CreateSolidColorBrush,BeginDraw,EndDraw,Clear,FillRectangle,FillRoundedRectangle,DrawText}",
+            "Windows.Win32.ID2D1RenderTarget::{SetDpi,CreateSolidColorBrush,BeginDraw,EndDraw,Clear,FillRectangle,FillRoundedRectangle,DrawRoundedRectangle,DrawText}",
             "Windows.Win32.D2D1_FACTORY_TYPE", "Windows.Win32.D2D1_PRESENT_OPTIONS",
             "Windows.Win32.D2D1_DRAW_TEXT_OPTIONS", "Windows.Win32.D2D1_ALPHA_MODE",
             "Windows.Win32.D2DERR_RECREATE_TARGET",
