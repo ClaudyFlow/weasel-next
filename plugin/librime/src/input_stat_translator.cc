@@ -1,4 +1,4 @@
-//
+﻿//
 // input_stat_translator.cc — 见头文件说明。
 //
 
@@ -284,7 +284,7 @@ bool ReadSnapshot(const std::string& db_path, std::string* text) {
   if (db_path.empty()) {
     return false;
   }
-  rime::LevelDb db(db_path, "input_stat", "userdb");
+  rime::LevelDb db(rime::path(db_path), "input_stat", "userdb");
   if (!db.Open()) {
     return false;
   }
@@ -295,7 +295,7 @@ bool WriteSnapshot(const std::string& db_path, const std::string& text) {
   if (db_path.empty()) {
     return false;
   }
-  rime::LevelDb db(db_path, "input_stat", "userdb");
+  rime::LevelDb db(rime::path(db_path), "input_stat", "userdb");
   if (!db.Open()) {
     return false;
   }
