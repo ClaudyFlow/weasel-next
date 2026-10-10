@@ -1,6 +1,9 @@
 ﻿# 检查全仓文本文件是否为 UTF-8 无 BOM（有 BOM 则失败）
-[CmdletBinding()] param([string]$Root = (Split-Path -Parent $PSScriptRoot))
-if (-not $Root) { $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path }
+[CmdletBinding()] param([string]$Root = '')
+Set-StrictMode -Version Latest
+if ([string]::IsNullOrEmpty($Root)) {
+  if ($PSScriptRoot) { $Root = Split-Path -Parent $PSScriptRoot } else { $Root = (Get-Location).Path }
+}
 $skip = '\\target\\|node_modules|\\.git\\|\\artifact\\|\\vendor\\'
 $bad = @()
 Get-ChildItem $Root -Recurse -File -ErrorAction SilentlyContinue |
@@ -11,5 +14,9 @@ Get-ChildItem $Root -Recurse -File -ErrorAction SilentlyContinue |
     if ($n -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { $bad += "$($_.FullName) : UTF-8 BOM" }
     elseif ($n -ge 2 -and (($b[0] -eq 0xFF -and $b[1] -eq 0xFE) -or ($b[0] -eq 0xFE -and $b[1] -eq 0xFF))) { $bad += "$($_.FullName) : UTF-16/32 BOM" }
   }
-if ($bad.Count -gt 0) { Write-Host "编码不合规（必须是 UTF-8 无 BOM）:" -ForegroundColor Red; $bad | ForEach-Object { Write-Host "  $_" }; exit 1 }
+if ($bad.Count -gt 0) {
+  Write-Host "编码不合规（必须 UTF-8 无 BOM）:" -ForegroundColor Red
+  $bad | ForEach-Object { Write-Host "  $_" }
+  exit 1
+}
 Write-Host "编码检查通过：全部 UTF-8 无 BOM" -ForegroundColor Green
