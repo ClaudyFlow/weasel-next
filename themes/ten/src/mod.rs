@@ -515,29 +515,45 @@ impl Window {
             // 玻璃：把背景清成完全透明（A=0）。窗口上已开 DwmEnableBlurBehindWindow，
             // 配合 PREMULTIPLIED 像素格式，DWM 才能把背后的模糊合成进来。
             // 想让文字在任何背景上都看得清时，把 a 调到 0.4~0.5 即可（半透明底色）。
+            // 圆角玻璃：清屏保持**全透明** → 圆角之外的像素没人画，自然透出背后内容。
             let mut glass = color(p.background);
-            glass.a = 0.15;
+            glass.a = 0.0;
             target.Clear(Some(&glass));
-            // 液态玻璃的“边”：面板几乎全透，质感全靠边缘 ——
-            // 顶部一道镜面高光（对应 HIG lightIntensity 0.85）+ 底部一道暗边（厚度感 / ambient）。
-            // 只用本文件已有的 FillRectangle + SetColor，不引入新 API。
             if let Some(c) = &app.content {
                 let width = c.layout.width;
                 let height = c.layout.height;
                 if width > 0.0 && height > 0.0 {
-                    // 镜面高光（加强版）：顶部 2px 亮线 + 左右各 1px 淡边 —— 透底上明显可见。
+                    let radius = 8.0_f32.min(height / 2.0).min(width / 2.0);
+                    // 面板本体：圆角矩形 + 15% 淡罩
+                    let mut fill = color(p.background);
+                    fill.a = 0.15;
+                    brush.SetColor(&fill);
+                    target.FillRoundedRectangle(
+                        &D2D1_ROUNDED_RECT {
+                            rect: rect(0.0, 0.0, width, height),
+                            radiusX: radius,
+                            radiusY: radius,
+                        },
+                        &brush,
+                    );
+                    // 镜面高光：顶边 2px 亮线（沿直线段内缩 radius，避免戳出圆角）
                     let mut highlight = color(0xffffff);
                     highlight.a = 0.65;
                     brush.SetColor(&highlight);
-                    target.FillRectangle(&rect(0.0, 0.0, width, 2.0), &brush);
+                    target.FillRectangle(&rect(radius, 0.0, width - radius, 2.0), &brush);
+                    // 左右淡边（同样内缩 radius，止于上下圆角之间）
                     highlight.a = 0.22;
                     brush.SetColor(&highlight);
-                    target.FillRectangle(&rect(0.0, 0.0, 1.0, height), &brush);
-                    target.FillRectangle(&rect(width - 1.0, 0.0, width, height), &brush);
+                    target.FillRectangle(&rect(0.0, radius, 1.0, height - radius), &brush);
+                    target.FillRectangle(
+                        &rect(width - 1.0, radius, width, height - radius),
+                        &brush,
+                    );
+                    // 底部暗边（厚度感）
                     let mut shade = color(0x000000);
                     shade.a = 0.30;
                     brush.SetColor(&shade);
-                    target.FillRectangle(&rect(0.0, height - 1.0, width, height), &brush);
+                    target.FillRectangle(&rect(radius, height - 1.0, width - radius, height), &brush);
                     brush.SetColor(&color(p.text));
                 }
             }
