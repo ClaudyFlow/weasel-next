@@ -40,7 +40,6 @@ static SEVEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::ne
         _ => "ten",
     };
     std::iter::once(preferred)
-        .chain((preferred != "ten").then_some("ten"))
         .filter_map(|name| {
             let slot = match name {
                 "eleven" => &ELEVEN,
@@ -822,7 +821,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(selected, "ten");
-        assert_eq!(attempted, ["eleven", "ten"]);
+        assert_eq!(attempted, ["eleven"]);
     }
 
     #[test]
