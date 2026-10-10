@@ -207,7 +207,7 @@ void InputStatsTranslator::LoadQuotes() {
     return;
   }
   std::filesystem::path path(dir);
-  path /= "lua";
+  path /= "plugin";
   path /= "quote.txt";
   std::ifstream file(path, std::ios::binary);
   if (!file) {
@@ -257,7 +257,7 @@ std::string InputStatsTranslator::StatsFilePath() const {
     return std::string();
   }
   std::filesystem::path path(dir);
-  path /= "lua";
+  path /= "plugin";
   path /= std::string("input_stat_") + schema_id_ + ".lua";
   return path.string();
 }

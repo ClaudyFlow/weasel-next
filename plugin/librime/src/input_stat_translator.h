@@ -45,9 +45,9 @@ class InputStatsTranslator : public rime::Translator {
   void Save();
   /// 把方案名/发行版/设备类型/配置项推给核心（报表渲染需要）。
   void SetReportContext();
-  /// 读取 `<user_data>/lua/quote.txt` 并把非空行注入核心（名言尾部用）。
+  /// 读取 `<user_data>/plugin/quote.txt` 并把非空行注入核心（名言尾部用）。
   void LoadQuotes();
-  /// 返回统计文件路径（`<user_data>/lua/input_stat_<schema>.lua`）。
+  /// 返回统计文件路径（`<user_data>/plugin/input_stat_<schema>.lua`）。
   std::string StatsFilePath() const;
   /// 当前本地时区偏移（秒），取当前瞬间的偏移。
   static int LocalOffsetSeconds(int64_t now_unix);
