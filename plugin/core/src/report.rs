@@ -1,10 +1,10 @@
-//! 报表排版（规范 §6）。
+﻿//! 报表排版（规范 §6）。
 //!
 //! 逐字符对齐 Lua 版：槽位模型 1..21、短款/长款差异、`progressBar` 阈值阶梯、居中分隔线、
 //! 最终拼装（折叠连续换行 → 去首尾换行 → trim）。已登记的**有意偏离**：
-//! * 每次渲染从空槽位表开始（Lua 的 `strTable` 跨命令残留会污染输出，规范 §6.9 建议如此）；
-//! * 码长并列时按“次数降序 + 码长升序”确定性排序（Lua `table.sort` 不稳定，规范 §6.5）；
-//! * 生字词的 `verStr` 固定为脚本行（Lua 依赖 `strTable[#strTable-1]` 隐藏状态，规范 §6.4）。
+//! * 每次渲染从空槽位表开始（Lua 的 `strTable` 跨命令残留会污染输出 规范 §6.9 建议如此）；
+//! * 码长并列时按“次数降序 + 码长升序”确定性排序（Lua `table.sort` 不稳定 规范 §6.5）；
+//! * 生字词的 `verStr` 固定为脚本行（Lua 依赖 `strTable[#strTable-1]` 隐藏状态 规范 §6.4）。
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -26,7 +26,7 @@ pub fn splitor() -> String {
     std::iter::repeat_n(SPLITOR_CHAR, SPLITOR_LEN).collect()
 }
 
-/// 13 个 `─` 的分隔线，前置一个 emoji（长款槽 3/7/11）。
+/// 13 个 `─` 的分隔线 前置一个 emoji（长款槽 3/7/11）。
 pub fn emoji_splitor(emoji: &str) -> String {
     let mut text = String::from(emoji);
     text.extend(std::iter::repeat_n(SPLITOR_CHAR, SPLITOR_LEN - 1));
@@ -35,7 +35,7 @@ pub fn emoji_splitor(emoji: &str) -> String {
 
 /// 把文字居中嵌入 14 列分隔线（Lua `embedTextIntoSplitor`）。
 ///
-/// 仅当 `14 > 码点数 + 1` 时补线，否则原样返回。
+/// 仅当 `14 > 码点数 + 1` 时补线 否则原样返回。
 pub fn embed_text_into_splitor(text: &str) -> String {
     let len = text.chars().count();
     if SPLITOR_LEN <= len + 1 {
@@ -49,7 +49,7 @@ pub fn embed_text_into_splitor(text: &str) -> String {
     out
 }
 
-/// 进度条皮肤：实心/空心字符对（Lua `skinList`，23 项，顺序必须一致）。
+/// 进度条皮肤：实心/空心字符对（Lua `skinList` 23 项 顺序必须一致）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Skin {
     pub field: char,
@@ -94,7 +94,7 @@ impl Skin {
     }
 }
 
-/// 按百分比取进度条（规范 §8 的阈值阶梯，**从高到低、`>=` 判定**）。
+/// 按百分比取进度条（规范 §8 的阈值阶梯 **从高到低、`>=` 判定**）。
 pub fn progress_bar(percent: f64, skin: Skin) -> String {
     let filled = if percent >= 95.0 {
         10
@@ -171,7 +171,7 @@ pub enum Style {
 pub enum DeviceType {
     Phone,
     Desktop,
-    /// 空串 = 识别失败，报表命令会拒绝执行。
+    /// 空串 = 识别失败 报表命令会拒绝执行。
     Unknown,
 }
 
@@ -338,11 +338,11 @@ pub fn format_report(input: &ReportInput<'_>) -> String {
     let _ = write!(slots[2], "{}{}", input.timestamp, input.timezone);
     let _ = write!(
         slots[4],
-        "上屏 {} 次，输入 {} 字",
+        "上屏 {} 次 输入 {} 字",
         input.bucket.count, input.bucket.length
     );
     // 键准 = 有效按键 / 按键（有效按键即不含空格的码长合计）。
-    // 理论值 = 实际值 × 键准：因为 击键 = 按键/用时、码长 = 按键/字数，
+    // 理论值 = 实际值 × 键准：因为 击键 = 按键/用时、码长 = 按键/字数 
     // 把“按键”换成“有效按键”就得到理论击键 / 理论码长。
     let accuracy = if input.bucket.key_touch_cnt > 0 {
         input.bucket.total_code_len_without_space as f64 / input.bucket.key_touch_cnt as f64
@@ -351,14 +351,14 @@ pub fn format_report(input: &ReportInput<'_>) -> String {
     };
     let _ = write!(
         slots[5],
-        "实际极速 {:.1}，击键{:.1}，码长{:.1}",
+        "实际极速 {:.1} 击键 {:.1} 码长 {:.1}",
         stats.fastest.spd,
         stats.fastest.key_touch_spd,
         stats.fastest.avg_code_len
     );
     let _ = write!(
         slots[6],
-        "实际均速 {:.1}，击键{:.1}，码长{:.1}",
+        "实际均速 {:.1} 击键 {:.1} 码长 {:.1}",
         stats.avg_spd,
         stats.avg_spd * stats.avg_code_len / 60.0,
         stats.avg_code_len
@@ -366,14 +366,14 @@ pub fn format_report(input: &ReportInput<'_>) -> String {
     // 理论值 = 实际值 × 键准（有效按键 / 按键）。
     let _ = write!(
         slots[6],
-        "\n理论极速 {:.1}，击键{:.1}，码长{:.1}",
+        "\n理论极速 {:.1} 击键 {:.1} 码长 {:.1}",
         stats.fastest.spd,
         stats.fastest.key_touch_spd * accuracy,
         stats.fastest.avg_code_len * accuracy
     );
     let _ = write!(
         slots[6],
-        "\n理论均速 {:.1}，击键{:.1}，码长{:.1}",
+        "\n理论均速 {:.1} 击键 {:.1} 码长 {:.1}",
         stats.avg_spd,
         stats.avg_spd * stats.avg_code_len / 60.0 * accuracy,
         stats.avg_code_len * accuracy
@@ -386,7 +386,7 @@ pub fn format_report(input: &ReportInput<'_>) -> String {
     };
     // 键准 = 有效按键 / 按键（有效按键即不含空格的码长合计）。
     // 由它可以直接推出「理论」值：理论击键/理论码长 = 实际值 × 键准
-    // （因为 击键 = 按键/用时、码长 = 按键/字数，把“按键”换成“有效按键”即可）。
+    // （因为 击键 = 按键/用时、码长 = 按键/字数 把“按键”换成“有效按键”即可）。
     let accuracy = if input.bucket.key_touch_cnt > 0 {
         input.bucket.total_code_len_without_space as f64 / input.bucket.key_touch_cnt as f64
     } else {
@@ -394,7 +394,7 @@ pub fn format_report(input: &ReportInput<'_>) -> String {
     };
     let _ = write!(
         slots[6],
-        "\n误触按键 {} 次，误触率 {:.0}%，键准 {:.0}%",
+        "\n误触按键 {} 次 误触率 {:.0}% 键准 {:.0}%",
         err_count,
         err_ratio,
         accuracy * 100.0
@@ -454,7 +454,7 @@ pub fn format_report(input: &ReportInput<'_>) -> String {
         }
         if ratio.other > 0.0 {
             if slots[8].is_empty() {
-                // 忠实复现 Lua L636 的兜底文案（写成 "2字" 而非 ">2字"，规范 §6.2 标注为疑似 bug）。
+                // 忠实复现 Lua L636 的兜底文案（写成 "2字" 而非 ">2字" 规范 §6.2 标注为疑似 bug）。
                 let _ = write!(slots[8], "; 2字{:.0}%", ratio.other);
             } else {
                 let _ = write!(slots[8], "; >2字{:.0}%", ratio.other);
@@ -567,8 +567,8 @@ pub fn format_skin_list(skin_idx_word: i64, skin_idx_code: i64) -> String {
     }
     lines.push("w 当前字词统计皮肤 / c 当前码长统计皮肤".to_owned());
     lines.push("输入 //60 或 /pf 查看皮肤列表".to_owned());
-    lines.push("输入 /6xx1 或 /hfwyy 或 /pfwyy 切换字词统计皮肤(xx为数字，yy为字母)".to_owned());
-    lines.push("输入 /6xx2 或 /hfcyy 或 /pfcyy 切换码长统计皮肤(xx为数字，yy为字母)".to_owned());
+    lines.push("输入 /6xx1 或 /hfwyy 或 /pfwyy 切换字词统计皮肤(xx为数字 yy为字母)".to_owned());
+    lines.push("输入 /6xx2 或 /hfcyy 或 /pfcyy 切换码长统计皮肤(xx为数字 yy为字母)".to_owned());
     let joined = lines.join("\n");
     let mut collapsed = String::with_capacity(joined.len());
     let mut last_was_newline = false;
@@ -591,7 +591,7 @@ pub fn format_skin_list(skin_idx_word: i64, skin_idx_code: i64) -> String {
 
 /// 生字/词本（规范 §6.4）。
 ///
-/// `ver_str` 由于 Lua 依赖隐藏状态，这里固定传脚本行（见模块文档的有意偏离）。
+/// `ver_str` 由于 Lua 依赖隐藏状态 这里固定传脚本行（见模块文档的有意偏离）。
 pub fn format_new_words(
     words: &BTreeSet<String>,
     start_time: i64,
@@ -604,13 +604,13 @@ pub fn format_new_words(
     slots[1] = embed_text_into_splitor("🚩 生字/词本 🚩");
     if start_time > 0 {
         slots[2] = format!(
-            "自 {} 以来，",
+            "自 {} 以来 ",
             format_datetime(start_time, tz_offset_seconds)
         );
     }
     slots[3] = format!("共记录到生字/词 {} 个", words.len());
     slots[4] = splitor();
-    slots[5] = words.iter().cloned().collect::<Vec<_>>().join("，");
+    slots[5] = words.iter().cloned().collect::<Vec<_>>().join(" ");
     slots[6] = splitor();
     slots[7] = format!("{}{}", SCRIPT_LINE_PREFIX, SCRIPT_VERSION);
 
@@ -713,7 +713,7 @@ mod tests {
         let mut slow = bucket_with(9, 20);
         slow.fastest.spd = 10.0;
         let stats = statistics_cal(&slow);
-        // 均速 76.36 > 10 → 覆盖极速，且 keyTouchSpd = avgSpd * avgCodeLen / 60
+        // 均速 76.36 > 10 → 覆盖极速 且 keyTouchSpd = avgSpd * avgCodeLen / 60
         assert!((stats.fastest.spd - stats.avg_spd).abs() < 1e-9);
         assert!((stats.fastest.key_touch_spd - stats.avg_spd * stats.avg_code_len / 60.0).abs() < 1e-9);
         assert!((stats.fastest.avg_code_len - stats.avg_code_len).abs() < 1e-9);
@@ -745,12 +745,12 @@ mod tests {
         let bucket = bucket_with(9, 20);
         let text = format_report(&input(ReportKind::Daily, &bucket, Style::Short));
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines[0], "上屏 9 次，输入 20 字");
-        assert_eq!(lines[1], "极速 90.0，击键5.0，码长3.0");
-        assert_eq!(lines[2], "均速 76.4，击键3.3，码长2.6");
-        assert_eq!(lines[3], "误触按键 12 次，误触率 12%");
+        assert_eq!(lines[0], "上屏 9 次 输入 20 字");
+        assert_eq!(lines[1], "极速 90.0 击键5.0 码长3.0");
+        assert_eq!(lines[2], "均速 76.4 击键3.3 码长2.6");
+        assert_eq!(lines[3], "误触按键 12 次 误触率 12%");
         assert_eq!(lines[4], "──────────────");
-        assert_eq!(lines[5], "单字40%; 2字60%", "短款单行拼接，; 分隔");
+        assert_eq!(lines[5], "单字40%; 2字60%", "短款单行拼接 ; 分隔");
         assert_eq!(lines[6], "4码71%; 3码29%");
         assert_eq!(lines[7], "──────────────");
         assert_eq!(lines[8], "💻・luna_pinyin");
@@ -770,10 +770,10 @@ mod tests {
         assert_eq!(lines[0], "───🚩 周统计 🚩────", "标题居中到 14 列");
         assert_eq!(lines[1], "2026/10/02 13:05:00UTC+08:00");
         assert_eq!(lines[2], "📈─────────────");
-        assert_eq!(lines[3], "上屏 9 次，输入 20 字");
-        assert_eq!(lines[4], "极速 90.0，击键5.0，码长3.0");
-        assert_eq!(lines[5], "均速 76.4，击键3.3，码长2.6");
-        assert_eq!(lines[6], "误触按键 12 次，误触率 12%");
+        assert_eq!(lines[3], "上屏 9 次 输入 20 字");
+        assert_eq!(lines[4], "极速 90.0 击键5.0 码长3.0");
+        assert_eq!(lines[5], "均速 76.4 击键3.3 码长2.6");
+        assert_eq!(lines[6], "误触按键 12 次 误触率 12%");
         assert_eq!(lines[7], "（说明）", "长款追加 avgCodeLenDesc");
         assert_eq!(lines[8], "📊─────────────");
         assert_eq!(lines[9], "★★★★☆☆☆☆☆☆单字 40%", "字词进度条用皮肤 21");
@@ -792,13 +792,13 @@ mod tests {
 
     #[test]
     fn two_char_fallback_message_is_reproduced() {
-        // 只有 >2 字占比（无单字/双字）时，Lua 的兜底文案写成 "2字"（疑似 bug，需复现）
+        // 只有 >2 字占比（无单字/双字）时 Lua 的兜底文案写成 "2字"（疑似 bug 需复现）
         let mut bucket = bucket_with(1, 1);
         bucket.lengths = BTreeMap::from([(3_i64, 1_i64)]);
         let text = format_report(&input(ReportKind::Daily, &bucket, Style::Short));
         assert!(
             text.contains("; 2字100%"),
-            "复现 Lua 兜底文案，实际：{text}"
+            "复现 Lua 兜底文案 实际：{text}"
         );
     }
 
@@ -809,7 +809,7 @@ mod tests {
         assert_eq!(lines.len(), 28, "1 行表头 + 23 行皮肤 + 4 行说明");
         assert_eq!(lines[0], "※ 可用皮肤列表：");
         assert_eq!(lines[1], "--- -c-01 ab ▉▉▉▉▁▁▁▁");
-        assert_eq!(lines[21], "-w----21 cb ★★★★☆☆☆☆", "字词命中为 -w-、码长未命中为 ---，拼接后无空格");
+        assert_eq!(lines[21], "-w----21 cb ★★★★☆☆☆☆", "字词命中为 -w-、码长未命中为 --- 拼接后无空格");
         assert_eq!(lines[23], "--- ---23 cd ████░░░░");
         assert_eq!(lines[24], "w 当前字词统计皮肤 / c 当前码长统计皮肤");
         assert_eq!(lines[25], "输入 //60 或 /pf 查看皮肤列表");
@@ -824,7 +824,7 @@ mod tests {
         assert!(text.contains("🚩 生字/词本 🚩"));
         assert!(text.contains("自 2023/11/15"), "本地时间行：{text}");
         assert!(text.contains("共记录到生字/词 2 个"));
-        assert!(text.contains("世界，你好"), "集合按字典序（有意偏离 Lua 的哈希序）：{text}");
+        assert!(text.contains("世界 你好"), "集合按字典序（有意偏离 Lua 的哈希序）：{text}");
         assert!(text.contains(&format!("脚本：🐐🪶❄️{SCRIPT_VERSION}")));
 
         assert_eq!(
