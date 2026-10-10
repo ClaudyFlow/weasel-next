@@ -525,10 +525,15 @@ impl Window {
                 let width = c.layout.width;
                 let height = c.layout.height;
                 if width > 0.0 && height > 0.0 {
+                    // 镜面高光（加强版）：顶部 2px 亮线 + 左右各 1px 淡边 —— 透底上明显可见。
                     let mut highlight = color(0xffffff);
-                    highlight.a = 0.45;
+                    highlight.a = 0.65;
                     brush.SetColor(&highlight);
-                    target.FillRectangle(&rect(0.0, 0.0, width, 1.0), &brush);
+                    target.FillRectangle(&rect(0.0, 0.0, width, 2.0), &brush);
+                    highlight.a = 0.22;
+                    brush.SetColor(&highlight);
+                    target.FillRectangle(&rect(0.0, 0.0, 1.0, height), &brush);
+                    target.FillRectangle(&rect(width - 1.0, 0.0, width, height), &brush);
                     let mut shade = color(0x000000);
                     shade.a = 0.30;
                     brush.SetColor(&shade);
@@ -552,7 +557,11 @@ impl Window {
                     let usable = enabled(&c.snapshot, cell.hit);
                     let rect = rect(cell.left, 0.0, cell.right, c.layout.height);
                     if selected || (usable && app.gesture.hovered == Some(cell.hit)) {
-                        brush.SetColor(&color(if selected { p.active } else { p.hover }));
+                        // 用户要求：选中/悬停一律用灰色，不要蓝色。
+                        // 取文字色（白）降透明度当灰底 —— 透底之上就是一层中性灰。
+                        let mut gray = color(p.text);
+                        gray.a = if selected { 0.32 } else { 0.18 };
+                        brush.SetColor(&gray);
                         target.FillRectangle(&rect, &brush);
                     }
                     match cell.hit {
