@@ -21,6 +21,7 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+toml = "1"
 
 windows-core = "0.100.0"
 windows-version = "0.100.0"
@@ -33,4 +34,3 @@ protoc-bin-vendored = "3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "time"] }
-toml = "1"
