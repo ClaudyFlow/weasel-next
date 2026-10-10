@@ -51,5 +51,6 @@
                         "WindowsTerminal.exe":  {
                                                     "ascii_mode":  true
                                                 }
-                    }
+                    },
+    "asset":  "Rime-Next"
 }
