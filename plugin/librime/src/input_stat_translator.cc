@@ -271,7 +271,7 @@ std::string StatsDbPath(const std::string& stats_file_path) {
   if (p.empty()) {
     return std::string();
   }
-  std::filesystem::path dir = p.parent_path().parent_path() / "userdb";
+  std::filesystem::path dir = p.parent_path();  // StatsFilePath 所在目录 = <user_data>/plugin/
   std::error_code error;
   std::filesystem::create_directories(dir, error);
   return (dir / "input_stat.userdb").string();
