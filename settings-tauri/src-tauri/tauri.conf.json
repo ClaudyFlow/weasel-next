@@ -29,7 +29,7 @@
                    "active":  true,
                    "targets":  "msi",
                    "icon":  [
-                                "../../../asset/icon/weasel.ico"
+                                "../../asset/icon/weasel.ico"
                             ],
                    "category":  "Utility",
                    "shortDescription":  "Weasel-Next settings panel",
