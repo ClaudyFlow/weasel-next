@@ -1,4 +1,4 @@
-# 备忘录
+﻿# 备忘录
 
 > 记录待办与已决定的设计；**标注「暂时不做」的项不要动**。
 
@@ -88,3 +88,28 @@ asset\                     仓库里（出厂默认与程序资源）
 - 多份 eassy 由部署流程按词归并（频次求和）后生成 librime 需要的 `essay.txt`（或 `<名字>.txt` + `vocabulary:`）。
 
 安装路径（首字母大写）：`C:\Program Files\Weasel-Next\`；代码目录 `C:\code\Weasel-Next\`。
+
+```
+asset\                         仓库里（出厂默认 + 程序资源）
+  Rime-Next\                   ← ★ 出厂默认的整棵配置树（编译时整个搬到程序文件夹）
+      sound\                   ← 键声 / 上屏声（typewriter-key.wav / typewriter-bell.wav）
+      model\                   ← 语言模型（*.gram，如 zh-hans-t-essay-bgw.gram）
+      default.eassy.toml       ← 原 essay.txt（细胞词库词表，TOML 格式）
+      rime-data\               ← 官方 Rime 数据（方案 / 词典 / opencc）
+      …（schema / dict / theme 的默认内容，均为 TOML）
+  icon\                        ← 程序图标（11 个 .ico，各组件共用 weasel.ico；构建脚本要用，留在 asset 根）
+```
+
+搬迁后程序文件夹的样子（**只有二进制 + 一个配置文件夹**）：
+
+```
+C:\Program Files\Weasel-Next\
+  weasel-broker.exe · weasel-server.exe · weasel-renderer.exe · weasel-settings.exe
+  weasel_tip.dll · rime.dll · libc++.dll · libglog.dll · libopencc.dll · libunwind.dll · WebView2Loader.dll
+  themes\                      ← 主题 DLL
+  Rime-Next\                   ← ★ 唯一的配置文件夹（= asset\Rime-Next 整棵搬过来）
+  7z\                          ← 以后放 7z.exe（解压）      【不急】
+  aria2-next\                  ← 以后放 aria2-next.exe（下载）【不急】
+```
+
+由此：程序文件夹不再散落配置 ✓，活动配置只有 `%APPDATA%\Rime-Next\` 一处 ✓。
