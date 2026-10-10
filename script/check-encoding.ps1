@@ -1,4 +1,4 @@
-﻿# 检查全仓文本文件是否为 UTF-8 无 BOM（有 BOM 则失败）
+# 检查全仓文本文件是否为 UTF-8 无 BOM（有 BOM 则失败）
 [CmdletBinding()] param([string]$Root = '')
 Set-StrictMode -Version Latest
 if ([string]::IsNullOrEmpty($Root)) {
