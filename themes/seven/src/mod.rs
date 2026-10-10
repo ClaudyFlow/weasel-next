@@ -579,7 +579,13 @@ impl Window {
                     // 左右淡边（同样内缩 radius，止于上下圆角之间）
                     highlight.a = 0.34;   // 左右竖边更明显（原来 0.22 太弱 ✗）
                     brush.SetColor(&highlight);
-                    let mut edge_blue = color(p.active); edge_blue.a = 0.30; brush.SetColor(&edge_blue);   // ★ 左侧高光蓝边（与右侧对称 ✓）`r`n                    target.FillRectangle(&rect(0.0, radius, 2.0, height - radius), &brush);`r`n                    brush.SetColor(&highlight);
+                    // ★ 左右两侧对称的高光蓝边（Aero 的玻璃侧壁反光 ✓）
+                    let mut edge_blue = color(p.active);
+                    edge_blue.a = 0.30;
+                    brush.SetColor(&edge_blue);
+                    target.FillRectangle(&rect(0.0, radius, 2.0, height - radius), &brush);
+                    target.FillRectangle(&rect(width - 2.0, radius, width, height - radius), &brush);
+                    brush.SetColor(&highlight);
                     target.FillRectangle(
                         &rect(width - 2.0, radius, width, height - radius),
                         &brush,
