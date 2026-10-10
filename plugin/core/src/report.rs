@@ -1,4 +1,4 @@
-﻿//! 报表排版（规范 §6）。
+//! 报表排版（规范 §6）。
 //!
 //! 逐字符对齐 Lua 版：槽位模型 1..21、短款/长款差异、`progressBar` 阈值阶梯、居中分隔线、
 //! 最终拼装（折叠连续换行 → 去首尾换行 → trim）。已登记的**有意偏离**：
@@ -335,7 +335,7 @@ pub fn format_report(input: &ReportInput<'_>) -> String {
 
     // §6.1 头部
     slots[1] = embed_text_into_splitor(&format!("🚩 {} 🚩", input.kind.stat_type()));
-    let _ = write!(slots[2], "{}{}", input.timestamp, input.timezone);
+    let _ = write!(slots[2], "{} {}", input.timestamp, input.timezone);
     let _ = write!(
         slots[4],
         "上屏 {} 次 输入 {} 字",
