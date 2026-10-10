@@ -1119,7 +1119,7 @@ pub struct Factory;
 impl crate::theme_api::ThemeFactory for Factory {
     /// 返回用于主题选择和诊断的稳定名称。
     fn name(&self) -> &'static str {
-        "ten"
+        "seven"
     }
     /// 声明此主题只提供候选栏界面。
     fn capabilities(&self) -> crate::theme_api::ThemeCapabilities {
@@ -1138,7 +1138,7 @@ impl crate::theme_api::ThemeFactory for Factory {
     ) -> crate::theme_api::ThemeCreation {
         (|| -> Result<Box<dyn ThemeBackend>, String> {
             // Theme-local validation; style fields will be defined by this theme.
-            let _: serde_json::Map<String, serde_json::Value> = settings.theme_settings("ten")?;
+            let _: serde_json::Map<String, serde_json::Value> = settings.theme_settings("seven")?;
             create(mode)
         })()
         .into()

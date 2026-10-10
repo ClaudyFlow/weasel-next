@@ -39,6 +39,11 @@ Start-Sleep -Seconds 4
 Copy-Item (Join-Path $root 'target\release\weasel-server.exe') (Join-Path $InstallDir 'weasel-server.exe') -Force
 Ok ('已安装 weasel-server.exe ' + (Get-Item (Join-Path $InstallDir 'weasel-server.exe')).Length + ' 字节')
 
+# 重建后的 broker 必须先跑一次 --post-install 注册服务（否则它不监听 RPC 管道 ✗
+# → 渲染器 readiness 失败 → "renderer failed before readiness" ✗ → 候选窗不显示 ✓）
+Step '注册 broker 服务（--post-install）'
+& cmd /c ('"' + (Join-Path $InstallDir 'weasel-broker.exe') + '" --post-install') | Out-Null
+Ok ('post-install 退出码 ' + $LASTEXITCODE)
 Step '跑一次部署（触发 normalize 归类）'
 $server = Join-Path $InstallDir 'weasel-server.exe'
 & cmd /c ('"' + $server + '" --deploy --silent')
