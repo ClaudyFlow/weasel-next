@@ -8,6 +8,7 @@ pub mod command_menu;
 pub mod comrt;
 pub mod data_frame;
 pub mod deploy_manifest;
+pub mod eassy;
 pub mod deploy_protocol;
 pub mod logging;
 pub mod message;

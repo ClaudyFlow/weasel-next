@@ -6374,6 +6374,7 @@ dependencies = [
  "sha2",
  "time",
  "tokio",
+ "toml",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

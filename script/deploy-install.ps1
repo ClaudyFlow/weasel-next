@@ -56,6 +56,8 @@ $elevated = @(
     ('robocopy "{0}" "{1}" /E /XF *.old-* *.previous* *.log /NFL /NDL /NJH /NJS /R:1 /W:1' -f $stage, $InstallDir),
     ('robocopy "{0}\Rime-Next" "{1}\Rime-Next" /E /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
     ('robocopy "{0}\tools\7z" "{1}\7z" /E /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
+    # 清理已迁移的旧扁平 yaml：源已放进 schema\<方案>\，目标里残留的扁平副本要删掉
+    ('for %F in ("{1}\Rime-Next\*.schema.yaml" "{1}\Rime-Next\*.dict.yaml") do if exist "%F" del /f /q "%F"' -f $root, $InstallDir),
     # 清掉早先留下的旧文件（安装目录里不该有它们）
     ('del /f /q "{0}\weasel_tip.previous.dll" 2>nul' -f $InstallDir),
     ('del /f /q "{0}\weasel-server.previous.exe" 2>nul' -f $InstallDir),

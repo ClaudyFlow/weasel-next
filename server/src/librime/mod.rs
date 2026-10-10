@@ -1,3 +1,31 @@
+/// 把 `<shared>/dict/**/*.eassy.toml` 与 `<user>/dict/**/*.eassy.toml` 归并成
+/// `<user>/essay.txt`（librime 的 preset vocabulary 只认这个 txt）。
+///
+/// 仓库里只放 `.eassy.toml`；txt 是部署产物，因此在每次初始化/部署前重新生成。
+fn generate_essay_txt(shared_dir: &std::path::Path, user_dir: &std::path::Path) {
+    let mut merged = std::collections::BTreeMap::new();
+    for root in [shared_dir, user_dir] {
+        match weasel_common::eassy::collect(root) {
+            Ok(words) => {
+                for (word, freq) in words {
+                    *merged.entry(word).or_insert(0u64) += freq;
+                }
+            }
+            Err(error) => {
+                log::warn!("eassy: 读取 {} 下的词库失败: {error}", root.display());
+            }
+        }
+    }
+    if merged.is_empty() {
+        log::warn!("eassy: 没有找到任何 *.eassy.toml，essay.txt 未生成");
+        return;
+    }
+    let target = user_dir.join("essay.txt");
+    match weasel_common::eassy::write_essay_txt(&target, &merged) {
+        Ok(count) => log::info!("eassy: 已由 TOML 归并生成 {}（{count} 条）", target.display()),
+        Err(error) => log::warn!("eassy: 写出 {} 失败: {error}", target.display()),
+    }
+}
 //! 管理 librime 动态库、引擎实例与输入会话，并将宿主事件和引擎状态相互转换。
 
 mod api;
@@ -102,6 +130,8 @@ impl Librime {
     /// DLL、API 表、路径或必需入口不可用时返回错误。成功后返回的引擎由其会话
     /// 共同持有；最后一个持有者释放时调用 `finalize` 并卸载 DLL。
     pub fn load(base_dir: &Path, user_data_dir: &Path) -> Result<Self, String> {
+        // 由 dict/**/*.eassy.toml 归并生成 essay.txt（仓库只放 TOML，txt 是部署产物）
+        generate_essay_txt(&base_dir.join("Rime-Next"), user_data_dir);
         let library = RimeLibrary::load(&base_dir.join("rime.dll"))?;
         let api = unsafe { RimeLibraryApi::load(library.api().as_ptr(), false)? };
         let app_name = CString::new("rime.weasel-next").expect("static app name has no NUL");
@@ -135,6 +165,8 @@ impl Librime {
     /// 成功完成部署后先调用 `finalize` 再返回；部署函数返回非真值、必需入口
     /// 缺失或加载/路径配置失败时返回错误。
     pub fn deploy(base_dir: &Path, user_data_dir: &Path) -> Result<(), String> {
+        // 由 dict/**/*.eassy.toml 归并生成 essay.txt（仓库只放 TOML，txt 是部署产物）
+        generate_essay_txt(&base_dir.join("Rime-Next"), user_data_dir);
         let library = RimeLibrary::load(&base_dir.join("rime.dll"))?;
         let api = unsafe { RimeLibraryApi::load(library.api().as_ptr(), true)? };
         let app_name = CString::new("rime.weasel-next").expect("static app name has no NUL");
