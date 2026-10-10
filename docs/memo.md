@@ -53,3 +53,12 @@ model/<名字>.gram                   语言模型    （直接放好，librime 
 6. 测试断言同步（布局 2 条 + capi 1 条 + 误触 2 处，当前 65/67）。
 7. **液态玻璃的折射与厚度**（B 方案，真·液态玻璃的最后一块）：绑定补 `CLSID_D2D1DisplacementMap` + `ID2D1Effect`；`BitBlt` 抓窗口背后画面 → 生成位移贴图（RG 编码，128 = 不偏移）→ `DisplacementMap` 效果（`Scale` 对应 thickness ≈ 26px）→ R/G/B 三次绘制做色散 → 叠回高光/描边。
 8. 程序文件夹的两个工具（见文首：「暂时不做」）。
+
+## 统计插件的文件归属（已定）
+
+| 内容 | 位置 |
+|---|---|
+| 插件代码（Rust `plugin/core` + C++ `plugin/librime`） | 编进程序文件夹的 `rime.dll` |
+| 名言库 `quote.txt` | `<用户目录>\plugin\quote.txt` |
+| 旧统计文本（仅首次迁移用） | `<用户目录>\plugin\input_stat_<方案>.lua` |
+| 统计数据库（LevelDB） | `<用户目录>\userdb\input_stat.userdb`（保持与“所有 `*.userdb` 都在 `userdb\` 下”一致） |
