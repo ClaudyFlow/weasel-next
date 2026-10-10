@@ -35,7 +35,7 @@ try {
         'target\x86_64-pc-windows-msvc\release\weasel_tip.dll',
         'target\i686-pc-windows-msvc\release\weasel_tip.dll',
         'artifact\smoke\rime.dll',
-        'asset\rime-data\default.yaml',
+        'asset\Rime-Next\rime-data\default.yaml',
                 'target\x86_64-pc-windows-msvc\release\weasel_broker.pdb',
         'target\x86_64-pc-windows-msvc\release\weasel_server.pdb',
         'target\x86_64-pc-windows-msvc\release\weasel_renderer.pdb',
@@ -82,10 +82,10 @@ try {
     $payloadRemovalPaths = [Collections.Generic.List[string]]::new()
     $payloadDestinations = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($payload in @(
-        @{ Macro = 'RimePayload'; RemoveMacro = 'RemoveRimePayload'; ValidateMacro = 'ValidateRimePayloadRemoval'; Source = 'asset\rime-data'; Target = 'rime-data' },
+        @{ Macro = 'RimePayload'; RemoveMacro = 'RemoveRimePayload'; ValidateMacro = 'ValidateRimePayloadRemoval'; Source = 'asset\Rime-Next\rime-data'; Target = 'Rime-Next\rime-data' },
         @{ Macro = 'WasmPayload'; RemoveMacro = 'RemoveWasmPayload'; ValidateMacro = 'ValidateWasmPayloadRemoval'; Source = 'artifact\theme-wasm'; Target = 'theme-wasm' },
         # 按键/上屏音效：随包安装到 $INSTDIR\sound，服务端按 exe 同级目录解析 sound/。
-        @{ Macro = 'SoundsPayload'; RemoveMacro = 'RemoveSoundsPayload'; ValidateMacro = 'ValidateSoundsPayloadRemoval'; Source = 'asset\sound'; Target = 'sound' }
+        @{ Macro = 'SoundsPayload'; RemoveMacro = 'RemoveSoundsPayload'; ValidateMacro = 'ValidateSoundsPayloadRemoval'; Source = 'asset\Rime-Next\sound'; Target = 'Rime-Next\sound' }
     )) {
         $files = @()
         $payloadLines.Add('!macro ' + $payload.Macro)
