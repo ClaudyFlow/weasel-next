@@ -16,7 +16,7 @@
         "type": "string",
         "enum": [
           "eleven",
-          "seven", "ten",
+          "ten",
           "abc",
           "void",
           "wasm"
@@ -149,7 +149,7 @@
     "examples": [
       {
         "theme": "eleven",
-        "seven", "inline_preedit": true,
+        "inline_preedit": true,
         "themeSettings": {
           "abc": {}
         }
