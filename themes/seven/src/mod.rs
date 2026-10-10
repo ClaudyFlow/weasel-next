@@ -629,7 +629,7 @@ impl Window {
                         let mut divider = color(0xFFFFFF);
                         divider.a = 0.10;
                         brush.SetColor(&divider);
-                        target.FillRectangle(&rect_with(rect, cell.left, 4.0, cell.left + 1.0, c.layout.height - 4.0), &brush);   // 用 rect_with ✓ 此处 rect 是局部变量 ✓
+                        target.FillRectangle(&rect_with(rect, cell.left, cell.left + 1.0), &brush);   // 用 rect_with ✓ 此处 rect 是局部变量 ✓
                         brush.SetColor(&color(p.text));
                     }                    match cell.hit {
                         Hit::Candidate(i) => {
