@@ -526,7 +526,7 @@ impl Window {
                     unsafe { apply_round_region(self.hwnd.get(), width, height); }
                 if width > 0.0 && height > 0.0 {
                     // 圆角半径 = 高度的四分之一（用户指定），并保证不超出半宽。
-                    let radius = (height / 4.0).min(width / 2.0);
+                    let radius = (height / 6.0).min(width / 2.0).max(4.0);   // 对齐截图：小圆角 ✓
                     // 圆角要"切干净"：显式用逐图元抗锯齿，边缘平滑无锯齿。
                     target.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                     // 面板本体：圆角矩形 + 40% 淡罩。
@@ -564,19 +564,19 @@ impl Window {
                     // ★ Aero 招牌：顶部**高光带**（不是一条线 ✗）—— 24 层渐隐细线模拟线性渐变，
 // 顶部 alpha 0.72 二次衰减到 0，覆盖上半 48% 高度（无需渐变画刷 API ✓ 低风险 ✓）
                     let band_start = 0.0;   // ★ 去掉顶部暗边：高光从最顶端开始 ✓
-                    let band_end = height * 0.58;   // 覆盖到 58% ✓
+                    let band_end = height * 0.55;
                     let steps = 24u32;
                     let band_h = (band_end - band_start) / steps as f32;
                     for i in 0..steps {
                         let f = i as f32 / steps as f32;
                         let mut hl = color(0xffffff);
-                        hl.a = 0.40 * (1.0 - f) * (1.0 - f);   // ★ 宽白高光：黑底上要看得见 ✓
+                        hl.a = 0.16 * (1.0 - f) * (1.0 - f);   // 对齐截图：极淡顶光 ✓
                         brush.SetColor(&hl);
                         let y0 = band_start + i as f32 * band_h;
                         target.FillRectangle(&rect(0.0, y0, width, y0 + band_h), &brush);   // ★ 全宽高光带（溢出圆角的部分由 SetWindowRgn 裁掉 ✓）
                     }
                     let mut hl_line = color(0xffffff);
-                    hl_line.a = 0.45;   // 亮线略淡（下移后不需要那么强 ✓）
+                    hl_line.a = 0.28;
                     brush.SetColor(&hl_line);
                     target.FillRectangle(&rect(0.0, band_start, width, band_start + 1.0), &brush);   // 亮线跟着高光带顶边 ✓
                     // 左右淡边（同样内缩 radius，止于上下圆角之间）
@@ -624,7 +624,14 @@ impl Window {
                         brush.SetColor(&gray);
                         target.FillRectangle(&rect, &brush);
                     }
-                    match cell.hit {
+                    // ★ 细分隔线（对齐截图：候选区 / 翻页箭头 / 表情之间各一条 ✓）
+                    if matches!(cell.hit, Hit::Previous | Hit::Emoji) {
+                        let mut divider = color(0xFFFFFF);
+                        divider.a = 0.10;
+                        brush.SetColor(&divider);
+                        target.FillRectangle(&rect(cell.left, 4.0, cell.left + 1.0, c.layout.height - 4.0), &brush);
+                        brush.SetColor(&color(p.text));
+                    }                    match cell.hit {
                         Hit::Candidate(i) => {
                             let item = &c.snapshot.items[i];
                             text(
@@ -647,7 +654,7 @@ impl Window {
                                 &app.graphics.text,
                                 &item.primary_text,
                                 rect_with(rect, cell.left + NUMBER, cell.right - logic::PAD),
-                                p.text,   // 箭头始终用正文色 ✓ 否则没有下一页时会被画成浅灰看不见 ✗
+                                color(0xB0B0B0),   // 箭头/表情：暗灰 ✓ 对齐截图（比候选暗一点 ✓）
                             );
                             if !item.secondary_text.is_empty() {
                                 text(
@@ -679,7 +686,7 @@ impl Window {
                                 &app.graphics.number,   // 箭头与表情改用正文/数字字体 ✓ 保证有字形 ✓
                                 glyph,
                                 icon_rect,
-                                p.text,   // 箭头始终用正文色 ✓ 否则没有下一页时会被画成浅灰看不见 ✗
+                                color(0xB0B0B0),   // 箭头/表情：暗灰 ✓ 对齐截图（比候选暗一点 ✓）
                             );
                         }
                     }
@@ -940,7 +947,7 @@ unsafe fn apply_round_region(hwnd: HWND, width: f32, height: f32) {
         return;
     }
     // 与绘制保持同一个半径：高度四分之一（logic 里的圆角算法一致 ✓）
-    let radius = (height / 4.0).max(2.0);
+    let radius = (height / 6.0).max(4.0);   // 与绘制保持一致的**小**圆角 ✓
     let d = (radius * 2.0).round() as i32;
     let rgn = CreateRoundRectRgn(0, 0, width.round() as i32 + 1, height.round() as i32 + 1, d, d);
     if rgn != 0 {

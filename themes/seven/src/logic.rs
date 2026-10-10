@@ -226,24 +226,24 @@ impl Palette {
         // dark/light 两个分支都按黑底设计，只是黑度略不同，避免跟随系统变回白底 ✗。
         if dark {
             Self {
-                background: 0x050505,
-                border: 0x3C3C3C,
-                active: 0x4A9BEA,   // ★ 高亮：选中块用亮蓝 ✓
-                hover: 0x1E1E1E,
-                text: 0xFFFFFF,
-                secondary: 0xC8C8C8,
-                active_number: 0xFFFFFF,
+                background: 0x0B0B0B,
+                border: 0x3A3A3A,
+                active: 0x2C5F8C,   // ★ 对齐截图：沉稳蓝选中块 ✓
+                hover: 0x2C5F8C,
+                text: 0xF2F2F2,
+                secondary: 0xA0A0A0,
+                active_number: 0xFFFFFF,   // 选中序号纯白 ✓
                 disabled: 0x707070,
             }
         } else {
             Self {
-                background: 0x0A0A0A,
-                border: 0x454545,
-                active: 0x4FA3F0,   // ★ 高亮：选中块用亮蓝 ✓
-                hover: 0x222222,
-                text: 0xFFFFFF,
-                secondary: 0xD0D0D0,
-                active_number: 0xFFFFFF,
+                background: 0x0D0D0D,
+                border: 0x3E3E3E,
+                active: 0x2F6394,   // ★ 对齐截图：沉稳蓝选中块 ✓
+                hover: 0x2C5F8C,   // 悬停与选中同色（用户要求 ✓）
+                text: 0xF2F2F2,
+                secondary: 0xA8A8A8,
+                active_number: 0xFFFFFF,   // 选中序号纯白 ✓
                 disabled: 0x787878,
             }
         }
