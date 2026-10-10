@@ -193,3 +193,34 @@ rime.dll  (静态, C++)  ← librime 强制要求静态的薄适配层
   S3 rime.dll 的 C++ 适配层改为调用 weasel-plugin.dll（找不到宿主时退化为内置实现，保证不崩）。
   S4 weasel-server 启动时确保宿主已加载（可选）。
   S5 安装器把 weasel-plugin.dll 放进程序文件夹；用户目录 plugin\<名>\ 放插件 DLL。
+
+## 插件宿主改名 + "代码不编译直接运行"的结论（已定）
+
+- 宿主 DLL 定名 **`rime-plugin.dll`**（通用命名；替代先前的 weasel-plugin.dll）。
+
+- 为什么"有 ABI"不等于"能跑源码"：ABI 约定的是已编译机器码之间如何互相调用；
+  要让**源码**直接运行，宿主里必须有**解释器/JIT**。
+
+- 三条可行路径（宿主按扩展名分派）：
+  * `.lua`  → 宿主内嵌 Lua（~200 KB，C ABI 极简）；原版统计插件就是 Lua，用户文件夹放 init.lua 即可直接跑。
+     —— 这就是"不编译直接运行"的答案。
+  * `.wasm` → 复用本仓库已有的 wasm 运行时（themes\wasm）；仍需一次编译成 wasm，但跨语言且沙箱安全。
+  * `.dll`  → 原生插件（C++/Rust），最快，但要编译。
+
+- 目录约定：
+  程序文件夹\rime-plugin.dll          宿主（ABI + 内嵌 Lua + 复用 wasm 运行时）
+  用户文件夹\plugin\<名字>\init.lua    Lua 插件（免编译）
+  用户文件夹\plugin\<名字>\mod.wasm    wasm 插件
+  用户文件夹\plugin\<名字>\mod.dll     原生插件
+  用户文件夹\plugin\<名字>\plugin.toml 元数据（名字/版本/入口/权限）
+
+- 边界：解释运行的脚本不能直接进 librime 的翻译器链（librime 只认编进去的 C++），
+  因此宿主通过 API 表把 Rime 能力（查询/候选/上屏事件等）暴露给脚本；
+  "读事件 + 计算 + 出报表"这类插件（统计插件）完全够用。
+
+- 落地顺序调整：
+  S1 定 ABI: rime_plugin_host_api（版本/日志/Rime 查询/事件订阅/定时器）+ rime_plugin_entry。
+  S2 新建宿主工程 → rime-plugin.dll（含 Lua 绑定；wasm 复用现有运行时）。
+  S3 rime.dll 的 C++ 胶水层 LoadLibraryW("rime-plugin.dll")；找不到则退化为内置实现。
+  S4 weasel-server 启动时确保宿主已加载。
+  S5 安装器放 rime-plugin.dll；用户目录 plugin\<名>\ 放插件代码；示例 Lua 插件随包提供。
