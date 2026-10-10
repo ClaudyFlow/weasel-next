@@ -531,7 +531,7 @@ impl Window {
                     // 原来 15% 在深色背景上几乎看不出轮廓 → 圆角"像没了" ✗；
                     // 透明度低一点（40%）才既有玻璃感、又能看清圆角形状。
                     let mut fill = color(p.background);
-                    fill.a = 0.26;   // 更透（0.40 偏实 ✗）
+                    fill.a = 0.18;   // 更透（用户要求先透明 ✓）
                     brush.SetColor(&fill);
                     target.FillRoundedRectangle(
                         &D2D1_ROUNDED_RECT {
@@ -570,7 +570,7 @@ impl Window {
                         hl.a = 0.72 * (1.0 - f) * (1.0 - f);
                         brush.SetColor(&hl);
                         let y0 = i as f32 * band_h;
-                        target.FillRectangle(&rect(radius * 0.4, y0, width - radius * 0.4, y0 + band_h), &brush);   // 高光带铺满（含左右上角附近 ✓ 左右对称 ✓）
+                        target.FillRectangle(&rect(radius, y0, width - radius, y0 + band_h), &brush);   // 高光带铺满（含左右上角附近 ✓ 左右对称 ✓）
                     }
                     let mut hl_line = color(0xffffff);
                     hl_line.a = 0.85;
@@ -616,8 +616,8 @@ impl Window {
                     if selected || (usable && app.gesture.hovered == Some(cell.hit)) {
                         // 用户要求：选中/悬停一律用灰色，不要蓝色。
                         // 取文字色（白）降透明度当灰底 —— 透底之上就是一层中性灰。
-                        let mut gray = if selected { color(p.active) } else { color(p.hover) };   // ★ Aero: 选中淡蓝 / 悬停更淡蓝
-                        gray.a = if selected { 0.92 } else { 0.55 };
+                        let mut gray = color(p.active);   // ★ 选中与悬停**同色**（用户要求 ✓）
+                        gray.a = if selected { 0.92 } else { 0.92 };
                         brush.SetColor(&gray);
                         target.FillRectangle(&rect, &brush);
                     }
