@@ -1,4 +1,4 @@
-# deploy-install.ps1 — 编译并直接安装到安装路径
+﻿# deploy-install.ps1 — 编译并直接安装到安装路径
 #
 # 用法（普通权限即可，内部会用 sudo 提权做写入）：
 #   powershell -ExecutionPolicy Bypass -File script\deploy-install.ps1
@@ -69,7 +69,9 @@ Write-Ok '文件已同步'
 if (-not $NoRestart) {
     Write-Step '重启栈（从安装目录启动）'
     Get-Process -Name 'weasel-broker', 'weasel-server', 'weasel-renderer' -ErrorAction SilentlyContinue |
-        ForEach-Object { Stop-Process -Id $_.Id -Force }
+        ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+    Get-Process -Name 'weasel-broker', 'weasel-server', 'weasel-renderer' -ErrorAction SilentlyContinue |
+        ForEach-Object { try { $_.WaitForExit(3000) } catch { } }
     Start-Sleep -Seconds 3
     $env:WEASEL_TRACE_COMMIT = '1'
     Start-Process -FilePath (Join-Path $InstallDir 'weasel-broker.exe') -WorkingDirectory $InstallDir
