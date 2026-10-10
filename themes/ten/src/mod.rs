@@ -523,7 +523,8 @@ impl Window {
                 let width = c.layout.width;
                 let height = c.layout.height;
                 if width > 0.0 && height > 0.0 {
-                    let radius = 8.0_f32.min(height / 2.0).min(width / 2.0);
+                    // 圆角半径 = 高度的四分之一（用户指定），并保证不超出半宽。
+                    let radius = (height / 4.0).min(width / 2.0);
                     // 面板本体：圆角矩形 + 15% 淡罩
                     let mut fill = color(p.background);
                     fill.a = 0.15;
