@@ -260,3 +260,26 @@ rime.dll  (静态, C++)  ← librime 强制要求静态的薄适配层
      并把今天所有格式更新写进去。
   L4 产出 %APPDATA%\Rime-Next\plugin\input_staticstic\statistics.lua，在方案里挂 lua_translator@statistics。
   L5 Rust/C++ 版保留（rime.dll 内），二者不冲突；文档说明取舍。
+
+## 决定：不自己做插件宿主插件，直接用原版 rime-lua（已定）
+
+用户决定：
+- **去掉自建插件宿主 DLL**（原议的 weasel-plugin.dll / rime-plugin.dll 全部作废）。
+- **用原版 rime-lua 的机制**：与官方 Weasel 一致 —— librime 内嵌 lua（已完成 ✓：
+  lua_translator / lua_processor / lua_segmentor / lua_filter 均已在 rime.dll 中 ✓），
+  脚本放用户目录，入口 rime.lua，其余由脚本 require；不引入任何自研宿主或 ABI。
+
+官方 Weasel 0.17.4 实测（本机 C:\Program Files\Rime\weasel-0.17.4）：
+- rime.dll 3.57 MB，含 lua_translator / lua_processor / lua_segmentor / lua_filter、rime.lua、LUA_PATH ✓
+- 但它**不预置任何 .lua 脚本**（用户目录下既无 lua\ 也无 rime.lua）→ 脚本由用户或 plum 包提供。
+- 安装目录 = 7z.exe/7z.dll + curl.exe/curl-ca-bundle.crt + WinSparkle.dll + data\ + 若干 .bat。
+
+下载器：aria2 取代 curl（已定）
+- 下载场景 aria2 完全覆盖 curl：-o 输出、-c 续传、--ca-certificate 指定 CA、-i 批量、
+  -x/-s 多线程（curl 没有），仅缺少上传/任意动词（本用途不需要）。
+- 因此程序文件夹放 aria2-next\（aria2c 改名 aria2-next），不再放 curl。
+
+Lua 插件的落位（按官方约定 ✓）：
+  用户目录\plugin\input_staticstic\statistics.lua   ← 插件脚本（用户指定目录名 input_staticstic）
+  用户目录\rime.lua                                 ← 入口：把 plugin\input_staticstic 加入 package.path 再 require
+  方案里：lua_translator@statistics（或 lua_processor@…，视插件类型）
