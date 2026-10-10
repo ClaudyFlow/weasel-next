@@ -1,0 +1,70 @@
+# Weasel-Next 主题参数（TOML 约定 v1）
+#
+# 位置约定：theme/<主题名>/<主题名>.theme.toml
+#   · 文件名 = 文件夹名 = 主题名；DLL 为 themes/weasel_theme_<主题名>.dll
+#   · 本文件是**参数快照**：把当前实现的参数保存下来，供主题引擎按参数绘制
+#   · 颜色统一写 0xRRGGBB（不透明基准色）；透明度写在 [glass] / [shadow] 里
+#
+# 本文件 = 当前正在使用的 "ten" 主题（自绘 Direct2D 玻璃，非 Win11/WinUI）
+
+schema_version = 1
+name = "ten"
+title = "十 · 自绘 D2D 玻璃"
+style = "d2d"
+variant = "auto"            # auto | light | dark（auto = 跟随系统深浅色）
+
+[geometry]
+# 与 themes/ten/src/logic.rs 的常量一一对应
+scale = 0.6764706           # SCALE = 46.0 / 68.0
+height = 46.0               # HEIGHT，行高（DIP）
+indicator = 36.0            # INDICATOR_SIZE，模式指示器尺寸
+number_size = 27.058823     # NUMBER = 40.0 * SCALE，候选序号字号
+pad = 12.176470             # PAD = 18.0 * SCALE，左右内边距
+corner_radius = 8.0         # 圆角半径（DIP）
+item_gap = 0.0              # 候选间距
+
+[light]
+background = 0xF8F8F8
+border = 0xD9D9D9
+active = 0xA6D8FF
+hover = 0xDCDCDC
+text = 0x111111
+secondary = 0x555555
+active_number = 0x3E4A52
+disabled = 0xA5A5A5
+
+[dark]
+background = 0x202020
+border = 0x484848
+active = 0x164E70
+hover = 0x383838
+text = 0xF5F5F5
+secondary = 0xBEBEBE
+active_number = 0xD6EDFF
+disabled = 0x777777
+
+[glass]
+# 现在 ten 的做法：DwmEnableBlurBehindWindow + 半透明底 + 高光描边
+enabled = true
+blur = true                 # 背景模糊（DWM blur behind）
+tint = 0xFFFFFF             # 玻璃着色
+tint_opacity = 0.55         # 玻璃底不透明度（0..1）
+highlight = 0.55            # 顶部高光强度（0..1）
+highlight_height = 0.5      # 高光覆盖比例（0..1，从顶部往下）
+refraction = 0.0            # 折射强度（px）—— ten 未启用（0）
+chromatic = 0.0             # 色散强度（px）—— ten 未启用（0）
+thickness = 0.0             # 玻璃厚度（影响折射位移换算）—— ten 未启用（0）
+border_light = 0xFFFFFF     # 内高光描边
+border_dark = 0x000000      # 外描边
+
+[shadow]
+enabled = true
+color = 0x000000
+opacity = 0.28
+radius = 12.0
+offset_y = 4.0
+
+[layout]
+direction = "horizontal"    # 候选排列方向
+number_style = "plain"      # 序号样式：plain | dotted | none
+comment_position = "after"  # 注释（如拼音）位置：after | above | none
