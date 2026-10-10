@@ -25,7 +25,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$stage = Join-Path $root 'artifact\smoke'
+$stage = Join-Path $root 'target\release'   # 直接取编译输出（不再经 artifact\smoke，避免装到旧产物）
 $clsid = 'HKLM\Software\Classes\CLSID\{16A7AEA9-9EE6-4540-8020-E384C0489BB1}\InprocServer32'
 
 function Write-Step($text) { Write-Host "== $text" -ForegroundColor Cyan }
@@ -56,6 +56,8 @@ $elevated = @(
     ('robocopy "{0}" "{1}" /E /XF *.old-* *.previous* *.log /NFL /NDL /NJH /NJS /R:1 /W:1' -f $stage, $InstallDir),
     ('robocopy "{0}\Rime-Next" "{1}\Rime-Next" /E /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
     ('robocopy "{0}\tools\7z" "{1}\7z" /E /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
+    ('robocopy "{0}\target\release" "{1}\themes" weasel_theme_*.dll /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
+    ('robocopy "{0}\Rime-Next\sound" "{1}\Rime-Next\sound" /E /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
     # 清理已迁移的旧扁平 yaml：源已放进 schema\<方案>\，目标里残留的扁平副本要删掉
     ('for %F in ("{1}\Rime-Next\*.schema.yaml" "{1}\Rime-Next\*.dict.yaml") do if exist "%F" del /f /q "%F"' -f $root, $InstallDir),
     # 清掉早先留下的旧文件（安装目录里不该有它们）
