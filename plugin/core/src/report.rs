@@ -392,21 +392,12 @@ pub fn format_report(input: &ReportInput<'_>) -> String {
     } else {
         1.0
     };
-    let avg_touch = stats.avg_spd * stats.avg_code_len / 60.0;
     let _ = write!(
         slots[6],
         "\n误触按键 {} 次，误触率 {:.0}%，键准 {:.0}%",
         err_count,
         err_ratio,
         accuracy * 100.0
-    );
-    let _ = write!(
-        slots[6],
-        "\n实际击键 {:.1}，理论击键 {:.1}，实际码长 {:.1}，理论码长 {:.1}",
-        avg_touch,
-        avg_touch * accuracy,
-        stats.avg_code_len,
-        stats.avg_code_len * accuracy
     );
     if long && !input.avg_code_len_desc.is_empty() {
         slots[6].push('\n');
