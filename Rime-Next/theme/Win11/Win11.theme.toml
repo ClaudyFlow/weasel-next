@@ -16,7 +16,6 @@
 
 schema_version = 1
 name = "eleven"
-windows = "11"           # 对应 Windows 11（文件夹与文件名: Win.11）
 title = "十一 · Windows 11 亚克力"
 style = "d2d"               # 目标实现：Direct2D 自绘（替代当前 XAML Island ✗）
 variant = "auto"

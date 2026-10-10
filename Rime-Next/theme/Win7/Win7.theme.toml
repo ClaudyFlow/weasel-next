@@ -15,7 +15,6 @@
 
 schema_version = 1
 name = "seven"
-windows = "7"           # 对应 Windows 7（文件夹与文件名: Win.7）
 title = "七 · Win7 Aero 玻璃"
 style = "d2d"
 variant = "light"           # Aero 是亮色玻璃；暗色版可另存 seven-dark

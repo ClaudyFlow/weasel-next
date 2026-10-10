@@ -15,7 +15,6 @@
 
 schema_version = 1
 name = "ten"
-windows = "10"           # 对应 Windows 10（文件夹与文件名: Win.10）
 title = "十 · Windows 10 扁平"
 style = "d2d"
 variant = "auto"
