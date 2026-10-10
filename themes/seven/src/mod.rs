@@ -531,7 +531,7 @@ impl Window {
                     // 原来 15% 在深色背景上几乎看不出轮廓 → 圆角"像没了" ✗；
                     // 透明度低一点（40%）才既有玻璃感、又能看清圆角形状。
                     let mut fill = color(p.background);
-                    fill.a = 0.40;
+                    fill.a = 0.26;   // 更透（0.40 偏实 ✗）
                     brush.SetColor(&fill);
                     target.FillRoundedRectangle(
                         &D2D1_ROUNDED_RECT {
@@ -570,18 +570,18 @@ impl Window {
                         hl.a = 0.72 * (1.0 - f) * (1.0 - f);
                         brush.SetColor(&hl);
                         let y0 = i as f32 * band_h;
-                        target.FillRectangle(&rect(radius, y0, width - radius, y0 + band_h), &brush);
+                        target.FillRectangle(&rect(radius * 0.4, y0, width - radius * 0.4, y0 + band_h), &brush);   // 高光带铺满（含左右上角附近 ✓ 左右对称 ✓）
                     }
                     let mut hl_line = color(0xffffff);
                     hl_line.a = 0.85;
                     brush.SetColor(&hl_line);
                     target.FillRectangle(&rect(radius, 0.0, width - radius, 1.0), &brush);
                     // 左右淡边（同样内缩 radius，止于上下圆角之间）
-                    highlight.a = 0.22;
+                    highlight.a = 0.34;   // 左右竖边更明显（原来 0.22 太弱 ✗）
                     brush.SetColor(&highlight);
-                    target.FillRectangle(&rect(0.0, radius, 1.0, height - radius), &brush);
+                    let mut edge_blue = color(p.active); edge_blue.a = 0.30; brush.SetColor(&edge_blue);   // ★ 左侧高光蓝边（与右侧对称 ✓）`r`n                    target.FillRectangle(&rect(0.0, radius, 2.0, height - radius), &brush);`r`n                    brush.SetColor(&highlight);
                     target.FillRectangle(
-                        &rect(width - 1.0, radius, width, height - radius),
+                        &rect(width - 2.0, radius, width, height - radius),
                         &brush,
                     );
                     // 底部暗边（厚度感）
