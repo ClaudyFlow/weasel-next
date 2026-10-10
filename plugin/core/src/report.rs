@@ -394,7 +394,7 @@ pub fn format_report(input: &ReportInput<'_>) -> String {
     };
     let _ = write!(
         slots[6],
-        "\n误触按键 {} 次 误触率 {:.0}% 键准 {:.0}%",
+        "\n误触 {} 次 误触率 {:.0}% 键准 {:.0}%",
         err_count,
         err_ratio,
         accuracy * 100.0
