@@ -351,20 +351,31 @@ pub fn format_report(input: &ReportInput<'_>) -> String {
     };
     let _ = write!(
         slots[5],
-        "极速 {:.1}，击键{:.1}（理论{:.1}），码长{:.1}（理论{:.1}）",
+        "实际极速 {:.1}，击键{:.1}，码长{:.1}",
         stats.fastest.spd,
         stats.fastest.key_touch_spd,
+        stats.fastest.avg_code_len
+    );
+    let _ = write!(
+        slots[6],
+        "实际均速 {:.1}，击键{:.1}，码长{:.1}",
+        stats.avg_spd,
+        stats.avg_spd * stats.avg_code_len / 60.0,
+        stats.avg_code_len
+    );
+    // 理论值 = 实际值 × 键准（有效按键 / 按键）。
+    let _ = write!(
+        slots[6],
+        "\n理论极速 {:.1}，击键{:.1}，码长{:.1}",
+        stats.fastest.spd,
         stats.fastest.key_touch_spd * accuracy,
-        stats.fastest.avg_code_len,
         stats.fastest.avg_code_len * accuracy
     );
     let _ = write!(
         slots[6],
-        "均速 {:.1}，击键{:.1}（理论{:.1}），码长{:.1}（理论{:.1}）",
+        "\n理论均速 {:.1}，击键{:.1}，码长{:.1}",
         stats.avg_spd,
-        stats.avg_spd * stats.avg_code_len / 60.0,
         stats.avg_spd * stats.avg_code_len / 60.0 * accuracy,
-        stats.avg_code_len,
         stats.avg_code_len * accuracy
     );
     let err_count = (input.bucket.key_touch_cnt - input.bucket.total_code_len_without_space).max(0);
