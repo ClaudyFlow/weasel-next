@@ -5,7 +5,7 @@ mod manifest;
 
 fn main() {
     // 只有构建 Slint 界面（`gui` 特性）时才生成 windows 绑定与 .slint 代码。
-    // Tauri 版以 default-features = false 依赖本包的库目标，不需要这些产物。
+    
     if std::env::var_os("CARGO_FEATURE_GUI").is_none() {
         println!("cargo:rerun-if-env-changed=CARGO_FEATURE_GUI");
         return;

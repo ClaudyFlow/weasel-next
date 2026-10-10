@@ -7,7 +7,7 @@ mod colors;
 mod frame;
 mod updater;
 mod wasm_modules;
-// 框架无关的设置核心来自 weasel_settings 库：与 Tauri 设置界面共用同一套实现
+// 框架无关的设置核心来自 weasel_settings 库
 // （配置文档读写与冲突检测、主题目录发现、表单字段模型、应用选项编辑）。
 use weasel_settings::{app_options, catalog, config, form};
 use slint::{ComponentHandle, Model, VecModel};

@@ -6,7 +6,7 @@ members = [
     "broker",
     "server",
     "renderer",
-    # Both settings front ends ship side by side: the Slint one (weasel-settings)
+    # 设置界面（Slint 版）
     # experimental panel. Keep both buildable so either can be launched.
     "settings",
     "common",

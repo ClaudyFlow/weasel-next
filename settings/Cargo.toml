@@ -6,7 +6,7 @@ edition = "2024"
 license.workspace = true
 
 # 框架无关的设置核心（配置文档、目录发现、schema 元数据、表单字段、应用选项）。
-# Tauri 版以 default-features = false 依赖它，因此不会把 Slint/GPU 后端拖进 Tauri 程序。
+
 [lib]
 name = "weasel_settings"
 path = "src/lib.rs"
