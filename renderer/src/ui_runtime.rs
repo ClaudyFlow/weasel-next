@@ -29,12 +29,14 @@ fn theme_candidates(preferred: &str) -> Vec<&'static dyn ThemeFactory> {
     static ABC: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
     static VOID: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
     static WASM: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
+static SEVEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
     let preferred = match preferred {
         "eleven" => "eleven",
         "ten" => "ten",
         "abc" => "abc",
         "void" => "void",
         "wasm" => "wasm",
+            "seven" => "seven",
         _ => "ten",
     };
     std::iter::once(preferred)
@@ -46,6 +48,7 @@ fn theme_candidates(preferred: &str) -> Vec<&'static dyn ThemeFactory> {
                 "abc" => &ABC,
                 "void" => &VOID,
                 "wasm" => &WASM,
+                "seven" => &SEVEN,
                 _ => unreachable!("candidate names are normalized above"),
             };
             let loaded = slot.get_or_init(|| {
@@ -53,9 +56,19 @@ fn theme_candidates(preferred: &str) -> Vec<&'static dyn ThemeFactory> {
                 let directory = executable
                     .parent()
                     .ok_or("renderer has no executable directory")?;
-                let path = directory
-                    .join("themes")
-                    .join(format!("weasel_theme_{name}.dll"));
+                let directory = std::env::current_exe()
+            .map_err(|error| error.to_string())?
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .ok_or("renderer executable has no directory")?;
+        // 主题 DLL 直接放在 renderer 所在目录（程序文件夹根）；兼容旧的 themes\ 子目录。
+        let file = format!("weasel_theme_{name}.dll");
+        let root_path = directory.join(&file);
+        let path = if root_path.is_file() {
+            root_path
+        } else {
+            directory.join("themes").join(&file)
+        };
                 crate::theme_dll::Factory::load(name, &path)
             });
             match loaded {

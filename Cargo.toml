@@ -13,6 +13,7 @@ members = [
     "theme-api",
     "themes/support",
     "themes/ten",
+    "themes/seven",
     "themes/eleven",
     "themes/abc",
     "themes/void",
