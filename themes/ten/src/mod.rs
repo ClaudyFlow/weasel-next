@@ -643,8 +643,8 @@ impl Window {
                         }
                         hit => {
                             let glyph = match hit {
-                                Hit::Previous => "\u{E76B}",
-                                Hit::Next => "\u{E76C}",
+                                Hit::Previous => "\u{2039}",   // ‹ 用普通文字字体画 ✓ 图标字体可能缺字形 ✗
+                                Hit::Next => "\u{203A}",   // › 同上 ✓
                                 _ => "\u{E76E}",
                             };
                             let mut icon_rect = rect;
@@ -653,7 +653,7 @@ impl Window {
                             text(
                                 target,
                                 &brush,
-                                &app.graphics.icon,
+                                &app.graphics.number,   // 箭头与表情改用正文/数字字体 ✓ 保证有字形 ✓
                                 glyph,
                                 icon_rect,
                                 if usable { p.text } else { p.disabled },

@@ -533,7 +533,7 @@ impl Window {
                     // 原来 15% 在深色背景上几乎看不出轮廓 → 圆角"像没了" ✗；
                     // 透明度低一点（40%）才既有玻璃感、又能看清圆角形状。
                     let mut fill = color(p.background);
-                    fill.a = 0.18;   // 更透（用户要求先透明 ✓）
+                    fill.a = 1.0;   // 面板用真彩色 ✓ 透明由整窗 LWA_ALPHA 提供（否则 DWM 忽略逐像素 alpha → 又暗又平 ✗）
                     brush.SetColor(&fill);
                     target.FillRoundedRectangle(
                         &D2D1_ROUNDED_RECT {
@@ -582,8 +582,8 @@ impl Window {
                     highlight.a = 0.34;   // 左右竖边更明显（原来 0.22 太弱 ✗）
                     brush.SetColor(&highlight);
                     // ★ 左右两侧对称的高光蓝边（Aero 的玻璃侧壁反光 ✓）
-                    let mut edge_blue = color(p.active);
-                    edge_blue.a = 0.30;
+                    let mut edge_blue = color(0xffffff);   // ★ 白色高光边（用户要的高光 ✓ 不要蓝 ✗）
+                    edge_blue.a = 0.40;
                     brush.SetColor(&edge_blue);
                     target.FillRectangle(&rect(0.0, radius, 2.0, height - radius), &brush);
                     target.FillRectangle(&rect(width - 2.0, radius, width, height - radius), &brush);
@@ -665,8 +665,8 @@ impl Window {
                         }
                         hit => {
                             let glyph = match hit {
-                                Hit::Previous => "\u{E76B}",
-                                Hit::Next => "\u{E76C}",
+                                Hit::Previous => "\u{2039}",   // ‹ 用普通文字字体画 ✓ 图标字体可能缺字形 ✗
+                                Hit::Next => "\u{203A}",   // › 同上 ✓
                                 _ => "\u{E76E}",
                             };
                             let mut icon_rect = rect;
@@ -675,7 +675,7 @@ impl Window {
                             text(
                                 target,
                                 &brush,
-                                &app.graphics.icon,
+                                &app.graphics.number,   // 箭头与表情改用正文/数字字体 ✓ 保证有字形 ✓
                                 glyph,
                                 icon_rect,
                                 if usable { p.text } else { p.disabled },
