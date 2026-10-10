@@ -112,7 +112,7 @@ Write-Host ""
 
 # A) 共享数据 -> <程序目录>\Rime-Next\rime-data
 Copy-Tree -Source (Join-Path $OfficialInstall 'data') `
-          -Destination (Join-Path $TargetExeDir 'rime-data') `
+          -Destination (Join-Path (Join-Path $TargetExeDir 'Rime-Next') 'rime-data') `
           -Label 'A) 共享数据（方案 / 词典 / opencc / preview）'
 
 # B) 用户数据 -> %APPDATA%\Weasel-Next\Rime
