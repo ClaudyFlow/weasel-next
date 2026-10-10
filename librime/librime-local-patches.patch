@@ -1,13 +1,473 @@
-﻿warning: in the working copy of 'src/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
+﻿diff --git a/.clang-format b/.clang-format
+index 5cb4553..744dd97 100644
+--- a/.clang-format
++++ b/.clang-format
+@@ -1,2 +1,358 @@
+-BasedOnStyle: Chromium
+-SortIncludes: false
++---
++Language:        Cpp
++AlignAfterOpenBracket: true
++AccessModifierOffset: -1
++AlignArrayOfStructures: None
++AlignConsecutiveAssignments:
++  Enabled:         false
++  AcrossEmptyLines: false
++  AcrossComments:  false
++  AlignCompound:   false
++  AlignFunctionDeclarations: false
++  AlignFunctionPointers: false
++  PadOperators:    true
++AlignConsecutiveBitFields:
++  Enabled:         false
++  AcrossEmptyLines: false
++  AcrossComments:  false
++  AlignCompound:   false
++  AlignFunctionDeclarations: false
++  AlignFunctionPointers: false
++  PadOperators:    false
++AlignConsecutiveDeclarations:
++  Enabled:         false
++  AcrossEmptyLines: false
++  AcrossComments:  false
++  AlignCompound:   false
++  AlignFunctionDeclarations: true
++  AlignFunctionPointers: false
++  PadOperators:    false
++AlignConsecutiveMacros:
++  Enabled:         false
++  AcrossEmptyLines: false
++  AcrossComments:  false
++  AlignCompound:   false
++  AlignFunctionDeclarations: false
++  AlignFunctionPointers: false
++  PadOperators:    false
++AlignConsecutiveShortCaseStatements:
++  Enabled:         false
++  AcrossEmptyLines: false
++  AcrossComments:  false
++  AlignCaseArrows: false
++  AlignCaseColons: false
++AlignConsecutiveTableGenBreakingDAGArgColons:
++  Enabled:         false
++  AcrossEmptyLines: false
++  AcrossComments:  false
++  AlignCompound:   false
++  AlignFunctionDeclarations: false
++  AlignFunctionPointers: false
++  PadOperators:    false
++AlignConsecutiveTableGenCondOperatorColons:
++  Enabled:         false
++  AcrossEmptyLines: false
++  AcrossComments:  false
++  AlignCompound:   false
++  AlignFunctionDeclarations: false
++  AlignFunctionPointers: false
++  PadOperators:    false
++AlignConsecutiveTableGenDefinitionColons:
++  Enabled:         false
++  AcrossEmptyLines: false
++  AcrossComments:  false
++  AlignCompound:   false
++  AlignFunctionDeclarations: false
++  AlignFunctionPointers: false
++  PadOperators:    false
++AlignEscapedNewlines: Left
++AlignOperands:   Align
++AlignTrailingComments:
++  AlignPPAndNotPP: true
++  Kind:            Always
++  OverEmptyLines:  0
++AllowAllArgumentsOnNextLine: true
++AllowAllParametersOfDeclarationOnNextLine: false
++AllowBreakBeforeNoexceptSpecifier: Never
++AllowBreakBeforeQtProperty: false
++AllowShortBlocksOnASingleLine: Never
++AllowShortCaseExpressionOnASingleLine: true
++AllowShortCaseLabelsOnASingleLine: false
++AllowShortCompoundRequirementOnASingleLine: true
++AllowShortEnumsOnASingleLine: true
++AllowShortFunctionsOnASingleLine: Inline
++AllowShortIfStatementsOnASingleLine: Never
++AllowShortLambdasOnASingleLine: All
++AllowShortLoopsOnASingleLine: false
++AllowShortNamespacesOnASingleLine: false
++AlwaysBreakAfterDefinitionReturnType: None
++AlwaysBreakBeforeMultilineStrings: true
++AttributeMacros:
++  - __capability
++  - absl_nonnull
++  - absl_nullable
++  - absl_nullability_unknown
++BinPackArguments: true
++BinPackLongBracedList: true
++BinPackParameters: OnePerLine
++BitFieldColonSpacing: Both
++BracedInitializerIndentWidth: -1
++BraceWrapping:
++  AfterCaseLabel:  false
++  AfterClass:      false
++  AfterControlStatement: Never
++  AfterEnum:       false
++  AfterExternBlock: false
++  AfterFunction:   false
++  AfterNamespace:  false
++  AfterObjCDeclaration: false
++  AfterStruct:     false
++  AfterUnion:      false
++  BeforeCatch:     false
++  BeforeElse:      false
++  BeforeLambdaBody: false
++  BeforeWhile:     false
++  IndentBraces:    false
++  SplitEmptyFunction: true
++  SplitEmptyRecord: true
++  SplitEmptyNamespace: true
++BreakAdjacentStringLiterals: true
++BreakAfterAttributes: Leave
++BreakAfterJavaFieldAnnotations: false
++BreakAfterOpenBracketBracedList: false
++BreakAfterOpenBracketFunction: false
++BreakAfterOpenBracketIf: false
++BreakAfterOpenBracketLoop: false
++BreakAfterOpenBracketSwitch: false
++BreakAfterReturnType: None
++BreakArrays:     true
++BreakBeforeBinaryOperators: None
++BreakBeforeCloseBracketBracedList: false
++BreakBeforeCloseBracketFunction: false
++BreakBeforeCloseBracketIf: false
++BreakBeforeCloseBracketLoop: false
++BreakBeforeCloseBracketSwitch: false
++BreakBeforeConceptDeclarations: Always
++BreakBeforeBraces: Attach
++BreakBeforeInlineASMColon: OnlyMultiline
++BreakBeforeTemplateCloser: false
++BreakBeforeTernaryOperators: true
++BreakBinaryOperations: Never
++BreakConstructorInitializers: BeforeColon
++BreakFunctionDefinitionParameters: false
++BreakInheritanceList: BeforeColon
++BreakStringLiterals: true
++BreakTemplateDeclarations: Yes
++ColumnLimit:     80
++CommentPragmas:  '^ IWYU pragma:'
++CompactNamespaces: false
++ConstructorInitializerIndentWidth: 4
++ContinuationIndentWidth: 4
++Cpp11BracedListStyle: AlignFirstComment
++DerivePointerAlignment: false
++DisableFormat:   false
++EmptyLineAfterAccessModifier: Never
++EmptyLineBeforeAccessModifier: LogicalBlock
++EnumTrailingComma: Leave
++ExperimentalAutoDetectBinPacking: false
++FixNamespaceComments: true
++ForEachMacros:
++  - foreach
++  - Q_FOREACH
++  - BOOST_FOREACH
++IfMacros:
++  - KJ_IF_MAYBE
++IncludeBlocks:   Preserve
++IncludeCategories:
++  - Regex:           '^<ext/.*\.h>'
++    Priority:        2
++    SortPriority:    0
++    CaseSensitive:   false
++  - Regex:           '^<.*\.h>'
++    Priority:        1
++    SortPriority:    0
++    CaseSensitive:   false
++  - Regex:           '^<.*'
++    Priority:        2
++    SortPriority:    0
++    CaseSensitive:   false
++  - Regex:           '.*'
++    Priority:        3
++    SortPriority:    0
++    CaseSensitive:   false
++IncludeIsMainRegex: '([-_](test|unittest))?$'
++IncludeIsMainSourceRegex: ''
++IndentAccessModifiers: false
++IndentCaseBlocks: false
++IndentCaseLabels: true
++IndentExportBlock: true
++IndentExternBlock: AfterExternBlock
++IndentGotoLabels: true
++IndentPPDirectives: None
++IndentRequiresClause: true
++IndentWidth:     2
++IndentWrappedFunctionNames: false
++InsertBraces:    false
++InsertNewlineAtEOF: false
++InsertTrailingCommas: None
++IntegerLiteralSeparator:
++  Binary:          0
++  BinaryMinDigitsInsert: 0
++  BinaryMaxDigitsRemove: 0
++  Decimal:         0
++  DecimalMinDigitsInsert: 0
++  DecimalMaxDigitsRemove: 0
++  Hex:             0
++  HexMinDigitsInsert: 0
++  HexMaxDigitsRemove: 0
++  BinaryMinDigits: 0
++  DecimalMinDigits: 0
++  HexMinDigits:    0
++JavaScriptQuotes: Leave
++JavaScriptWrapImports: true
++KeepEmptyLines:
++  AtEndOfFile:     false
++  AtStartOfBlock:  false
++  AtStartOfFile:   true
++KeepFormFeed:    false
++LambdaBodyIndentation: Signature
++LineEnding:      DeriveLF
++MacroBlockBegin: ''
++MacroBlockEnd:   ''
++MainIncludeChar: Quote
++MaxEmptyLinesToKeep: 1
++NamespaceIndentation: None
++NumericLiteralCase:
++  ExponentLetter:  Leave
++  HexDigit:        Leave
++  Prefix:          Leave
++  Suffix:          Leave
++ObjCBinPackProtocolList: Never
++ObjCBlockIndentWidth: 2
++ObjCBreakBeforeNestedBlockParam: true
++ObjCSpaceAfterProperty: false
++ObjCSpaceBeforeProtocolList: true
++OneLineFormatOffRegex: ''
++PackConstructorInitializers: NextLine
++PenaltyBreakAssignment: 2
++PenaltyBreakBeforeFirstCallParameter: 1
++PenaltyBreakBeforeMemberAccess: 150
++PenaltyBreakComment: 300
++PenaltyBreakFirstLessLess: 120
++PenaltyBreakOpenParenthesis: 0
++PenaltyBreakScopeResolution: 500
++PenaltyBreakString: 1000
++PenaltyBreakTemplateDeclaration: 10
++PenaltyExcessCharacter: 1000000
++PenaltyIndentedWhitespace: 0
++PenaltyReturnTypeOnItsOwnLine: 200
++PointerAlignment: Left
++PPIndentWidth:   -1
++QualifierAlignment: Leave
++RawStringFormats:
++  - Language:        Cpp
++    Delimiters:
++      - cc
++      - CC
++      - cpp
++      - Cpp
++      - CPP
++      - 'c++'
++      - 'C++'
++    CanonicalDelimiter: ''
++    BasedOnStyle:    google
++  - Language:        TextProto
++    Delimiters:
++      - pb
++      - PB
++      - proto
++      - PROTO
++    EnclosingFunctions:
++      - EqualsProto
++      - EquivToProto
++      - PARSE_PARTIAL_TEXT_PROTO
++      - PARSE_TEST_PROTO
++      - PARSE_TEXT_PROTO
++      - ParseTextOrDie
++      - ParseTextProtoOrDie
++      - ParseTestProto
++      - ParsePartialTestProto
++    CanonicalDelimiter: pb
++    BasedOnStyle:    google
++ReferenceAlignment: Pointer
++ReflowComments:  Always
++RemoveBracesLLVM: false
++RemoveEmptyLinesInUnwrappedLines: false
++RemoveParentheses: Leave
++RemoveSemicolon: false
++RequiresClausePosition: OwnLine
++RequiresExpressionIndentation: OuterScope
++SeparateDefinitionBlocks: Leave
++ShortNamespaceLines: 1
++SkipMacroDefinitionBody: false
++SortIncludes:
++  Enabled:         false
++  IgnoreCase:      false
++  IgnoreExtension: false
++SortJavaStaticImport: Before
++SortUsingDeclarations: LexicographicNumeric
++SpaceAfterCStyleCast: false
++SpaceAfterLogicalNot: false
++SpaceAfterOperatorKeyword: false
++SpaceAfterTemplateKeyword: true
++SpaceAroundPointerQualifiers: Default
++SpaceBeforeAssignmentOperators: true
++SpaceBeforeCaseColon: false
++SpaceBeforeCpp11BracedList: false
++SpaceBeforeCtorInitializerColon: true
++SpaceBeforeInheritanceColon: true
++SpaceBeforeJsonColon: false
++SpaceBeforeParens: ControlStatements
++SpaceBeforeParensOptions:
++  AfterControlStatements: true
++  AfterForeachMacros: true
++  AfterFunctionDefinitionName: false
++  AfterFunctionDeclarationName: false
++  AfterIfMacros:   true
++  AfterNot:        false
++  AfterOverloadedOperator: false
++  AfterPlacementOperator: true
++  AfterRequiresInClause: false
++  AfterRequiresInExpression: false
++  BeforeNonEmptyParentheses: false
++SpaceBeforeRangeBasedForLoopColon: true
++SpaceBeforeSquareBrackets: false
++SpaceInEmptyBraces: Never
++SpacesBeforeTrailingComments: 2
++SpacesInAngles:  Never
++SpacesInContainerLiterals: true
++SpacesInLineCommentPrefix:
++  Minimum:         1
++  Maximum:         -1
++SpacesInParens:  Never
++SpacesInParensOptions:
++  ExceptDoubleParentheses: false
++  InCStyleCasts:   false
++  InConditionalStatements: false
++  InEmptyParentheses: false
++  Other:           false
++SpacesInSquareBrackets: false
++Standard:        Auto
++StatementAttributeLikeMacros:
++  - Q_EMIT
++StatementMacros:
++  - Q_UNUSED
++  - QT_REQUIRE_VERSION
++TableGenBreakInsideDAGArg: DontBreak
++TabWidth:        8
++UseTab:          Never
++VerilogBreakBetweenInstancePorts: true
++WhitespaceSensitiveMacros:
++  - BOOST_PP_STRINGIZE
++  - CF_SWIFT_NAME
++  - NS_SWIFT_NAME
++  - PP_STRINGIZE
++  - STRINGIZE
++WrapNamespaceBodyWithEmptyLines: Leave
++...
++
+diff --git a/cmake/AddRCInfo.cmake b/cmake/AddRCInfo.cmake
+index 5c6db8b..17bd2ff 100644
+--- a/cmake/AddRCInfo.cmake
++++ b/cmake/AddRCInfo.cmake
+@@ -48,7 +48,8 @@ else(build_release)
+     set(arch_suffix "Win32")
+   endif()
+ 
+-  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang") # clang
++  # rime-speed-stats: clang+mingw 走 windres，只有 MSVC 风格的 clang 才用 llvm-rc
++if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang") # clang
+     set(arch_suffix "${arch_suffix} clang")
+   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU") # mingw
+     set(arch_suffix "${arch_suffix} mingw")
+@@ -62,7 +63,8 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+   set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} -c 65001")
+ endif()
+ # if clang build, use llvm-rc to compile resource file
+-if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
++# rime-speed-stats: clang+mingw 走 windres，只有 MSVC 风格的 clang 才用 llvm-rc
++if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+   set(CMAKE_RC_COMPILER "llvm-rc")
+   set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} -finput-charset=UTF-8")
+ endif()
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 9493f3f..bfc704f 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -174,3 +174,19 @@ if(DEFINED RIME_SETUP_EXTRA_MODULES)
+   target_compile_definitions(${rime_library} PRIVATE
+     "RIME_EXTRA_MODULES=${RIME_SETUP_EXTRA_MODULES}")
+ endif()
++
++# >>> rime-speed-stats input_stat plugin (build-librime-mingw.ps1) >>>
++if(RIME_INPUT_STAT_CORE_LIB)
++  add_subdirectory("C:/code/Weasel-Next/plugin/librime" "${CMAKE_BINARY_DIR}/rime-input-stat")
++  target_link_libraries(rime rime-input-stat)  # plain 签名：librime 自己第 84 行用的是 plain
++  # RIME_MODULE_INITIALIZER 在 GCC/Clang 下是 __attribute__((constructor))：只要插件对象
++  # 被链进来，注册就会在 DLL 加载时自动发生。但静态库对象默认不会被拉入（librime 传下来的
++  # RIME_EXTRA_MODULES 在 MinGW 下是空串，没有任何未定义符号引用它），因此这里生成一个
++  # 强制引用，保证 rime_require_module_input_stat 所在的 .o 进入 rime.dll。
++  set(_force "${CMAKE_BINARY_DIR}/rime-input-stat/force_link.cc")
++  file(WRITE "${_force}"
++    "void rime_require_module_input_stat();\n"
++    "namespace { struct ForceInputStatsLink { ForceInputStatsLink() { rime_require_module_input_stat(); } } force_input_stat_link; }\n")
++  target_sources(rime PRIVATE "${_force}")
++endif()
++# <<< rime-speed-stats input_stat plugin <<<
+diff --git a/src/rime/dict/level_db.cc b/src/rime/dict/level_db.cc
+index 9a2eb3d..022f37f 100644
+--- a/src/rime/dict/level_db.cc
++++ b/src/rime/dict/level_db.cc
+@@ -1,4 +1,4 @@
+-//
++﻿//
+ // Copyright RIME Developers
+ // Distributed under the BSD License
+ //
+@@ -325,6 +325,16 @@ bool LevelDb::CommitTransaction() {
+   return ok;
+ }
+ 
++namespace {
++// [weasel-rs 补丁] 把所有 userdb 库目录统一放进 <user_data>/userdb/ 子目录，
++// 由 UserDbWrapper<LevelDb> 这一处中心点统一生效（所有词库、所有方案）。
++path weasel_userdb_path(const path& file_path) {
++  path dir = file_path.parent_path() / "userdb";
++  std::error_code ec;
++  std::filesystem::create_directories(dir, ec);
++  return dir / file_path.filename();
++}
++}  // namespace
+ template <>
+ RIME_DLL string UserDbComponent<LevelDb>::extension() const {
+   return ".userdb";
+@@ -333,6 +343,6 @@ RIME_DLL string UserDbComponent<LevelDb>::extension() const {
+ template <>
+ RIME_DLL UserDbWrapper<LevelDb>::UserDbWrapper(const path& file_path,
+                                                const string& db_name)
+-    : LevelDb(file_path, db_name, "userdb") {}
++    : LevelDb(weasel_userdb_path(file_path), db_name, "userdb") {}
+ 
+ }  // namespace rime
 diff --git a/src/rime/resource.cc b/src/rime/resource.cc
-index ff639c9..995906e 100644
+index ef7c6d9..995906e 100644
 --- a/src/rime/resource.cc
 +++ b/src/rime/resource.cc
-@@ -33,10 +33,27 @@ path ResourceResolver::ResolvePath(const string& resource_id) {
-   // 子目录里没有、扁平位置有时回退到扁平 → 兼容旧安装。
-   const auto flat = std::filesystem::absolute(
-       root_path_ / (type_.prefix + resource_id + type_.suffix));
--  if (boost::ends_with(type_.suffix, ".bin")) {
+@@ -1,4 +1,4 @@
+-//
++﻿//
+ // Copyright RIME Developers
+ // Distributed under the BSD License
+ //
+@@ -27,8 +27,38 @@ string ResourceResolver::ToFilePath(const string& resource_id) const {
+ }
+ 
+ path ResourceResolver::ResolvePath(const string& resource_id) {
+-  return std::filesystem::absolute(root_path_ /
+-                                   (type_.prefix + resource_id + type_.suffix));
++  // [Weasel-Next 补丁] 编译产物（*.bin）按方案归入子目录：
++  //   <root>/<方案>/<方案><后缀>   例如 build/sancang_simp/sancang_simp.table.bin
++  // 其余资源（*.yaml / *.gram 等）保持扁平，避免影响配置与语言模型查找。
++  // 子目录里没有、扁平位置有时回退到扁平 → 兼容旧安装。
++  const auto flat = std::filesystem::absolute(
++      root_path_ / (type_.prefix + resource_id + type_.suffix));
 +  // [Weasel-Next 补丁] 按内容类型固定子目录（写死在引擎里）：
 +  //   *.bin    → <root>/<方案>/<方案>.<类型>.bin      （编译产物，一方案一文件夹）
 +  //   *.gram   → <root>/model/<名字>.gram             （语言模型，全部放 model/）
@@ -27,10 +487,13 @@ index ff639c9..995906e 100644
 +    subdir = "plugin";                          // plugin/（脚本）
 +  }
 +  if (!subdir.empty()) {
-     const auto nested = std::filesystem::absolute(
--        root_path_ / resource_id /
--        (type_.prefix + resource_id + type_.suffix));
++    const auto nested = std::filesystem::absolute(
 +        root_path_ / subdir / (type_.prefix + resource_id + type_.suffix));
-     if (std::filesystem::exists(nested) || !std::filesystem::exists(flat)) {
-       return nested;
-     }
++    if (std::filesystem::exists(nested) || !std::filesystem::exists(flat)) {
++      return nested;
++    }
++  }
++  return flat;
+ }
+ 
+ path FallbackResourceResolver::ResolvePath(const string& resource_id) {
