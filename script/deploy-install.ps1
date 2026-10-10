@@ -65,6 +65,33 @@ $log = Invoke-ElevatedScript -Lines $elevated
 if ($log -notmatch 'DONE') { Write-Warn2 '提权脚本未正常结束，请检查输出' ; $log | ForEach-Object { Write-Host "     $_" } }
 Write-Ok '文件已同步'
 
+# 2.5) 安装时解压语言模型（仓库里只放压缩包：* gram.7z 与分卷 * gram.7z.001/002）
+#      - 若目标已有解压好的 .gram 则跳过（避免每次部署都解压 450 MB）
+#      - 优先用随包的 7z\7z.exe，其次系统的 7-Zip；都没有则给出提示并继续
+$modelDir = Join-Path $InstallDir 'Rime-Next\model'
+if (Test-Path $modelDir) {
+    $archives = @(Get-ChildItem $modelDir -File -Filter '*.gram.7z' -ErrorAction SilentlyContinue)
+    $plain = @(Get-ChildItem $modelDir -File -Filter '*.gram' -ErrorAction SilentlyContinue)
+    if ($archives.Count -gt 0 -and $plain.Count -lt $archives.Count) {
+        $sevenZip = @(
+            (Join-Path $InstallDir '7z\7z.exe'),
+            (Join-Path $InstallDir '7z.exe'),
+            "$env:ProgramFiles\7-Zip\7z.exe",
+            "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if ($sevenZip) {
+            Write-Step '解压语言模型（7z，安装时需要）'
+            foreach ($a in $archives) {
+                & $sevenZip x $a.FullName ("-o" + $modelDir) -y -bso0 -bsp0 | Out-Null
+                Write-Ok ("解压 {0}（退出码 {1}）" -f $a.Name, $LASTEXITCODE)
+            }
+        } else {
+            Write-Warn2 '未找到 7z.exe：语言模型未解压（把 7z.exe 放到 7z\ 目录即可）'
+        }
+    } else {
+        Write-Ok '语言模型已解压，跳过'
+    }
+}
 # 3) 重启栈（从安装目录启动）
 if (-not $NoRestart) {
     Write-Step '重启栈（从安装目录启动）'

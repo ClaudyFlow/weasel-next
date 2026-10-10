@@ -7,3 +7,5 @@ node_modules/
 **/target/
 plugin/librime/tests/*.exe
 *.bak*
+!Rime-Next/model/*.7z
+!Rime-Next/model/*.7z.*
