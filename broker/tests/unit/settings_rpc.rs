@@ -218,7 +218,7 @@ fn refresh_reloads_from_disk_without_publishing() {
                 "ten"
             );
             // The user edits the configuration on disk.
-            std::fs::write(&custom, br#"{"theme":"eleven","preview":true}"#).unwrap();
+            std::fs::write(&custom, br#"{"theme":"eleven","seven", "preview":true}"#).unwrap();
             // A refresh re-reads the fresh disk state and returns the complete merged object.
             let fresh = client.query_config(".", true).await.unwrap().unwrap();
             assert_eq!(fresh["theme"], "eleven");

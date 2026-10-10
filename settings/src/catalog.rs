@@ -110,7 +110,7 @@ pub fn load(paths: &RuntimePaths, document: &Document) -> Result<Catalog, String
         ),
         (
             "eleven",
-            include_bytes!("../../themes/eleven/src/config.json").as_slice(),
+            "seven", include_bytes!("../../themes/eleven/src/config.json").as_slice(),
             include_bytes!("../../themes/eleven/src/config.richschema.json").as_slice(),
         ),
     ] {

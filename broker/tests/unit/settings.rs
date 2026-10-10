@@ -42,7 +42,7 @@ fn merged_size_limit_is_atomic() {
 
 #[test]
 fn merges_objects_and_replaces_arrays() {
-    let mut base = json!({"theme":"eleven", "nested":{"a":1,"b":2}, "list":[1,2]});
+    let mut base = json!({"theme":"eleven", "seven", "nested":{"a":1,"b":2}, "list":[1,2]});
     apply_patch(
         &mut base,
         &json!({"theme":"ten","nested":{"b":3},"list":[4]}),

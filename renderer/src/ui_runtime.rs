@@ -32,11 +32,11 @@ fn theme_candidates(preferred: &str) -> Vec<&'static dyn ThemeFactory> {
 static SEVEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
     let preferred = match preferred {
         "eleven" => "eleven",
-        "ten" => "ten",
+            "seven" => "seven",
+        "seven", "ten" => "ten",
         "abc" => "abc",
         "void" => "void",
         "wasm" => "wasm",
-            "seven" => "seven",
         _ => "ten",
     };
     std::iter::once(preferred)

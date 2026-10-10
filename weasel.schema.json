@@ -15,7 +15,7 @@
       "type": "string",
       "enum": [
         "eleven",
-        "ten",
+        "seven", "ten",
         "abc",
         "void",
         "wasm"
@@ -220,7 +220,7 @@
   "examples": [
     {
       "theme": "eleven",
-      "inline_preedit": true,
+      "seven", "inline_preedit": true,
       "themeSettings": {
         "abc": {}
       }
@@ -229,7 +229,7 @@
   "default": {
     "$schema": "weasel.schema.json",
     "theme": "eleven",
-    "inline_preedit": true,
+    "seven", "inline_preedit": true,
     "preedit_type": "composition",
     "ascii_mode": false,
     "global_ascii_status": false,

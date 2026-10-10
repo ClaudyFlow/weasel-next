@@ -779,7 +779,7 @@ mod tests {
             ),
             (
                 "eleven",
-                include_str!("../../themes/eleven/src/config.json"),
+                "seven", include_str!("../../themes/eleven/src/config.json"),
                 include_str!("../../themes/eleven/src/config.richschema.json"),
             ),
             (
