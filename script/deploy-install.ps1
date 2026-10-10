@@ -54,7 +54,7 @@ Write-Step "同步到安装目录 $InstallDir"
 $elevated = @(
     ('if not exist "{0}" mkdir "{0}"' -f $InstallDir),
     ('robocopy "{0}" "{1}" /E /XF *.old-* *.previous* *.log /NFL /NDL /NJH /NJS /R:1 /W:1' -f $stage, $InstallDir),
-    ('robocopy "{0}\asset" "{1}\asset" /E /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
+    ('robocopy "{0}\Rime-Next" "{1}\Rime-Next" /E /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
     # 清掉早先留下的旧文件（安装目录里不该有它们）
     ('del /f /q "{0}\weasel_tip.previous.dll" 2>nul' -f $InstallDir),
     ('del /f /q "{0}\weasel-server.previous.exe" 2>nul' -f $InstallDir),
