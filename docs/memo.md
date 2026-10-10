@@ -133,3 +133,35 @@ C:\Program Files\Weasel-Next\
 - NSIS 本身是单线程、无真正线程原语 → "双线程"用**分离进程**实现，效果等同（互不阻塞）；
 - 首次方案编译耗时较长（`pinyin_simp.dict.yaml` 31 MB），所以必须异步；
 - 若部署失败，安装仍然算成功，由首次启动兜底重试，避免"装到一半失败"。
+
+## 插件架构（用户澄清的设计 + 落地约束）
+
+用户要的结构：
+```
+代码文件夹\plugin\
+    core\              插件接口 / SDK（Rust，公共 ABI 契约）
+    <内置插件>\         内置插件实现（统计插件等）
+程序文件夹\
+    plugin.dll         插件的接口层（宿主，导出稳定 C ABI）
+    rime.dll           librime 本体
+用户文件夹\
+    plugin\<插件名>\   单独的插件代码（Rust，可扩展；不是数据）
+```
+
+落地约束（必须知道的事实）：
+1. librime 在 Windows 上**不加载外部 DLL 插件**（plugins\ 目录里的 DLL 不会被加载）→ 需要进入
+   librime 翻译器链的插件（如统计插件）**只能静态编进 rime.dll**；rime.dll 就是它的二进制载体。
+2. 因此"插件接口 plugin.dll"只能是我们**自己的宿主**：由 weasel-server 加载 plugin.dll（Rust cdylib，
+   导出 C ABI），plugin.dll 再去加载/托管各插件。librime 那条链上的插件不受它影响。
+3. "用户文件夹放 Rust 源码"要能**被程序编译**，需要用户机上有 Rust 工具链（重，不可行）→ 实际做法二选一：
+   (a) 用户文件夹放**编译好的插件 DLL**（plugin\<名字>\<名字>.dll + plugin.toml 元数据）；
+   (b) 放源码仅供开发/查看，真正加载的是 DLL。
+   两者都需要先有 (2) 的宿主 plugin.dll。
+
+任务拆分（待做）：
+  T1 在 plugin\ 下新增 core 的稳定 C ABI 面（版本号、注册表、生命周期回调）。
+  T2 新增宿主 crate（输出 plugin.dll 到程序文件夹），实现：扫描 用户目录\plugin\*\plugin.toml、
+     加载其中的 DLL、按 ABI 调用、做版本校验与隔离（崩溃不影响宿主）。
+  T3 weasel-server 启动时加载 plugin.dll（可选，缺失则静默跳过）。
+  T4 统计插件保持静态编进 rime.dll（librime 链约束），只在文档里说明它为何不是独立 DLL。
+  T5 安装器把 plugin.dll 放进程序文件夹；用户目录建立 plugin\ 空目录 + README（已有）。
