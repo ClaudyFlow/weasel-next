@@ -105,7 +105,7 @@ impl Librime {
         let library = RimeLibrary::load(&base_dir.join("rime.dll"))?;
         let api = unsafe { RimeLibraryApi::load(library.api().as_ptr(), false)? };
         let app_name = CString::new("rime.weasel-next").expect("static app name has no NUL");
-        let shared_data_dir = CString::new(base_dir.join("rime-data").to_string_lossy().as_bytes())
+        let shared_data_dir = CString::new(base_dir.join("Rime-Next").to_string_lossy().as_bytes())
             .map_err(|error| format!("invalid shared data directory path: {error}"))?;
         let user_data_dir = path_string(user_data_dir)?;
         let mut traits: raw::RimeTraits = unsafe { std::mem::zeroed() };
@@ -138,7 +138,7 @@ impl Librime {
         let library = RimeLibrary::load(&base_dir.join("rime.dll"))?;
         let api = unsafe { RimeLibraryApi::load(library.api().as_ptr(), true)? };
         let app_name = CString::new("rime.weasel-next").expect("static app name has no NUL");
-        let shared_data_dir = CString::new(base_dir.join("rime-data").to_string_lossy().as_bytes())
+        let shared_data_dir = CString::new(base_dir.join("Rime-Next").to_string_lossy().as_bytes())
             .map_err(|error| format!("invalid shared data directory path: {error}"))?;
         let user_data_dir = path_string(user_data_dir)?;
         let log_dir = CString::new("").expect("empty string has no NUL");

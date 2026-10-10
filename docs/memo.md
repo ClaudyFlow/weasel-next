@@ -224,3 +224,39 @@ rime.dll  (静态, C++)  ← librime 强制要求静态的薄适配层
   S3 rime.dll 的 C++ 胶水层 LoadLibraryW("rime-plugin.dll")；找不到则退化为内置实现。
   S4 weasel-server 启动时确保宿主已加载。
   S5 安装器放 rime-plugin.dll；用户目录 plugin\<名>\ 放插件代码；示例 Lua 插件随包提供。
+
+## 统计插件做回 Lua（用户要求，待实现）
+
+素材（已定位）：
+- 基础：`C:\code\rime-lua\lua\input_statistics.lua`（53,892 字节，经典全功能版，Rust 端就是由它合并而来）。
+- 现状参照：`%APPDATA%\Rime-Next\statistics.lua`（25,534 字节，snow 系；命令 tj/rtj/ztj/ytj/ntj/qtj、tjq、tjs；
+  量：词数/字数/用时/按键/有效按键/键准/均速/极速/击键/码长/理论码长/平均词长/多字词占比/词长分布/码长分布）。
+- 今天新增（Rust 端已有，要全部搬进 Lua）：
+  * 四行式：实际极速 / 实际均速 / 理论极速 / 理论均速，每行「速度 击键 码长」；
+  * 理论值 = 实际值 x 键准（有效按键/按键）；键准、码长在标题行；
+  * 「上屏 N 次 输入 M 字」；时间戳与时区之间留空格（UTC+08:00）；
+  * 「误触」改为「误触」并附 误触率 + 键准；逗号改空格；
+  * 名言前固定一行「知识从我而来，问题到我为止。」；
+  * 署名行 `脚本：🐐🪶❄️₂₀₂₆1010・A`；
+  * 存储改 LevelDB（当前 Rust 端写 userdb/input_stat.userdb）。
+
+放置位置（用户指定）：
+```
+%APPDATA%\Rime-Next\plugin\input_staticstic\     ← 单独的文件夹（用户指定的拼写 input_staticstic）
+      statistics.lua                             ← 合并后的 Lua 插件
+      README.txt
+```
+
+前置条件（关键）：
+- 当前 librime **没有 Lua 运行时**（无 lua_State / 无 rime-lua 插件）→ 必须先静态编入 `C:\code\rime-lua`，
+  才能提供 lua_translator / lua_processor 组件。
+- rime-lua 默认从 `<user_data>/lua/` 找脚本 → 需要改成 `plugin\input_staticstic\`（或加该目录到搜索路径），
+  与"lua 改名 plugin"的既定结构一致。
+
+步骤：
+  L1 把 rime-lua 静态链进 librime，确认 lua_translator 组件可用。
+  L2 改 rime-lua 的脚本目录为 <user_data>/plugin/input_staticstic（可回退到 <user_data>/lua）。
+  L3 合并两个 Lua 源：以 rime-lua/lua/input_statistics.lua 为骨架，吸收 snow 版的设备维度(tjq/tjs)，
+     并把今天所有格式更新写进去。
+  L4 产出 %APPDATA%\Rime-Next\plugin\input_staticstic\statistics.lua，在方案里挂 lua_translator@statistics。
+  L5 Rust/C++ 版保留（rime.dll 内），二者不冲突；文档说明取舍。
