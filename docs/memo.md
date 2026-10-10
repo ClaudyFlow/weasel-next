@@ -62,3 +62,29 @@ model/<名字>.gram                   语言模型    （直接放好，librime 
 | 名言库 `quote.txt` | `<用户目录>\plugin\quote.txt` |
 | 旧统计文本（仅首次迁移用） | `<用户目录>\plugin\input_stat_<方案>.lua` |
 | 统计数据库（LevelDB） | `<用户目录>\userdb\input_stat.userdb`（保持与“所有 `*.userdb` 都在 `userdb\` 下”一致） |
+
+## 程序文件夹与 asset 的结构（已定，待实现）
+
+单一配置文件夹原则：配置只有一份，就是用户目录 `%APPDATA%\Rime-Next\`；
+仓库里的 `asset\` 只作**出厂默认**来源，编译时搬进程序文件夹。
+
+```
+asset\                     仓库里（出厂默认与程序资源）
+  Rime-Next\               ← 出厂默认配置（编译时整个搬到程序文件夹）
+      default.eassy.toml   ← 原 essay.txt（细胞词库/语言模型词表，TOML 格式）
+      …（schema / dict / theme / model 的默认内容）
+  icon\                    ← 程序图标（11 个 .ico，各组件共用 weasel.ico）
+  sound\                   ← 键声/上屏声（typewriter-key.wav / typewriter-bell.wav）
+  rime-data\               ← 官方 Rime 数据（方案/词典/opencc，供部署时同步）
+```
+
+编译/安装：
+- `asset\Rime-Next\` →  `C:\Program Files\Weasel-Next\Rime-Next\`（程序文件夹里也有一份）
+- 用户实际用的是 `%APPDATA%\Rime-Next\`（唯一的活动配置文件夹）
+- 于是不必再考虑"多个配置文件夹"的问题。
+
+文件格式：
+- 细胞词库统一叫 `*.eassy.toml`（注意拼写是 **eassy**），出厂默认那份叫 **`default.eassy.toml`**；
+- 多份 eassy 由部署流程按词归并（频次求和）后生成 librime 需要的 `essay.txt`（或 `<名字>.txt` + `vocabulary:`）。
+
+安装路径（首字母大写）：`C:\Program Files\Weasel-Next\`；代码目录 `C:\code\Weasel-Next\`。
