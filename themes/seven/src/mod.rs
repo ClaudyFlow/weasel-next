@@ -619,7 +619,7 @@ impl Window {
                         // 用户要求：选中/悬停一律用灰色，不要蓝色。
                         // 取文字色（白）降透明度当灰底 —— 透底之上就是一层中性灰。
                         let mut gray = color(p.active);   // ★ 选中与悬停**同色**（用户要求 ✓）
-                        gray.a = if selected { 0.92 } else { 0.92 };
+                        gray.a = 1.0;   // ★ 高亮：选中/悬停块完全不透明，在黑底上最醒目 ✓
                         brush.SetColor(&gray);
                         target.FillRectangle(&rect, &brush);
                     }
@@ -948,7 +948,7 @@ unsafe fn apply_round_region(hwnd: HWND, width: f32, height: f32) {
     }
     // 分层窗口：让整个（已裁剪为圆角的）窗口带一点透明度（LWA_ALPHA 是统一 alpha ✓）
     const LWA_ALPHA: u32 = 0x2;
-    SetLayeredWindowAttributes(hwnd, 0, 205, LWA_ALPHA);   // 更透：205/255 ≈ 80%（236 偏实 ✗）
+    SetLayeredWindowAttributes(hwnd, 0, 216, LWA_ALPHA);   // 216 ≈ 85%：兼顾"透"与白字够亮 ✓
 }
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     // Catch every Rust callback, including paint and event delivery, before ABI return.

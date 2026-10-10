@@ -228,7 +228,7 @@ impl Palette {
             Self {
                 background: 0x050505,
                 border: 0x3C3C3C,
-                active: 0x2F6FBF,
+                active: 0x4A9BEA,   // ★ 高亮：选中块用亮蓝 ✓
                 hover: 0x1E1E1E,
                 text: 0xFFFFFF,
                 secondary: 0xC8C8C8,
@@ -239,7 +239,7 @@ impl Palette {
             Self {
                 background: 0x0A0A0A,
                 border: 0x454545,
-                active: 0x3A82D2,
+                active: 0x4FA3F0,   // ★ 高亮：选中块用亮蓝 ✓
                 hover: 0x222222,
                 text: 0xFFFFFF,
                 secondary: 0xD0D0D0,
