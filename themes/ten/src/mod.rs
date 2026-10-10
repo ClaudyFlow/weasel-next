@@ -624,7 +624,7 @@ impl Window {
                                 &app.graphics.text,
                                 &item.primary_text,
                                 rect_with(rect, cell.left + NUMBER, cell.right - logic::PAD),
-                                if usable { p.text } else { p.disabled },
+                                p.text,   // 箭头始终用正文色 ✓ 否则没有下一页时会被画成浅灰看不见 ✗
                             );
                             if !item.secondary_text.is_empty() {
                                 text(
@@ -656,7 +656,7 @@ impl Window {
                                 &app.graphics.number,   // 箭头与表情改用正文/数字字体 ✓ 保证有字形 ✓
                                 glyph,
                                 icon_rect,
-                                if usable { p.text } else { p.disabled },
+                                p.text,   // 箭头始终用正文色 ✓ 否则没有下一页时会被画成浅灰看不见 ✗
                             );
                         }
                     }

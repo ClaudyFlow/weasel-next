@@ -582,7 +582,7 @@ impl Window {
                     highlight.a = 0.34;   // 左右竖边更明显（原来 0.22 太弱 ✗）
                     brush.SetColor(&highlight);
                     // ★ 左右两侧对称的高光蓝边（Aero 的玻璃侧壁反光 ✓）
-                    let mut edge_blue = color(0xffffff);   // ★ 白色高光边（用户要的高光 ✓ 不要蓝 ✗）
+                    let mut edge_blue = color(p.active_number);   // ★ 用户要求: 侧边用**深蓝色**（#2C4A66 ✓）
                     edge_blue.a = 0.40;
                     brush.SetColor(&edge_blue);
                     target.FillRectangle(&rect(0.0, radius, 2.0, height - radius), &brush);
@@ -646,7 +646,7 @@ impl Window {
                                 &app.graphics.text,
                                 &item.primary_text,
                                 rect_with(rect, cell.left + NUMBER, cell.right - logic::PAD),
-                                if usable { p.text } else { p.disabled },
+                                p.text,   // 箭头始终用正文色 ✓ 否则没有下一页时会被画成浅灰看不见 ✗
                             );
                             if !item.secondary_text.is_empty() {
                                 text(
@@ -678,7 +678,7 @@ impl Window {
                                 &app.graphics.number,   // 箭头与表情改用正文/数字字体 ✓ 保证有字形 ✓
                                 glyph,
                                 icon_rect,
-                                if usable { p.text } else { p.disabled },
+                                p.text,   // 箭头始终用正文色 ✓ 否则没有下一页时会被画成浅灰看不见 ✗
                             );
                         }
                     }
