@@ -1,4 +1,6 @@
-﻿diff --git a/.clang-format b/.clang-format
+﻿warning: in the working copy of '.clang-format', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
+diff --git a/.clang-format b/.clang-format
 index 5cb4553..744dd97 100644
 --- a/.clang-format
 +++ b/.clang-format
@@ -388,15 +390,9 @@ index 5c6db8b..17bd2ff 100644
    set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} -finput-charset=UTF-8")
  endif()
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 9493f3f..e5f1e59 100644
+index 9493f3f..bfc704f 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -1,4 +1,4 @@
--aux_source_directory(. rime_api_src)
-+﻿aux_source_directory(. rime_api_src)
- aux_source_directory(rime rime_base_src)
- aux_source_directory(rime/algo rime_algo_src)
- aux_source_directory(rime/config rime_config_src)
 @@ -174,3 +174,19 @@ if(DEFINED RIME_SETUP_EXTRA_MODULES)
    target_compile_definitions(${rime_library} PRIVATE
      "RIME_EXTRA_MODULES=${RIME_SETUP_EXTRA_MODULES}")
@@ -404,16 +400,85 @@ index 9493f3f..e5f1e59 100644
 +
 +# >>> rime-speed-stats input_stat plugin (build-librime-mingw.ps1) >>>
 +if(RIME_INPUT_STAT_CORE_LIB)
-+  add_subdirectory("C:/code/rime-speed-stats/plugin" "${CMAKE_BINARY_DIR}/rime-input-stats")
-+  target_link_libraries(rime rime-input-stats)  # plain 签名：librime 自己第 84 行用的是 plain
++  add_subdirectory("C:/code/Weasel-Next/plugin/librime" "${CMAKE_BINARY_DIR}/rime-input-stat")
++  target_link_libraries(rime rime-input-stat)  # plain 签名：librime 自己第 84 行用的是 plain
 +  # RIME_MODULE_INITIALIZER 在 GCC/Clang 下是 __attribute__((constructor))：只要插件对象
 +  # 被链进来，注册就会在 DLL 加载时自动发生。但静态库对象默认不会被拉入（librime 传下来的
 +  # RIME_EXTRA_MODULES 在 MinGW 下是空串，没有任何未定义符号引用它），因此这里生成一个
 +  # 强制引用，保证 rime_require_module_input_stat 所在的 .o 进入 rime.dll。
-+  set(_force "${CMAKE_BINARY_DIR}/rime-input-stats/force_link.cc")
++  set(_force "${CMAKE_BINARY_DIR}/rime-input-stat/force_link.cc")
 +  file(WRITE "${_force}"
 +    "void rime_require_module_input_stat();\n"
 +    "namespace { struct ForceInputStatsLink { ForceInputStatsLink() { rime_require_module_input_stat(); } } force_input_stat_link; }\n")
 +  target_sources(rime PRIVATE "${_force}")
 +endif()
 +# <<< rime-speed-stats input_stat plugin <<<
+diff --git a/src/rime/dict/level_db.cc b/src/rime/dict/level_db.cc
+index 9a2eb3d..022f37f 100644
+--- a/src/rime/dict/level_db.cc
++++ b/src/rime/dict/level_db.cc
+@@ -1,4 +1,4 @@
+-//
++﻿//
+ // Copyright RIME Developers
+ // Distributed under the BSD License
+ //
+@@ -325,6 +325,16 @@ bool LevelDb::CommitTransaction() {
+   return ok;
+ }
+ 
++namespace {
++// [weasel-rs 补丁] 把所有 userdb 库目录统一放进 <user_data>/userdb/ 子目录，
++// 由 UserDbWrapper<LevelDb> 这一处中心点统一生效（所有词库、所有方案）。
++path weasel_userdb_path(const path& file_path) {
++  path dir = file_path.parent_path() / "userdb";
++  std::error_code ec;
++  std::filesystem::create_directories(dir, ec);
++  return dir / file_path.filename();
++}
++}  // namespace
+ template <>
+ RIME_DLL string UserDbComponent<LevelDb>::extension() const {
+   return ".userdb";
+@@ -333,6 +343,6 @@ RIME_DLL string UserDbComponent<LevelDb>::extension() const {
+ template <>
+ RIME_DLL UserDbWrapper<LevelDb>::UserDbWrapper(const path& file_path,
+                                                const string& db_name)
+-    : LevelDb(file_path, db_name, "userdb") {}
++    : LevelDb(weasel_userdb_path(file_path), db_name, "userdb") {}
+ 
+ }  // namespace rime
+diff --git a/src/rime/resource.cc b/src/rime/resource.cc
+index ef7c6d9..ff639c9 100644
+--- a/src/rime/resource.cc
++++ b/src/rime/resource.cc
+@@ -1,4 +1,4 @@
+-//
++﻿//
+ // Copyright RIME Developers
+ // Distributed under the BSD License
+ //
+@@ -27,8 +27,21 @@ string ResourceResolver::ToFilePath(const string& resource_id) const {
+ }
+ 
+ path ResourceResolver::ResolvePath(const string& resource_id) {
+-  return std::filesystem::absolute(root_path_ /
+-                                   (type_.prefix + resource_id + type_.suffix));
++  // [Weasel-Next 补丁] 编译产物（*.bin）按方案归入子目录：
++  //   <root>/<方案>/<方案><后缀>   例如 build/sancang_simp/sancang_simp.table.bin
++  // 其余资源（*.yaml / *.gram 等）保持扁平，避免影响配置与语言模型查找。
++  // 子目录里没有、扁平位置有时回退到扁平 → 兼容旧安装。
++  const auto flat = std::filesystem::absolute(
++      root_path_ / (type_.prefix + resource_id + type_.suffix));
++  if (boost::ends_with(type_.suffix, ".bin")) {
++    const auto nested = std::filesystem::absolute(
++        root_path_ / resource_id /
++        (type_.prefix + resource_id + type_.suffix));
++    if (std::filesystem::exists(nested) || !std::filesystem::exists(flat)) {
++      return nested;
++    }
++  }
++  return flat;
+ }
+ 
+ path FallbackResourceResolver::ResolvePath(const string& resource_id) {
