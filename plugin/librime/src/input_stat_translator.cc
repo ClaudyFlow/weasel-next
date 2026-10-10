@@ -1,4 +1,4 @@
-﻿//
+//
 // input_stat_translator.cc — 见头文件说明。
 //
 
@@ -14,6 +14,7 @@
 #include <rime/candidate.h>
 #include <rime/config.h>
 #include <rime/context.h>
+#include <rime/dict/level_db.h>
 #include <rime/engine.h>
 #include <rime/schema.h>
 #include <rime/segmentation.h>
@@ -261,6 +262,48 @@ std::string InputStatsTranslator::StatsFilePath() const {
   return path.string();
 }
 
+namespace {
+
+/// 统计快照的 LevelDb 库目录：`<user_data>/userdb/input_stat.userdb`。
+/// 与 userdb 归置补丁一致 —— 所有 `*.userdb` 都放在 `Rime\userdb\` 下。
+std::string StatsDbPath(const std::string& stats_file_path) {
+  std::filesystem::path p(stats_file_path);
+  if (p.empty()) {
+    return std::string();
+  }
+  std::filesystem::path dir = p.parent_path().parent_path() / "userdb";
+  std::error_code error;
+  std::filesystem::create_directories(dir, error);
+  return (dir / "input_stat.userdb").string();
+}
+
+/// 快照键：整个统计文本作为一条记录存进 LevelDb（不再使用 txt 文件）。
+const char* const kSnapshotKey = "snapshot";
+
+bool ReadSnapshot(const std::string& db_path, std::string* text) {
+  if (db_path.empty()) {
+    return false;
+  }
+  rime::LevelDb db(db_path, "input_stat", "userdb");
+  if (!db.Open()) {
+    return false;
+  }
+  return db.Fetch(kSnapshotKey, text) && !text->empty();
+}
+
+bool WriteSnapshot(const std::string& db_path, const std::string& text) {
+  if (db_path.empty()) {
+    return false;
+  }
+  rime::LevelDb db(db_path, "input_stat", "userdb");
+  if (!db.Open()) {
+    return false;
+  }
+  return db.Update(kSnapshotKey, text);
+}
+
+}  // namespace
+
 void InputStatsTranslator::Load() {
   std::lock_guard<std::recursive_mutex> lock(g_stats_mutex);
   if (core_ == nullptr) {
@@ -271,19 +314,42 @@ void InputStatsTranslator::Load() {
     LOG(WARNING) << "input_stat: user data dir unavailable; statistics disabled.";
     return;
   }
+  const std::string db_path = StatsDbPath(path);
+  // 首选 LevelDb；不再读写 txt 文件。
+  std::string text;
+  if (ReadSnapshot(db_path, &text)) {
+    if (rime_input_stat_load(core_, text.data(), text.size()) == 0) {
+      LOG(WARNING) << "input_stat: failed to parse statistics snapshot from "
+                   << db_path;
+    }
+    return;
+  }
+  // 迁移：旧版本的 txt 还在 → 读入 → 立刻写进 LevelDb → 旧文件改名留档（不删）。
   std::ifstream file(path, std::ios::binary);
   if (!file) {
     // 首次使用：与 Lua 版一致，保持初始 schema，由 EnsureCurrent() 完成迁移。
-    DLOG(INFO) << "input_stat: no statistics file at " << path;
+    DLOG(INFO) << "input_stat: no statistics snapshot yet (" << db_path << ")";
     return;
   }
   std::ostringstream buffer;
   buffer << file.rdbuf();
-  const std::string text = buffer.str();
-  if (rime_input_stat_load(core_, text.data(), text.size()) == 0) {
-    LOG(WARNING) << "input_stat: failed to parse " << path
-                 << "; keeping in-memory state.";
+  const std::string legacy = buffer.str();
+  if (legacy.empty()) {
+    return;
   }
+  if (rime_input_stat_load(core_, legacy.data(), legacy.size()) == 0) {
+    LOG(WARNING) << "input_stat: failed to parse legacy " << path
+                 << "; keeping in-memory state.";
+    return;
+  }
+  char* snapshot = rime_input_stat_serialize(core_);
+  if (snapshot != nullptr) {
+    WriteSnapshot(db_path, std::string(snapshot));
+    rime_input_stat_string_free(snapshot);
+  }
+  std::error_code error;
+  std::filesystem::rename(path, path + ".migrated-leveldb", error);
+  LOG(INFO) << "input_stat: migrated legacy statistics into " << db_path;
 }
 
 void InputStatsTranslator::EnsureCurrent() {
@@ -309,16 +375,9 @@ void InputStatsTranslator::Save() {
   if (text == nullptr) {
     return;
   }
-  std::error_code error;
-  std::filesystem::create_directories(
-      std::filesystem::path(path).parent_path(), error);
-  {
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    if (file) {
-      file << text;
-    } else {
-      LOG(WARNING) << "input_stat: cannot write " << path;
-    }
+  const std::string db_path = StatsDbPath(path);
+  if (!WriteSnapshot(db_path, std::string(text))) {
+    LOG(WARNING) << "input_stat: cannot write statistics snapshot to " << db_path;
   }
   rime_input_stat_string_free(text);
 }
