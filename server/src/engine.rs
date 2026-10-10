@@ -1845,14 +1845,14 @@ mod sound_parse_tests {
     fn sound_parse_resolves_relative_asset() {
         let root = std::env::temp_dir().join(format!("weasel-asset-{}", std::process::id()));
         let exe_dir = root.join("artifact").join("smoke");
-        let sound_dir = root.join("asset").join("sound");
+        let sound_dir = root.join("Rime-Next").join("sound");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&exe_dir).unwrap();
         fs::create_dir_all(&sound_dir).unwrap();
         fs::write(sound_dir.join("typewriter-bell.wav"), b"x").unwrap();
         fs::write(sound_dir.join("typewriter-key.wav"), b"x").unwrap();
 
-        let json = r#"{ "asset": "asset", "sound": { "enabled": true, "key": "sound/typewriter-key.wav", "commit": "sound/typewriter-bell.wav" } }"#;
+        let json = r#"{ "asset": "Rime-Next", "sound": { "enabled": true, "key": "sound/typewriter-key.wav", "commit": "sound/typewriter-bell.wav" } }"#;
         let (enabled, key, commit) = parse_for_test(json, &exe_dir);
         assert!(enabled, "enabled 应为 true");
         let key = key.expect("key 应解析出路径");

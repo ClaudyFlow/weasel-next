@@ -365,7 +365,7 @@ fn embed_icons() {
     ]
     .into_iter()
     .map(|(name, file)| {
-        let path = root.join("../asset/icon").join(file);
+        let path = root.join("../Rime-Next/icon").join(file);
         println!("cargo:rerun-if-changed={}", path.display());
         let path = path
             .to_str()

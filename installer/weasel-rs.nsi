@@ -45,8 +45,8 @@ VIAddVersionKey /LANG=2052 "FileVersion" "${PRODUCT_VERSION}"
 VIAddVersionKey /LANG=2052 "ProductVersion" "${PRODUCT_VERSION}"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "Weasel-Next contributors"
 
-!define MUI_ICON "${PROJECT_ROOT}\asset\icon\weasel.ico"
-!define MUI_UNICON "${PROJECT_ROOT}\asset\icon\weasel.ico"
+!define MUI_ICON "${PROJECT_ROOT}\Rime-Next\icon\weasel.ico"
+!define MUI_UNICON "${PROJECT_ROOT}\Rime-Next\icon\weasel.ico"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TEXT "欢迎安装小狼毫 RS，中州韵输入法的 Windows 文本服务框架前端。"
 !insertmacro MUI_PAGE_WELCOME

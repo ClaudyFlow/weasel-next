@@ -1,4 +1,4 @@
-{
+﻿{
     "$schema":  "https://schema.tauri.app/config/2",
     "productName":  "Weasel-Next Settings",
     "version":  "0.1.0",
@@ -29,7 +29,7 @@
                    "active":  true,
                    "targets":  "msi",
                    "icon":  [
-                                "../../asset/icon/weasel.ico"
+                                "../../Rime-Next/icon/weasel.ico"
                             ],
                    "category":  "Utility",
                    "shortDescription":  "Weasel-Next settings panel",

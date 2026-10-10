@@ -79,7 +79,7 @@ asset\                     仓库里（出厂默认与程序资源）
 ```
 
 编译/安装：
-- `asset\Rime-Next\` →  `C:\Program Files\Weasel-Next\Rime-Next\`（程序文件夹里也有一份）
+- `Rime-Next\` →  `C:\Program Files\Weasel-Next\Rime-Next\`（程序文件夹里也有一份）
 - 用户实际用的是 `%APPDATA%\Rime-Next\`（唯一的活动配置文件夹）
 - 于是不必再考虑"多个配置文件夹"的问题。
 
@@ -107,7 +107,7 @@ C:\Program Files\Weasel-Next\
   weasel-broker.exe · weasel-server.exe · weasel-renderer.exe · weasel-settings.exe
   weasel_tip.dll · rime.dll · libc++.dll · libglog.dll · libopencc.dll · libunwind.dll · WebView2Loader.dll
   themes\                      ← 主题 DLL
-  Rime-Next\                   ← ★ 唯一的配置文件夹（= asset\Rime-Next 整棵搬过来）
+  Rime-Next\                   ← ★ 唯一的配置文件夹（= Rime-Next 整棵搬过来）
   7z\                          ← 以后放 7z.exe（解压）      【不急】
   aria2-next\                  ← 以后放 aria2-next.exe（下载）【不急】
 ```

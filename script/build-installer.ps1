@@ -35,7 +35,7 @@ try {
         'target\x86_64-pc-windows-msvc\release\weasel_tip.dll',
         'target\i686-pc-windows-msvc\release\weasel_tip.dll',
         'artifact\smoke\rime.dll',
-        'asset\Rime-Next\rime-data\default.yaml',
+        'Rime-Next\rime-data\default.yaml',
                 'target\x86_64-pc-windows-msvc\release\weasel_broker.pdb',
         'target\x86_64-pc-windows-msvc\release\weasel_server.pdb',
         'target\x86_64-pc-windows-msvc\release\weasel_renderer.pdb',
@@ -44,7 +44,7 @@ try {
         'target\i686-pc-windows-msvc\release\weasel_tip.pdb',
         'artifact\vcredist\vc_redist.x86.exe',
         'artifact\vcredist\vc_redist.x64.exe',
-        'asset\icon\weasel.ico',
+        'Rime-Next\icon\weasel.ico',
         'server\src\styles-LICENSE.txt',
         'LICENSE',
         'THIRD-PARTY-LICENSES.txt',
@@ -82,10 +82,10 @@ try {
     $payloadRemovalPaths = [Collections.Generic.List[string]]::new()
     $payloadDestinations = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($payload in @(
-        @{ Macro = 'RimePayload'; RemoveMacro = 'RemoveRimePayload'; ValidateMacro = 'ValidateRimePayloadRemoval'; Source = 'asset\Rime-Next\rime-data'; Target = 'Rime-Next\rime-data' },
+        @{ Macro = 'RimePayload'; RemoveMacro = 'RemoveRimePayload'; ValidateMacro = 'ValidateRimePayloadRemoval'; Source = 'Rime-Next\rime-data'; Target = 'Rime-Next\rime-data' },
         @{ Macro = 'WasmPayload'; RemoveMacro = 'RemoveWasmPayload'; ValidateMacro = 'ValidateWasmPayloadRemoval'; Source = 'artifact\theme-wasm'; Target = 'theme-wasm' },
         # 按键/上屏音效：随包安装到 $INSTDIR\Rime-Next\sound，服务端按配置的 asset 目录解析 sound/。
-        @{ Macro = 'SoundsPayload'; RemoveMacro = 'RemoveSoundsPayload'; ValidateMacro = 'ValidateSoundsPayloadRemoval'; Source = 'asset\Rime-Next\sound'; Target = 'Rime-Next\sound' }
+        @{ Macro = 'SoundsPayload'; RemoveMacro = 'RemoveSoundsPayload'; ValidateMacro = 'ValidateSoundsPayloadRemoval'; Source = 'Rime-Next\sound'; Target = 'Rime-Next\sound' }
     )) {
         $files = @()
         $payloadLines.Add('!macro ' + $payload.Macro)
