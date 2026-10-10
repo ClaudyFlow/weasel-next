@@ -7,10 +7,8 @@ members = [
     "server",
     "renderer",
     # Both settings front ends ship side by side: the Slint one (weasel-settings)
-    # is feature complete, the Tauri one (weasel-settings-tauri) is the newer
     # experimental panel. Keep both buildable so either can be launched.
     "settings",
-    "settings-tauri/src-tauri",
     "common",
     "theme-api",
     "themes/support",
