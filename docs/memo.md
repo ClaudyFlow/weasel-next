@@ -283,3 +283,16 @@ Lua 插件的落位（按官方约定 ✓）：
   用户目录\plugin\input_staticstic\statistics.lua   ← 插件脚本（用户指定目录名 input_staticstic）
   用户目录\rime.lua                                 ← 入口：把 plugin\input_staticstic 加入 package.path 再 require
   方案里：lua_translator@statistics（或 lua_processor@…，视插件类型）
+
+## 决策：所有图形界面统一使用 Direct2D（已定）
+
+- 候选窗、状态窗、设置界面、预览窗 —— 全部 GUI 一律 Direct2D/DirectWrite 自绘，
+  统一由 Rust + Direct2D 实现，不引入 WebView、不使用 XAML、不再新建 Slint 界面。
+- 原因：只有 Direct2D 这条路能做到真·液态玻璃（透明 + DWM 背景模糊 + 圆角高光 + 折射位移 + 厚度色散）。
+  Slint 与 Tauri/WebView2 都拿不到窗口背后的像素，也没有 D2D 效果链，做不出折射。
+- 现状：候选窗已是 D2D（themes\ten ✓）；设置界面目前是 Slint（weasel-settings）→ 计划改为 D2D 自绘。
+- 设置界面改造要复用现有非 UI 核心：settings 库里的字段模型、校验、会话读写与框架无关，
+  可直接被 D2D 前端调用；只需替换 UI 层。
+- 迁移顺序：先做主题化外壳（窗口/圆角/玻璃）→ 再逐页迁移（常规/外观/按键/词典/关于）→ 最后删除 Slint 依赖。
+- 性能约定：设置界面同样采用 D2D1_ALPHA_MODE_PREMULTIPLIED + DwmEnableBlurBehindWindow，
+  与候选窗共用一份 D2D 绑定（themes\support\build_d2d.rs 生成的绑定）。
