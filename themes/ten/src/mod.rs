@@ -539,6 +539,20 @@ impl Window {
                         },
                         &brush,
                     );
+                    // 圆角描边：沿圆角勾一道亮边 —— 轮廓明确，不再依赖填充对比度。
+                    let mut outline = color(0xffffff);
+                    outline.a = 0.35;
+                    brush.SetColor(&outline);
+                    target.DrawRoundedRectangle(
+                        &D2D1_ROUNDED_RECT {
+                            rect: rect(0.5, 0.5, width - 0.5, height - 0.5),
+                            radiusX: radius,
+                            radiusY: radius,
+                        },
+                        &brush,
+                        1.0,
+                        None,
+                    );
                     // 镜面高光：顶边 2px 亮线（沿直线段内缩 radius，避免戳出圆角）
                     let mut highlight = color(0xffffff);
                     highlight.a = 0.65;
