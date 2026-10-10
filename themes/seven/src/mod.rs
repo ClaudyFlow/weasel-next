@@ -277,7 +277,7 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
         }
         let blur = DwmBlurBehind {
             flags: DWM_BB_ENABLE,
-            enable: 1,
+            enable: 0,   // [Weasel-Next] 关掉整窗 DWM 模糊: blur_region=NULL 会按矩形铺满窗口, 圆角之外会露出方形模糊层
             blur_region: 0,
             transition_on_maximized: 0,
         };
