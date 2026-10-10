@@ -1,4 +1,4 @@
-//! 原生外观预览控制器。
+﻿//! 原生外观预览控制器。
 
 use crate::{d2d_bindings::*, theme_api::UiMode, ui_runtime::UiHandle};
 use std::{cell::Cell, sync::mpsc, thread};
@@ -229,7 +229,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
                                             w!("刷新失败，原预览保持不变"),
                                         );
                                         if let Err(dialog_error) = TaskDialog::new(
-                                            "小狼毫RS：外观预览",
+                                            "小狼毫Next：外观预览",
                                             "刷新失败，原预览保持不变",
                                         )
                                         .owner(hwnd.0 as usize)
@@ -304,7 +304,7 @@ pub fn run() -> Result<(), String> {
         let hwnd = CreateWindowExW(
             WS_EX_CONTROLPARENT as u32,
             class,
-            w!("小狼毫RS：外观预览"),
+            w!("小狼毫Next：外观预览"),
             WS_OVERLAPPEDWINDOW as u32,
             0,
             0,

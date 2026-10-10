@@ -447,7 +447,7 @@ pub(crate) mod sound {
         let Some(close) = text[open..].find('}').map(|i| open + i) else {
             return config;
         };
-        // `asset` 指定资源根目录（如 C:/code/weasel-rs/asset），key/commit 等子路径相对它解析；
+        // `asset` 指定资源根目录（如 C:/code/weasel-next/asset），key/commit 等子路径相对它解析；
         // 未配置时退回 exe 所在目录 —— 安装后的布局（$INSTDIR\sound\…）正是这种情况。
         let base: Option<PathBuf> = {
             let mut found = None;

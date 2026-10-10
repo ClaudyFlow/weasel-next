@@ -1,7 +1,7 @@
 ﻿<#
 .SYNOPSIS
     用 llvm-mingw（clang + libc++）从源码构建 librime，并把 input_stat 统计插件静态链进去，
-    产出一个**自带统计插件**的 rime.dll——与 weasel-rs 其余部分同一套 mingw ABI。
+    产出一个**自带统计插件**的 rime.dll——与 weasel-next 其余部分同一套 mingw ABI。
 
 .DESCRIPTION
     Windows 上 librime 不加载外部 DLL 插件（plugins/plugins_module.cc 的 _WIN32 分支为空），
@@ -213,15 +213,15 @@ function Build-Librime {
     & $cmake --build $BuildDir -j $Jobs --target rime
     if ($LASTEXITCODE -ne 0) { throw "librime 构建失败（exit $LASTEXITCODE）" }
 
-    # MinGW 下产物名是 librime.dll（目标名 rime 带 lib 前缀），weasel-rs 期望 rime.dll。
+    # MinGW 下产物名是 librime.dll（目标名 rime 带 lib 前缀），weasel-next 期望 rime.dll。
     $dll = Get-ChildItem -LiteralPath (Join-Path $BuildDir 'bin') -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -in @('librime.dll', 'rime.dll') } |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($dll) {
         Write-Host ''
         Write-Host ("产物：{0}（{1:N1} MB）" -f $dll.FullName, ($dll.Length / 1MB)) -ForegroundColor Green
-        $stage = Join-Path (Split-Path -Parent $root) 'weasel-rs\artifacts\smoke'
-        Write-Host '部署（注意：必须先把 weasel-rs 的栈停掉，否则 rime.dll 被占用无法替换）：'
+        $stage = Join-Path (Split-Path -Parent $root) 'weasel-next\artifacts\smoke'
+        Write-Host '部署（注意：必须先把 weasel-next 的栈停掉，否则 rime.dll 被占用无法替换）：'
         Write-Host ("  1) & '{0}' --shutdown" -f (Join-Path $stage 'weasel-broker.exe'))
         Write-Host ("  2) Copy-Item '{0}' '{1}' -Force   # 改名成 rime.dll" -f $dll.FullName, (Join-Path $stage 'rime.dll'))
         Write-Host '  3) 同时需要把 libc++.dll / libunwind.dll / libglog.dll / libopencc.dll 放在同目录（见 README）'

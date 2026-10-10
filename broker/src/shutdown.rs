@@ -1,4 +1,4 @@
-//! 通过窗口命令请求 broker 执行正常关闭，并等待最初识别的进程退出；在发送命令前
+﻿//! 通过窗口命令请求 broker 执行正常关闭，并等待最初识别的进程退出；在发送命令前
 //! 校验进程映像路径，防止安装程序关闭来自另一安装目录的 broker。
 use crate::bindings::*;
 use windows_strings::{PWSTR, w};
@@ -9,7 +9,7 @@ use windows_strings::{PWSTR, w};
 /// 路径，再发送退出命令；无法打开进程、路径不符或 30 秒内未退出均返回错误。
 pub fn run(directory: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
-        let hwnd = FindWindowW(w!("weasel-rs-broker"), None);
+        let hwnd = FindWindowW(w!("weasel-next-broker"), None);
         if hwnd.0.is_null() {
             return Ok(());
         }

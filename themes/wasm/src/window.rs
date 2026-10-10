@@ -1,4 +1,4 @@
-//! WASM 主题窗口的原生宿主层，负责 HWND 生命周期、DPI、定位与消息分发。
+﻿//! WASM 主题窗口的原生宿主层，负责 HWND 生命周期、DPI、定位与消息分发。
 //!
 //! HWND、Direct2D 画布和定时器均由创建窗口的 UI 线程管理；live 窗口保持置顶且
 //! 不激活，预览窗口允许激活并可关闭。窗口位置以屏幕物理像素计算，锚点坐标、
@@ -1380,7 +1380,7 @@ pub(crate) fn create_window(window: &Window) -> Result<(), String> {
             }
         }
         let (ex_style, title) = if window.preview {
-            (WS_EX_TOPMOST as u32, w!("Weasel-RS WASM 皮肤预览"))
+            (WS_EX_TOPMOST as u32, w!("Weasel-Next WASM 皮肤预览"))
         } else {
             (
                 (WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) as u32,

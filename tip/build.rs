@@ -30,7 +30,7 @@ fn main() {
         .reference_default()
         .output(&weasel_extra_winmd)
         .write()
-        .expect("failed to compile weasel-rs manual RDL");
+        .expect("failed to compile weasel-next manual RDL");
 
     windows_bindgen::builder()
         .input(&extra_winmd)

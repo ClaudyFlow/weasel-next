@@ -1,4 +1,4 @@
-//! 每用户运行的代理进程，负责托盘入口以及算法服务和渲染器子进程的生命周期。
+﻿//! 每用户运行的代理进程，负责托盘入口以及算法服务和渲染器子进程的生命周期。
 //!
 //! 安装器调用的维护命令在初始化托盘和托管子进程之前处理，避免短命任务意外启动常驻服务。
 #![windows_subsystem = "windows"]
@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(error) = runtime::run() {
         eprintln!("weasel-broker: {error}");
         if let Err(dialog_error) =
-            weasel_common::task_dialog::TaskDialog::new("小狼毫RS", "算法服务启动或运行失败")
+            weasel_common::task_dialog::TaskDialog::new("小狼毫Next", "算法服务启动或运行失败")
                 .icon(weasel_common::task_dialog::TaskDialogIcon::Error)
                 .content(error.to_string())
                 .show()

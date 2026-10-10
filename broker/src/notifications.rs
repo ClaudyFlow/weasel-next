@@ -1,4 +1,4 @@
-//! 集中管理 broker 通知策略。
+﻿//! 集中管理 broker 通知策略。
 //!
 //! 每条通知都会记录到日志；每个生命周期至多尝试展示一次桌面通知，避免
 //! 配置加载等后台路径反复打断用户。重置生命周期时可重新允许展示。
@@ -94,7 +94,7 @@ impl NotificationCenter {
                 source: "broker".into(),
                 code: "settings.load_failed".into(),
                 severity: weasel_common::message::UserNotificationSeverity::Warning as i32,
-                title: "小狼毫RS：配置加载失败".into(),
+                title: "小狼毫Next：配置加载失败".into(),
                 message: "配置文件存在错误。请检查 weasel.custom.json。".into(),
                 details: warnings.join("\n"),
             },
@@ -180,7 +180,7 @@ impl NotificationCenter {
                                     ) => TaskDialogIcon::Warning,
                                     _ => TaskDialogIcon::Information,
                                 };
-                            let mut dialog = TaskDialog::new(notice.title, "小狼毫RS 通知")
+                            let mut dialog = TaskDialog::new(notice.title, "小狼毫Next 通知")
                                 .icon(icon)
                                 .buttons(buttons)
                                 .content(format!(

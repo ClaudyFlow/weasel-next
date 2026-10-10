@@ -1,4 +1,4 @@
-//! 可选的 WinSparkle 更新集成；缺少 DLL 或更新源未配置时不会阻断输入。
+﻿//! 可选的 WinSparkle 更新集成；缺少 DLL 或更新源未配置时不会阻断输入。
 //!
 //! 更新库按需从运行目录加载，函数指针仅在库仍加载期间有效。WinSparkle 的关闭
 //! 回调可能运行于工作线程，因此通过托盘窗口投递退出命令，而不直接操作 UI 状态。
@@ -103,8 +103,8 @@ impl Updater {
 
             let wide = |value: &str| value.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
             details(
-                wide("Weasel-RS").as_ptr(),
-                wide("小狼毫RS").as_ptr(),
+                wide("Weasel-Next").as_ptr(),
+                wide("小狼毫Next").as_ptr(),
                 wide(env!("CARGO_PKG_VERSION")).as_ptr(),
             );
             set_url(url.as_ptr());

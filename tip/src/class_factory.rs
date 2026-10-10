@@ -1,4 +1,4 @@
-//! TSF 文本服务的 COM 类工厂。
+﻿//! TSF 文本服务的 COM 类工厂。
 //!
 //! 工厂只负责校验聚合请求并创建新的 [`TextService`] 实例；[`ModuleLease`] 将 DLL
 //! 生命周期与工厂及其创建的对象绑定，避免 COM 仍持有对象时模块被卸载。
@@ -60,7 +60,7 @@ impl IClassFactory_Impl for ClassFactory_Impl {
     }
 }
 
-/// 返回 Weasel-RS TSF 类的 COM 类工厂。
+/// 返回 Weasel-Next TSF 类的 COM 类工厂。
 ///
 /// 此导出函数遵循系统 COM ABI：无效指针返回 `E_POINTER`，未知 CLSID 返回
 /// `CLASS_E_CLASSNOTAVAILABLE`，请求接口不受支持时返回 `E_NOINTERFACE`。返回的工厂持有

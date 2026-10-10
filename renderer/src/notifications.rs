@@ -1,4 +1,4 @@
-//! 将主题通知记录到本地诊断日志，并异步转发给 broker。
+﻿//! 将主题通知记录到本地诊断日志，并异步转发给 broker。
 
 use std::{
     sync::{OnceLock, mpsc},
@@ -27,7 +27,7 @@ pub fn report(theme: &str, notice: crate::theme_api::ThemeNotice) {
             crate::theme_api::NoticeSeverity::Warning => UserNotificationSeverity::Warning,
             crate::theme_api::NoticeSeverity::Error => UserNotificationSeverity::Error,
         } as i32,
-        title: "小狼毫RS：主题通知".into(),
+        title: "小狼毫Next：主题通知".into(),
         message: bounded(&notice.message, 2048),
         details: bounded(&format!("theme={theme}: {}", notice.details), 16384),
     };

@@ -10,7 +10,7 @@ $destination = Join-Path $projectRoot 'artifact\librime'
 $downloadUrl = 'https://github.com/rime/librime/releases/download/1.17.0/rime-33e7814-Windows-msvc-x64.7z'
 $expectedSha256 = '7478c7caa4ff6b37de86daba1f7ce4a994a4f5ba24872a820fb2b3a9b01fed15'
 $archivePath = Join-Path ([IO.Path]::GetTempPath()) (
-    'weasel-rs-librime-{0}.7z' -f [Guid]::NewGuid().ToString('N')
+    'weasel-next-librime-{0}.7z' -f [Guid]::NewGuid().ToString('N')
 )
 $previousSecurityProtocol = [Net.ServicePointManager]::SecurityProtocol
 

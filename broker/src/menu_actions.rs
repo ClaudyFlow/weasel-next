@@ -1,4 +1,4 @@
-//! 执行打开设置、帮助和目录等 Shell 菜单操作。
+﻿//! 执行打开设置、帮助和目录等 Shell 菜单操作。
 //!
 //! 这些动作在独立线程中处理，避免阻塞托盘消息循环；调用边界也确保它们不在文本输入处理器（TIP）中运行。
 use crate::bindings::*;
@@ -78,7 +78,7 @@ pub fn open(command: u32) {
 
 /// 使用前台错误对话框呈现菜单操作失败原因。
 fn show_error(error: &str) {
-    if let Err(dialog_error) = TaskDialog::new("小狼毫RS", "无法打开目标")
+    if let Err(dialog_error) = TaskDialog::new("小狼毫Next", "无法打开目标")
         .icon(TaskDialogIcon::Error)
         .content(error)
         .show()

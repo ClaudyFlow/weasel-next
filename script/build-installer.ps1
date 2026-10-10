@@ -50,7 +50,7 @@ try {
         'THIRD-PARTY-LICENSES.txt',
         'THIRD-PARTY-GPL-3.0.txt',
         'settings\LICENSE-NOTICE.txt',
-        'installer\weasel-rs.nsi',
+        'installer\weasel-next.nsi',
         'script\launch-broker.ps1'
     )
     foreach ($theme in @('ten', 'eleven', 'abc', 'void')) {
@@ -147,7 +147,7 @@ try {
     [IO.File]::WriteAllLines($payloadInclude, $payloadLines, [Text.UTF8Encoding]::new($false))
     $buildSuffix = if ($Dev) { '-dev' } else { '' }
     if ($Mini) { $buildSuffix += '-mini' }
-    $outputFile = Join-Path $outputDirectory "Weasel-RS-$version-x64$buildSuffix-setup.exe"
+    $outputFile = Join-Path $outputDirectory "Weasel-Next-$version-x64$buildSuffix-setup.exe"
     $runtimeDefinitions = @()
     foreach ($architecture in @('x86', 'x64')) {
         $runtimePath = Join-Path $projectRoot "artifact\vcredist\vc_redist.$architecture.exe"
@@ -178,7 +178,7 @@ try {
         "/DPRODUCT_VERSION=$version",
         "/DOUTPUT_FILE=$outputFile",
         "/DPAYLOAD_INCLUDE=$payloadInclude",
-        (Join-Path $projectRoot 'installer\weasel-rs.nsi')
+        (Join-Path $projectRoot 'installer\weasel-next.nsi')
     )
     $buildDefinitions = @()
     if ($Mini) { $buildDefinitions += '/DMINI_INSTALLER' }

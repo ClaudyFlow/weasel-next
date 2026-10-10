@@ -1,4 +1,4 @@
-//! Windows 可执行组件共用的进程路径与生命周期原语。
+﻿//! Windows 可执行组件共用的进程路径与生命周期原语。
 
 use std::{
     io,
@@ -94,12 +94,12 @@ impl RuntimePaths {
         let user_data = appdata
             .filter(|path| path.is_absolute())
             .ok_or_else(|| io::Error::other("APPDATA must be set to an absolute directory"))?
-            .join("Weasel-RS")
+            .join("Weasel-Next")
             .join("Rime");
         let logs = local_appdata
             .filter(|path| path.is_absolute())
             .ok_or_else(|| io::Error::other("LOCALAPPDATA must be set to an absolute directory"))?
-            .join("Weasel-RS")
+            .join("Weasel-Next")
             .join("Logs");
         Ok(Self {
             executable_directory,
@@ -230,8 +230,8 @@ mod path_tests {
             Some(base.join("local")),
         )
         .unwrap();
-        assert_eq!(installed.user_data, base.join("roaming/Weasel-RS/Rime"));
-        assert_eq!(installed.logs, base.join("local/Weasel-RS/Logs"));
+        assert_eq!(installed.user_data, base.join("roaming/Weasel-Next/Rime"));
+        assert_eq!(installed.logs, base.join("local/Weasel-Next/Logs"));
         assert!(RuntimePaths::select(base.clone(), Some(base.clone()), None).is_err());
         assert!(RuntimePaths::select(base.clone(), Some(base), Some("relative".into())).is_err());
     }
@@ -242,19 +242,19 @@ mod path_tests {
         let local = PathBuf::from(r"C:\Users\测试\AppData\Local");
         assert_eq!(
             RuntimePaths::select(
-                PathBuf::from(r"C:\Program Files\Weasel-RS"),
+                PathBuf::from(r"C:\Program Files\Weasel-Next"),
                 Some(roaming.clone()),
                 Some(local),
             )
             .unwrap()
             .user_data,
-            roaming.join("Weasel-RS").join("Rime")
+            roaming.join("Weasel-Next").join("Rime")
         );
     }
 
     #[test]
     fn user_data_does_not_fall_back_to_install_directory() {
-        let directory = PathBuf::from(r"C:\Program Files\Weasel-RS");
+        let directory = PathBuf::from(r"C:\Program Files\Weasel-Next");
         let local = Some(PathBuf::from(r"C:\Users\测试\AppData\Local"));
         assert!(RuntimePaths::select(directory.clone(), None, local.clone()).is_err());
         assert!(RuntimePaths::select(directory, Some("relative".into()), local).is_err());

@@ -1,5 +1,5 @@
-import * as defaults from "./defaults";
-import { DataKind, options, settings, report_notice, set_font, line_height, set_panel } from "@weasel-rs/sdk-as/assembly";
+﻿import * as defaults from "./defaults";
+import { DataKind, options, settings, report_notice, set_font, line_height, set_panel } from "@weasel-next/sdk-as/assembly";
 
 function warn(path: string): void {
   report_notice("invalid weaselui config " + path + "; using default");

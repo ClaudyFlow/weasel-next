@@ -1,4 +1,4 @@
-//! 安装后的部署和当前用户自启动项维护在交互用户上下文中执行，避免提升权限的
+﻿//! 安装后的部署和当前用户自启动项维护在交互用户上下文中执行，避免提升权限的
 //! 安装进程直接改写用户服务状态。
 
 use std::{path::PathBuf, process::Command};
@@ -8,7 +8,7 @@ use windows_registry::CURRENT_USER;
 /// 当前用户登录时运行 broker 的注册表键。
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 /// broker 自启动命令使用的注册表值名称。
-const RUN_VALUE: &str = "小狼毫RS算法服务";
+const RUN_VALUE: &str = "小狼毫Next算法服务";
 
 /// 获取当前 broker 可执行文件所在目录。
 ///

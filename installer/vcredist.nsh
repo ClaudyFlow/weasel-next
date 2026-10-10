@@ -69,7 +69,7 @@ Function InstallRuntime_${ARCH}
   !insertmacro InstallLog "正在安装 Microsoft Visual C++ v14 Redistributable ${ARCH} ${VERSION}…"
   StrCpy $6 -1
   ClearErrors
-  ExecWait '"$PLUGINSDIR\vc_redist.${ARCH}.exe" /install /quiet /norestart /log "$TEMP\Weasel-RS-vcredist-${ARCH}.log"' $6
+  ExecWait '"$PLUGINSDIR\vc_redist.${ARCH}.exe" /install /quiet /norestart /log "$TEMP\Weasel-Next-vcredist-${ARCH}.log"' $6
   ${If} ${Errors}
     StrCpy $6 -1
   ${EndIf}
@@ -88,7 +88,7 @@ Function InstallRuntime_${ARCH}
       Return
     ${EndIf}
   ${EndIf}
-  MessageBox MB_OK|MB_ICONSTOP "Microsoft Visual C++ v14 Redistributable ${ARCH} 安装失败，退出码：$6。$\r$\n日志：$TEMP\Weasel-RS-vcredist-${ARCH}.log" /SD IDOK
+  MessageBox MB_OK|MB_ICONSTOP "Microsoft Visual C++ v14 Redistributable ${ARCH} 安装失败，退出码：$6。$\r$\n日志：$TEMP\Weasel-Next-vcredist-${ARCH}.log" /SD IDOK
   SetErrorLevel 1
   Abort
 FunctionEnd

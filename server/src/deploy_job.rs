@@ -1,4 +1,4 @@
-//! 在独立任务中运行 Rime 数据部署，并向界面和遥测输出有限日志预览。
+﻿//! 在独立任务中运行 Rime 数据部署，并向界面和遥测输出有限日志预览。
 //!
 //! 部署进程的标准输出与错误输出会并发读取，避免子进程因管道写满而停滞。界面邮箱
 //! 只保留有上限的预览文本，完成状态单独保存，不会被日志溢出挤掉。
@@ -55,7 +55,7 @@ impl OutputLog {
             path,
             writer: BufWriter::new(file),
         };
-        log.record("INFO", "小狼毫RS Rime 数据部署开始。")
+        log.record("INFO", "小狼毫Next Rime 数据部署开始。")
             .map_err(|e| e.to_string())?;
         Ok(log)
     }

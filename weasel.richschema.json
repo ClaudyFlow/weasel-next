@@ -1,10 +1,10 @@
-{
+﻿{
   "formatVersion": 1,
   "schema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "weasel.schema.json",
     "title": "Weasel User Settings",
-    "description": "Weasel-RS 用户设置文件",
+    "description": "Weasel-Next 用户设置文件",
     "type": "object",
     "properties": {
       "$schema": {

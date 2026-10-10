@@ -1,22 +1,22 @@
 ﻿<#
 .SYNOPSIS
-    把官方小狼毫（C++ 版）的数据与用户配置合并到 weasel-rs。
+    把官方小狼毫（C++ 版）的数据与用户配置合并到 weasel-next。
 
 .DESCRIPTION
     做两件事，都只"补齐/覆盖"，**从不删除**任何文件：
 
-    A) 共享数据：<官方安装目录>\data  →  <weasel-rs 程序目录>\rime-data
-       weasel-rs 的 librime 把共享数据目录设为 <程序目录>\rime-data（见
+    A) 共享数据：<官方安装目录>\data  →  <weasel-next 程序目录>\rime-data
+       weasel-next 的 librime 把共享数据目录设为 <程序目录>\rime-data（见
        server/src/rime/mod.rs），官方那 96 个文件（方案、词典、opencc、preview）里的
        缺失项就在这里补上——例如 sancang/cangjie5 需要的 cangjie5.*.dict.yaml。
 
-    B) 用户数据：%APPDATA%\Rime  →  %APPDATA%\Weasel-RS\Rime
+    B) 用户数据：%APPDATA%\Rime  →  %APPDATA%\Weasel-Next\Rime
        补齐 default.custom.yaml（决定启用哪些方案）、weasel.custom.yaml、images\、
        可选的 *.userdb（用户词典）；installation.yaml / user.yaml 会**先备份**再覆盖。
-       weasel-rs 自己的文件（weasel.custom.json、.weasel.lock、build\）不会被改动。
+       weasel-next 自己的文件（weasel.custom.json、.weasel.lock、build\）不会被改动。
 
     合并完成后需要重新部署才会生效：
-        <weasel-rs 程序目录>\weasel-server.exe --deploy --silent
+        <weasel-next 程序目录>\weasel-server.exe --deploy --silent
 
 .PARAMETER OfficialInstall
     官方小狼毫安装目录，默认 C:\Program Files\Rime\weasel-0.17.4。
@@ -25,7 +25,7 @@
     官方用户数据目录，默认 %APPDATA%\Rime。
 
 .PARAMETER TargetExeDir
-    weasel-rs 程序目录（含 rime.dll / weasel-server.exe），默认 artifact\smoke。
+    weasel-next 程序目录（含 rime.dll / weasel-server.exe），默认 artifact\smoke。
 
 .PARAMETER IncludeUserDb
     连同 *.userdb 用户词典一起复制。官方 WeaselServer 正在运行时会持有 leveldb 文件锁，
@@ -60,7 +60,7 @@ $scriptRoot = $PSScriptRoot
 if (-not $scriptRoot) { $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $OfficialUserData) { $OfficialUserData = Join-Path $env:APPDATA 'Rime' }
 if (-not $TargetExeDir) { $TargetExeDir = Join-Path (Split-Path -Parent $scriptRoot) 'artifact\smoke' }
-if (-not $TargetUserData) { $TargetUserData = Join-Path $env:APPDATA 'Weasel-RS\Rime' }
+if (-not $TargetUserData) { $TargetUserData = Join-Path $env:APPDATA 'Weasel-Next\Rime' }
 
 $ErrorActionPreference = 'Continue'
 $script:copied = 0
@@ -106,8 +106,8 @@ function Copy-Tree {
 
 Write-Host "官方安装目录 : $OfficialInstall"
 Write-Host "官方用户目录 : $OfficialUserData"
-Write-Host "weasel-rs 程序目录 : $TargetExeDir"
-Write-Host "weasel-rs 用户目录 : $TargetUserData"
+Write-Host "weasel-next 程序目录 : $TargetExeDir"
+Write-Host "weasel-next 用户目录 : $TargetUserData"
 Write-Host ""
 
 # A) 共享数据 -> <程序目录>\rime-data
@@ -115,7 +115,7 @@ Copy-Tree -Source (Join-Path $OfficialInstall 'data') `
           -Destination (Join-Path $TargetExeDir 'rime-data') `
           -Label 'A) 共享数据（方案 / 词典 / opencc / preview）'
 
-# B) 用户数据 -> %APPDATA%\Weasel-RS\Rime
+# B) 用户数据 -> %APPDATA%\Weasel-Next\Rime
 Copy-Tree -Source $OfficialUserData `
           -Destination $TargetUserData `
           -Label 'B1) 用户配置（default.custom.yaml / weasel.custom.yaml / images 等）' `

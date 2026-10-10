@@ -14,7 +14,7 @@ try {
     } else {
         Add-Type -AssemblyName System.Windows.Forms
         $form = New-Object Windows.Forms.Form
-        $form.Text = "小狼毫RS：下载 VC++ 运行库 ($Architecture)"
+        $form.Text = "小狼毫Next：下载 VC++ 运行库 ($Architecture)"
         $form.Width = 480
         $form.Height = 130
         $form.StartPosition = 'CenterScreen'

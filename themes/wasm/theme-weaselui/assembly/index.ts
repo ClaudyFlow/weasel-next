@@ -1,8 +1,8 @@
-import {
+﻿import {
   ABI_VERSION, Action, Capability, ErrorCode, EventKind, FrameResult, PointerPhase,
   Image, SurfaceKind, View, create_surface, destroy_surface, draw_text, event_surface,
   measure_text, readView, roundedRect, select_surface, send_action, set_size, set_visible,
-} from "@weasel-rs/sdk-as/assembly";
+} from "@weasel-next/sdk-as/assembly";
 // 主题生成绘制命令；窗口、DPI、配置合并与 JSON 解析由宿主负责。
 
 // 配置合并后、init 前探测能力；支持编码和候选预览两种 preedit。

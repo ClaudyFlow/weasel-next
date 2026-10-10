@@ -8,7 +8,7 @@
 
 本项目基于诸多开源组件及技术，其许可清单见 [第三方许可清单](THIRD-PARTY-LICENSES.txt)。
 
-下载最新版本：[Releases](https://github.com/determ1ne/weasel-rs/releases)
+下载最新版本：[Releases](https://github.com/determ1ne/weasel-next/releases)
 
 ## 安装与使用
 

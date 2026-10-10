@@ -1,4 +1,4 @@
-//! 只访问 WinSparkle 的用户偏好；设置应用不初始化更新检查器。
+﻿//! 只访问 WinSparkle 的用户偏好；设置应用不初始化更新检查器。
 use libloading::Library;
 use std::path::Path;
 
@@ -30,8 +30,8 @@ fn with_preferences<T>(
         let wide = |value: &str| value.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
         // 必须与 broker/src/updater.rs 的应用标识一致，才能读写同一份偏好。
         details(
-            wide("Weasel-RS").as_ptr(),
-            wide("小狼毫RS").as_ptr(),
+            wide("Weasel-Next").as_ptr(),
+            wide("小狼毫Next").as_ptr(),
             wide(env!("CARGO_PKG_VERSION")).as_ptr(),
         );
         Ok(action(get, set))

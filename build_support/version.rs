@@ -1,17 +1,17 @@
-//! Native file properties shared by EXEs and the TIP DLL.
+﻿//! Native file properties shared by EXEs and the TIP DLL.
 pub fn embed() {
     let package = std::env::var("CARGO_PKG_NAME").expect("Cargo package name");
     let (description, filename, dll) = match package.as_str() {
-        "weasel-broker" => ("Weasel-RS Broker", "weasel-broker.exe", false),
-        "weasel-server" => ("Weasel-RS Rime Server", "weasel-server.exe", false),
-        "weasel-renderer" => ("Weasel-RS Candidate Renderer", "weasel-renderer.exe", false),
-        "weasel-settings" => ("Weasel-RS Settings", "weasel-settings.exe", false),
-        "weasel-tip" => ("Weasel-RS Text Input Processor", "weasel_tip.dll", true),
-        "weasel-theme-ten" => ("Weasel-RS ten Theme", "weasel_theme_ten.dll", true),
-        "weasel-theme-eleven" => ("Weasel-RS eleven Theme", "weasel_theme_eleven.dll", true),
-        "weasel-theme-abc" => ("Weasel-RS abc Theme", "weasel_theme_abc.dll", true),
-        "weasel-theme-void" => ("Weasel-RS void Theme", "weasel_theme_void.dll", true),
-        "weasel-theme-wasm" => ("Weasel-RS wasm Theme", "weasel_theme_wasm.dll", true),
+        "weasel-broker" => ("Weasel-Next Broker", "weasel-broker.exe", false),
+        "weasel-server" => ("Weasel-Next Rime Server", "weasel-server.exe", false),
+        "weasel-renderer" => ("Weasel-Next Candidate Renderer", "weasel-renderer.exe", false),
+        "weasel-settings" => ("Weasel-Next Settings", "weasel-settings.exe", false),
+        "weasel-tip" => ("Weasel-Next Text Input Processor", "weasel_tip.dll", true),
+        "weasel-theme-ten" => ("Weasel-Next ten Theme", "weasel_theme_ten.dll", true),
+        "weasel-theme-eleven" => ("Weasel-Next eleven Theme", "weasel_theme_eleven.dll", true),
+        "weasel-theme-abc" => ("Weasel-Next abc Theme", "weasel_theme_abc.dll", true),
+        "weasel-theme-void" => ("Weasel-Next void Theme", "weasel_theme_void.dll", true),
+        "weasel-theme-wasm" => ("Weasel-Next wasm Theme", "weasel_theme_wasm.dll", true),
         _ => panic!("missing Windows file description for {package}"),
     };
     let root = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("..");

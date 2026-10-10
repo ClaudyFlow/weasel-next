@@ -5,7 +5,7 @@ import { WasmModules, WasmEntry } from "wasm-modules.slint";
 export { ColorCodec } from "color-editor.slint";
 export struct SettingField { source-index: int, section: string, shown: bool, title: string, key: string, description: string, choices: [string], selected: int, checked: bool, text: string, text-input: bool, boolean: bool, overridden: bool, enum-number: bool, color-input: bool, allow-system-color: bool, adaptive-color: bool, multiline: bool }
 export component SettingsWindow inherits Window {
-    title: "小狼毫RS：设置";
+    title: "小狼毫Next：设置";
     default-font-family: "Segoe UI";
     in property <bool> mica-enabled: false;
     background: root.mica-enabled ? transparent : Palette.background;
@@ -46,7 +46,7 @@ export component SettingsWindow inherits Window {
             padding: 0px;
             // 给 DWM 原生标题栏按钮区域留出空间。
             padding-right: 144px;
-            Text { text: "小狼毫RS 设置"; font-size: 22px; vertical-alignment: center; }
+            Text { text: "小狼毫Next 设置"; font-size: 22px; vertical-alignment: center; }
         }
         Text { text: root.config-path; wrap: word-wrap; }
         ScrollView {

@@ -1,4 +1,4 @@
-//! 在 TSF 所属线程上分派 RPC 状态通知与延后操作。
+﻿//! 在 TSF 所属线程上分派 RPC 状态通知与延后操作。
 //!
 //! 隐藏顶层窗口负责接收系统主题广播，并把需访问 TSF 的工作排入窗口消息队列；
 //! 管道工作线程不直接调用宿主或 TSF。窗口及其回调状态必须在同一线程创建和销毁。
@@ -61,7 +61,7 @@ impl UpdateWindow {
             invoke: Rc::new(callback),
             theme_pending: Cell::new(false),
         });
-        let name = HSTRING::from(format!("weasel-rs-tip-updates-{:p}", &*callback));
+        let name = HSTRING::from(format!("weasel-next-tip-updates-{:p}", &*callback));
         unsafe {
             let instance = GetModuleHandleW(None);
             let class = WNDCLASSW {

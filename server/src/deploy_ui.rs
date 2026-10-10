@@ -1,4 +1,4 @@
-//! 提供 Rime 部署的 Windows/XAML 进度窗口，并在初始化失败时回退到原生 Task Dialog。
+﻿//! 提供 Rime 部署的 Windows/XAML 进度窗口，并在初始化失败时回退到原生 Task Dialog。
 //!
 //! 窗口及 XAML 对象由调用线程创建和销毁；部署工作线程通过有界邮箱回传日志与最终状态。
 #![allow(unsafe_op_in_unsafe_fn)]
@@ -106,7 +106,7 @@ fn with_fallback<G>(
 fn run_task_dialog(guard: SingleInstance) -> Result<DeployComplete, String> {
     let log_path: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
     let hyperlink_path = log_path.clone();
-    let dialog = TaskDialog::new("小狼毫RS", "正在部署 Rime 数据")
+    let dialog = TaskDialog::new("小狼毫Next", "正在部署 Rime 数据")
         .content("完整部署界面在当前系统上不可用，正在创建部署日志……")
         .marquee(true, 30)
         .ok_enabled(false)
@@ -323,7 +323,7 @@ unsafe fn run_initialized(guard: &mut Option<SingleInstance>) -> Result<(), Stri
         .ok()
         .map_err(|e| e.to_string())?;
     let work = monitor_info.rcWork;
-    let name = w!("Weasel-RS: Rime 部署");
+    let name = w!("Weasel-Next: Rime 部署");
     let class = WNDCLASSW {
         lpfnWndProc: Some(window_proc),
         hInstance: GetModuleHandleW(None),

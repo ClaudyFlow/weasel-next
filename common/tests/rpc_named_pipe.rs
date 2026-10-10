@@ -1,4 +1,4 @@
-use std::time::Duration;
+﻿use std::time::Duration;
 
 mod support;
 use support::{ClientProtocol as _, ConnectionProtocol as _};
@@ -14,7 +14,7 @@ async fn key_replies_push_commits_and_context_commands_share_wire_order() {
         ContextAction, ContextCommand, ContextToken, InputKey, KeyEventResponse,
     };
     tokio::time::timeout(Duration::from_secs(3), async {
-        let name = format!(r"\\.\pipe\weaselrs-ordered-context-{}", std::process::id());
+        let name = format!(r"\\.\pipe\weaselnext-ordered-context-{}", std::process::id());
         let server = RpcServer::new(&name);
         let accept = tokio::spawn(async move { (server.accept().await.unwrap(), server) });
         let client = connect_with_retry(&name).await.unwrap();
@@ -116,7 +116,7 @@ async fn key_replies_push_commits_and_context_commands_share_wire_order() {
 #[tokio::test(flavor = "current_thread")]
 async fn disconnected_client_rejects_new_requests_and_reconnects() {
     tokio::time::timeout(Duration::from_secs(3), async {
-        let name = format!(r"\\.\pipe\weaselrs-disconnect-{}", std::process::id());
+        let name = format!(r"\\.\pipe\weaselnext-disconnect-{}", std::process::id());
         let server = RpcServer::new(&name);
         let accept = tokio::spawn(async move { (server.accept().await.unwrap(), server) });
         let client = connect_with_retry(&name).await.unwrap();
@@ -165,7 +165,7 @@ async fn disconnected_client_rejects_new_requests_and_reconnects() {
 #[tokio::test(flavor = "current_thread")]
 async fn closing_connection_wakes_pending_request() {
     tokio::time::timeout(Duration::from_secs(3), async {
-        let name = format!(r"\\.\pipe\weaselrs-pending-{}", std::process::id());
+        let name = format!(r"\\.\pipe\weaselnext-pending-{}", std::process::id());
         let server = RpcServer::new(&name);
         let accept = tokio::spawn(async move { (server.accept().await.unwrap(), server) });
         let client = connect_with_retry(&name).await.unwrap();
@@ -190,7 +190,7 @@ async fn closing_connection_wakes_pending_request() {
 #[tokio::test(flavor = "current_thread")]
 async fn cancelled_accept_retains_instance_and_shutdown_can_connect_alongside_tip() {
     tokio::time::timeout(Duration::from_secs(3), async {
-        let name = format!(r"\\.\pipe\weaselrs-concurrent-{}", std::process::id());
+        let name = format!(r"\\.\pipe\weaselnext-concurrent-{}", std::process::id());
         let server = RpcServer::new(&name);
         // Emulate another branch winning select! while the listener is idle.
         assert!(
@@ -246,7 +246,7 @@ async fn connect_with_retry(pipe_name: &str) -> Result<RpcClient, RpcError> {
 #[tokio::test(flavor = "current_thread")]
 async fn unsolicited_candidate_result_is_delivered_without_a_key_request() {
     tokio::time::timeout(Duration::from_secs(3), async {
-        let name = format!(r"\\.\pipe\weaselrs-push-{}", std::process::id());
+        let name = format!(r"\\.\pipe\weaselnext-push-{}", std::process::id());
         let server = RpcServer::new(&name);
         let accept = tokio::spawn(async move { (server.accept().await.unwrap(), server) });
         let client = connect_with_retry(&name).await.unwrap();
@@ -285,7 +285,7 @@ async fn unsolicited_candidate_result_is_delivered_without_a_key_request() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn named_pipe_ping_round_trip_and_events() {
-    let pipe_name = format!(r"\\.\pipe\weaselrs-test-{}", std::process::id());
+    let pipe_name = format!(r"\\.\pipe\weaselnext-test-{}", std::process::id());
     let server = RpcServer::new(pipe_name.clone());
 
     let server_task = tokio::spawn(async move {

@@ -1,4 +1,4 @@
-//! 为 TSF 组合文本提供显示属性，并把该属性应用到宿主文本范围。
+﻿//! 为 TSF 组合文本提供显示属性，并把该属性应用到宿主文本范围。
 use super::*;
 
 #[implement(ITfDisplayAttributeInfo)]
@@ -42,7 +42,7 @@ impl ITfDisplayAttributeInfo_Impl for DisplayAttributeInfo_Impl {
     /// 返回供 TSF 属性 UI 使用的说明文本。
     fn GetDescription(&self) -> Result<windows_core::BSTR> {
         boundary::guard(None, || {
-            Ok(windows_core::BSTR::from("weasel-rs composition input"))
+            Ok(windows_core::BSTR::from("weasel-next composition input"))
         })
     }
 

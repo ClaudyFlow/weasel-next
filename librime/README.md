@@ -3,7 +3,7 @@
 
 为什么在这里
 ------------
-weasel-rs 用的不是官方发布版 librime，而是从 master 自行构建、并带本地改动的核心。
+weasel-next 用的不是官方发布版 librime，而是从 master 自行构建、并带本地改动的核心。
 构建脚本与补丁存档原本放在另一个仓库（rime-speed-stats），CI 无法复现；现移入本仓库根目录。
 
 组成

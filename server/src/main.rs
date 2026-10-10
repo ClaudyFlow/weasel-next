@@ -1,4 +1,4 @@
-//! 提供进程外运行的 Rime 服务，并独立处理服务控制请求。
+﻿//! 提供进程外运行的 Rime 服务，并独立处理服务控制请求。
 //!
 //! 本模块负责进程启动、配置读取、连接接纳与优雅关闭；输入任务交由引擎工作线程，
 //! 渲染状态则通过 [`renderer_bridge`] 转发给渲染器。
@@ -73,7 +73,7 @@ async fn load_broker_settings() -> Result<weasel_common::settings::ConfigSnapsho
                 source: "server".into(),
                 code: "configuration.invalid".into(),
                 severity: UserNotificationSeverity::Warning as i32,
-                title: "小狼毫RS：配置项无效".into(),
+                title: "小狼毫Next：配置项无效".into(),
                 message: "算法服务配置无效，已使用内置默认值。".into(),
                 details: warnings.join("\n"),
             };

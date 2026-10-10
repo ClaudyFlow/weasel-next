@@ -10,7 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ($Tag -cnotmatch '^v(\d+\.\d+\.\d+)$') { throw 'Tag must be vMAJOR.MINOR.PATCH.' }
 $version = $Matches[1]
-$repository = 'determ1ne/weasel-rs'
+$repository = 'determ1ne/weasel-next'
 $publicKey = if ([string]::IsNullOrWhiteSpace($env:WINSPARKLE_PUBLIC_KEY)) {
     'GAmmGQQoLRtAPyTj3s2gtK9NfVnlcqPHaGJbDF3Zc9E='
 } else {
@@ -24,7 +24,7 @@ $feedUrl = if ([string]::IsNullOrWhiteSpace($env:WINSPARKLE_APPCAST_URL)) {
 if ($feedUrl -notmatch '^https://[^/]+/appcast\.xml$') {
     throw 'WINSPARKLE_APPCAST_URL must be an HTTPS URL ending in /appcast.xml.'
 }
-$headers = @{ 'User-Agent' = 'weasel-rs-appcast-publisher'; 'Accept' = 'application/vnd.github+json' }
+$headers = @{ 'User-Agent' = 'weasel-next-appcast-publisher'; 'Accept' = 'application/vnd.github+json' }
 $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repository/releases/tags/$Tag" -Headers $headers
 if ($release.draft -or $release.prerelease -or -not $release.published_at) {
     throw 'Appcast may only point to a published, non-prerelease GitHub Release.'
@@ -32,7 +32,7 @@ if ($release.draft -or $release.prerelease -or -not $release.published_at) {
 $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$repository/releases/latest" -Headers $headers
 if ($latest.tag_name -cne $Tag) { throw "The latest published release is $($latest.tag_name), not $Tag." }
 
-$assetName = "Weasel-RS-$version-x64-mini-setup.exe"
+$assetName = "Weasel-Next-$version-x64-mini-setup.exe"
 $installer = @($release.assets | Where-Object { $_.name -ceq $assetName })
 $signatureAsset = @($release.assets | Where-Object { $_.name -ceq "$assetName.edSignature" })
 if ($installer.Count -ne 1 -or $signatureAsset.Count -ne 1) {
@@ -84,11 +84,11 @@ try {
     $writer.WriteAttributeString('version', '2.0')
     $writer.WriteAttributeString('xmlns', 'sparkle', $null, $namespace)
     $writer.WriteStartElement('channel')
-    $writer.WriteElementString('title', '小狼毫RS 更新')
-    $writer.WriteElementString('description', '小狼毫RS 稳定版更新')
+    $writer.WriteElementString('title', '小狼毫Next 更新')
+    $writer.WriteElementString('description', '小狼毫Next 稳定版更新')
     $writer.WriteElementString('language', 'zh-CN')
     $writer.WriteStartElement('item')
-    $writer.WriteElementString('title', "小狼毫RS $version")
+    $writer.WriteElementString('title', "小狼毫Next $version")
     $writer.WriteElementString('sparkle', 'version', $namespace, $version)
     # Temporary bridge: older brokers without a Windows 10 supportedOS manifest
     # are reported as Windows 8 by VerifyVersionInfoW and would miss this update.

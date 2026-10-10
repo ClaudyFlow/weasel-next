@@ -1,4 +1,4 @@
-; Persist machine-install diagnostics independently of both $PLUGINSDIR and
+﻿; Persist machine-install diagnostics independently of both $PLUGINSDIR and
 ; the administrator account used for UAC.
 Var InstallLog
 Var InstallLogHandle
@@ -65,8 +65,8 @@ Var PayloadTargetDirectory
 Function BeginInstallLog
   ; CheckPlatform selects the all-users shell context, so APPDATA resolves to
   ; the machine-wide ProgramData directory here.
-  CreateDirectory "$APPDATA\Weasel-RS\Installer"
-  GetTempFileName $InstallLog "$APPDATA\Weasel-RS\Installer"
+  CreateDirectory "$APPDATA\Weasel-Next\Installer"
+  GetTempFileName $InstallLog "$APPDATA\Weasel-Next\Installer"
   Rename "$InstallLog" "$InstallLog.log"
   StrCpy $InstallLog "$InstallLog.log"
   ClearErrors
@@ -76,7 +76,7 @@ Function BeginInstallLog
     MessageBox MB_OK|MB_ICONSTOP "无法创建安装日志，安装已停止。" /SD IDOK
     Abort
   ${EndIf}
-  !insertmacro InstallLog "Weasel-RS ${PRODUCT_VERSION}; previous=$InstalledVersion; directory=$INSTDIR"
+  !insertmacro InstallLog "Weasel-Next ${PRODUCT_VERSION}; previous=$InstalledVersion; directory=$INSTDIR"
   !insertmacro InstallLog "安装日志：$InstallLog"
 FunctionEnd
 

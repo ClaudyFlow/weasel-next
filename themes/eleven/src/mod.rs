@@ -1,4 +1,4 @@
-#![allow(unsafe_op_in_unsafe_fn)]
+﻿#![allow(unsafe_op_in_unsafe_fn)]
 
 //! Windows 11 候选窗主题的原生窗口与 XAML Island 后端。
 //!
@@ -23,8 +23,8 @@ use crate::{
 };
 use visual::{CandidateTheme, ModeIndicatorVisual};
 
-const WINDOW_CLASS: PCWSTR = w!("weasel-rs-renderer");
-const ISLAND_WINDOW_PROPERTY: PCWSTR = w!("WeaselRS.Renderer.XamlIsland");
+const WINDOW_CLASS: PCWSTR = w!("weasel-next-renderer");
+const ISLAND_WINDOW_PROPERTY: PCWSTR = w!("WeaselNext.Renderer.XamlIsland");
 
 /// 以 RAII 方式持有宿主窗口；始终在其他 XAML 资源完成清理后销毁 HWND。
 struct WindowGuard(HWND);
@@ -368,7 +368,7 @@ unsafe fn create_window(mode: UiMode) -> Result<HWND, String> {
         // 不触发真实输入的情况下复现）。同样不加 WS_EX_NOREDIRECTIONBITMAP（见上）。
         UiMode::Preview => (
             (WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) as u32,
-            w!("Weasel-RS 皮肤预览"),
+            w!("Weasel-Next 皮肤预览"),
         ),
     };
     let window = CreateWindowExW(

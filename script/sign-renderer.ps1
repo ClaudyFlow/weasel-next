@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidateSet('Sign', 'Cleanup')][string]$Mode,
@@ -18,7 +18,7 @@ function Remove-LocalTrust {
     if (-not (Test-Path -LiteralPath $Receipt -PathType Leaf)) { return }
     $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($Receipt)
     try {
-        if ($cert.Subject -notmatch '^CN=Weasel-RS Local UIAccess [0-9a-f-]{36}$' -or $cert.Subject -ne $cert.Issuer) {
+        if ($cert.Subject -notmatch '^CN=Weasel-Next Local UIAccess [0-9a-f-]{36}$' -or $cert.Subject -ne $cert.Issuer) {
             throw 'Refusing to remove a certificate not issued by this installer.'
         }
         foreach ($store in @('My', 'TrustedPublisher', 'Root')) {
@@ -42,7 +42,7 @@ try {
     if (Test-Path -LiteralPath $CertificatePath) { throw 'Certificate receipt already exists.' }
     try {
         $cert = New-SelfSignedCertificate -Type CodeSigningCert `
-            -Subject "CN=Weasel-RS Local UIAccess $([Guid]::NewGuid())" `
+            -Subject "CN=Weasel-Next Local UIAccess $([Guid]::NewGuid())" `
             -CertStoreLocation Cert:\LocalMachine\My `
             -Provider 'Microsoft Software Key Storage Provider' -KeyExportPolicy NonExportable `
             -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(1)

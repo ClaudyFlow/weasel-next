@@ -1,4 +1,4 @@
-//! Broker 后台部署与服务重启操作。
+﻿//! Broker 后台部署与服务重启操作。
 
 use std::{
     process::Stdio,
@@ -169,7 +169,7 @@ async fn bounded_operation<T>(
 fn notify_deploy(main: &str, content: String) {
     let main = main.to_string();
     std::thread::spawn(move || {
-        let _ = weasel_common::task_dialog::TaskDialog::new("小狼毫RS", main)
+        let _ = weasel_common::task_dialog::TaskDialog::new("小狼毫Next", main)
             .icon(weasel_common::task_dialog::TaskDialogIcon::Information)
             .content(content)
             .buttons(weasel_common::task_dialog::TaskDialogButtons::Ok)

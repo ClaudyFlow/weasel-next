@@ -1,4 +1,4 @@
-//! 管理 librime 动态库、引擎实例与输入会话，并将宿主事件和引擎状态相互转换。
+﻿//! 管理 librime 动态库、引擎实例与输入会话，并将宿主事件和引擎状态相互转换。
 
 mod api;
 mod loader;
@@ -104,7 +104,7 @@ impl Librime {
     pub fn load(base_dir: &Path, user_data_dir: &Path) -> Result<Self, String> {
         let library = RimeLibrary::load(&base_dir.join("rime.dll"))?;
         let api = unsafe { RimeLibraryApi::load(library.api().as_ptr(), false)? };
-        let app_name = CString::new("rime.weasel-rs").expect("static app name has no NUL");
+        let app_name = CString::new("rime.weasel-next").expect("static app name has no NUL");
         let shared_data_dir = CString::new(base_dir.join("rime-data").to_string_lossy().as_bytes())
             .map_err(|error| format!("invalid shared data directory path: {error}"))?;
         let user_data_dir = path_string(user_data_dir)?;
@@ -137,7 +137,7 @@ impl Librime {
     pub fn deploy(base_dir: &Path, user_data_dir: &Path) -> Result<(), String> {
         let library = RimeLibrary::load(&base_dir.join("rime.dll"))?;
         let api = unsafe { RimeLibraryApi::load(library.api().as_ptr(), true)? };
-        let app_name = CString::new("rime.weasel-rs").expect("static app name has no NUL");
+        let app_name = CString::new("rime.weasel-next").expect("static app name has no NUL");
         let shared_data_dir = CString::new(base_dir.join("rime-data").to_string_lossy().as_bytes())
             .map_err(|error| format!("invalid shared data directory path: {error}"))?;
         let user_data_dir = path_string(user_data_dir)?;

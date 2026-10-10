@@ -28,22 +28,22 @@ ManifestSupportedOS all
   !error "Missing OUTPUT_FILE."
 !endif
 
-!define PRODUCT_NAME "小狼毫RS"
+!define PRODUCT_NAME "小狼毫Next"
 
-!define PRODUCT_KEY "Software\Weasel-RS"
-!define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Weasel-RS"
+!define PRODUCT_KEY "Software\Weasel-Next"
+!define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Weasel-Next"
 !define X64_RELEASE "${PROJECT_ROOT}\target\x86_64-pc-windows-msvc\release"
 !define X86_RELEASE "${PROJECT_ROOT}\target\i686-pc-windows-msvc\release"
 
 Name "${PRODUCT_NAME}"
 OutFile "${OUTPUT_FILE}"
-InstallDir "$PROGRAMFILES64\Weasel-RS"
+InstallDir "$PROGRAMFILES64\Weasel-Next"
 VIProductVersion "${PRODUCT_VERSION}.0"
 VIAddVersionKey /LANG=2052 "ProductName" "${PRODUCT_NAME}"
-VIAddVersionKey /LANG=2052 "FileDescription" "小狼毫RS 安装程序"
+VIAddVersionKey /LANG=2052 "FileDescription" "小狼毫Next 安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion" "${PRODUCT_VERSION}"
 VIAddVersionKey /LANG=2052 "ProductVersion" "${PRODUCT_VERSION}"
-VIAddVersionKey /LANG=2052 "LegalCopyright" "Weasel-RS contributors"
+VIAddVersionKey /LANG=2052 "LegalCopyright" "Weasel-Next contributors"
 
 !define MUI_ICON "${PROJECT_ROOT}\asset\icon\weasel.ico"
 !define MUI_UNICON "${PROJECT_ROOT}\asset\icon\weasel.ico"
@@ -57,8 +57,8 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Weasel-RS contributors"
 !endif
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_REBOOTLATER_DEFAULT
-!define MUI_FINISHPAGE_TEXT_REBOOT "小狼毫RS 已安装。部分正在使用的 DLL 或运行库需要重启后才能完成更新。请保存工作后重启计算机。"
-!define MUI_FINISHPAGE_TEXT "小狼毫RS 已安装。"
+!define MUI_FINISHPAGE_TEXT_REBOOT "小狼毫Next 已安装。部分正在使用的 DLL 或运行库需要重启后才能完成更新。请保存工作后重启计算机。"
+!define MUI_FINISHPAGE_TEXT "小狼毫Next 已安装。"
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
@@ -93,7 +93,7 @@ FunctionEnd
 
 !macro LockInstaller
   ; Keep the handle until process exit; serialize install/uninstall across sessions.
-  System::Call 'kernel32::CreateMutexW(p0, i0, w "Global\Weasel-RS-Installer") p.r0 ?e'
+  System::Call 'kernel32::CreateMutexW(p0, i0, w "Global\Weasel-Next-Installer") p.r0 ?e'
   Pop $1
   StrCpy $InstallerMutex $0
   ${If} $0 == 0
@@ -129,7 +129,7 @@ Function .onInit
   StrCpy $PreviousTip64 ""
   StrCpy $IsUpgrade 0
   StrCpy $ForceStopUnregisteredInstall 0
-  StrCpy $INSTDIR "$PROGRAMFILES64\Weasel-RS"
+  StrCpy $INSTDIR "$PROGRAMFILES64\Weasel-Next"
   ; makensis emits an x86 installer, while product metadata is intentionally
   ; machine-wide in the 64-bit registry view.
   SetRegView 64
@@ -220,11 +220,11 @@ Function StopApplicationProcesses
   Call ScanApplicationProcesses
   StrCmp $ScanResult 0 processes_stopped
   StrCmp $ScanResult 10 0 process_error
-  MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "算法服务未能正常退出。是否强制结束仍在运行的小狼毫RS服务进程？" /SD IDNO IDYES force_stop
+  MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "算法服务未能正常退出。是否强制结束仍在运行的小狼毫Next服务进程？" /SD IDNO IDYES force_stop
   SetErrorLevel 1
   Abort
   force_stop:
-  !insertmacro InstallLog "INFO: 正在强制结束未退出的小狼毫RS服务进程"
+  !insertmacro InstallLog "INFO: 正在强制结束未退出的小狼毫Next服务进程"
   StrCpy $ScanMode 1
   Call ScanApplicationProcesses
   StrCmp $ScanResult 0 0 process_error
@@ -232,7 +232,7 @@ Function StopApplicationProcesses
   Call ScanApplicationProcesses
   StrCmp $ScanResult 0 processes_stopped
   process_error:
-    MessageBox MB_OK|MB_ICONSTOP "无法检查或结束小狼毫RS 进程，请手动退出相关程序后重试。" /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "无法检查或结束小狼毫Next 进程，请手动退出相关程序后重试。" /SD IDOK
     SetErrorLevel 1
     Abort
   processes_stopped:
@@ -357,7 +357,7 @@ FunctionEnd
   RMDir /REBOOTOK "$INSTDIR"
 !macroend
 
-Section "Weasel-RS" SEC_MAIN
+Section "Weasel-Next" SEC_MAIN
   SectionIn RO
   Call BeginInstallLog
   InitPluginsDir
@@ -383,7 +383,7 @@ Section "Weasel-RS" SEC_MAIN
   !insertmacro ManagedFile "${X86_RELEASE}\weasel_tip.dll" "weasel_tip.dll"
   CreateDirectory "$INSTDIR\rime-data"
   ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "无法安装 Weasel-RS 文件，请检查磁盘空间和文件权限。" /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "无法安装 Weasel-Next 文件，请检查磁盘空间和文件权限。" /SD IDOK
     SetErrorLevel 1
     Abort
   ${EndIf}
@@ -590,13 +590,13 @@ Section "-注册与安装信息" SEC_REGISTER
   Call FinishRecords
   StrCpy $TransactionCommitted 1
 
-  CreateDirectory "$SMPROGRAMS\小狼毫RS"
-  Delete "$SMPROGRAMS\小狼毫RS\小狼毫RS.lnk"
-  CreateShortcut "$SMPROGRAMS\小狼毫RS\卸载.lnk" "$INSTDIR\Uninstall.exe"
+  CreateDirectory "$SMPROGRAMS\小狼毫Next"
+  Delete "$SMPROGRAMS\小狼毫Next\小狼毫Next.lnk"
+  CreateShortcut "$SMPROGRAMS\小狼毫Next\卸载.lnk" "$INSTDIR\Uninstall.exe"
   ${If} ${Errors}
     !insertmacro InstallLog "WARN: 无法创建卸载快捷方式"
   ${EndIf}
-  nsExec::ExecToLog '"$INSTDIR\weasel-broker.exe" --install-shortcut "$SMPROGRAMS\小狼毫RS\小狼毫RS算法服务.lnk"'
+  nsExec::ExecToLog '"$INSTDIR\weasel-broker.exe" --install-shortcut "$SMPROGRAMS\小狼毫Next\小狼毫Next算法服务.lnk"'
   Pop $0
   ${If} $0 != 0
     !insertmacro InstallLog "WARN: 创建算法服务快捷方式失败：$0"
@@ -674,7 +674,7 @@ Function un.onInit
   SetRegView 64
   ReadRegStr $0 HKLM "${PRODUCT_KEY}" "InstallDir"
   ${If} $0 != $INSTDIR
-  ${OrIf} $INSTDIR != "$PROGRAMFILES64\Weasel-RS"
+  ${OrIf} $INSTDIR != "$PROGRAMFILES64\Weasel-Next"
     MessageBox MB_OK|MB_ICONSTOP "安装目录校验失败，拒绝注销或删除文件。" /SD IDOK
     SetErrorLevel 1
     Quit
@@ -709,7 +709,7 @@ Function un.StopApplicationProcesses
   StrCmp $ScanResult 0 uninstall_processes_stopped
 
   uninstall_force_stop:
-    DetailPrint "正在结束未退出的小狼毫RS服务进程……"
+    DetailPrint "正在结束未退出的小狼毫Next服务进程……"
     StrCpy $ScanMode 1
     Call un.ScanApplicationProcesses
     StrCpy $ScanMode 0
@@ -737,10 +737,10 @@ Section "Uninstall"
   ${EnableX64FSRedirection}
   IfErrors uninstall_failed
   StrCmp $0 0 0 uninstall_failed
-  Delete "$SMPROGRAMS\小狼毫RS\小狼毫RS.lnk"
-  Delete "$SMPROGRAMS\小狼毫RS\小狼毫RS算法服务.lnk"
-  Delete "$SMPROGRAMS\小狼毫RS\卸载.lnk"
-  RMDir "$SMPROGRAMS\小狼毫RS"
+  Delete "$SMPROGRAMS\小狼毫Next\小狼毫Next.lnk"
+  Delete "$SMPROGRAMS\小狼毫Next\小狼毫Next算法服务.lnk"
+  Delete "$SMPROGRAMS\小狼毫Next\卸载.lnk"
+  RMDir "$SMPROGRAMS\小狼毫Next"
   !insertmacro RemoveProgramFiles
   DeleteRegKey HKLM "${UNINSTALL_KEY}"
   DeleteRegKey HKLM "${PRODUCT_KEY}"

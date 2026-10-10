@@ -1,7 +1,7 @@
-{
-  "name": "@weasel-rs/sdk-as",
+﻿{
+  "name": "@weasel-next/sdk-as",
   "version": "0.1.0",
-  "description": "AssemblyScript SDK for weasel-rs WASM themes",
+  "description": "AssemblyScript SDK for weasel-next WASM themes",
   "type": "module",
   "files": [
     "assembly"

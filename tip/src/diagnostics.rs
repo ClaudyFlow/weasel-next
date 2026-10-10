@@ -1,4 +1,4 @@
-//! 记录 TIP 实例的首个故障，并按需生成隔离的诊断报告。
+﻿//! 记录 TIP 实例的首个故障，并按需生成隔离的诊断报告。
 //!
 //! 正常回调和锁访问不写日志；故障标记本身只做有界的内存及原子操作，报告的磁盘 I/O
 //! 与对话框显示均放在辅助线程。线程句柄连同 DLL 租约保留到线程完全结束，以免卸载代码。
@@ -261,7 +261,7 @@ impl Recorder {
                     roots.push(std::env::temp_dir());
                     let mut saved = None;
                     for root in roots {
-                        let dir = root.join("Weasel-RS/Diagnostics");
+                        let dir = root.join("Weasel-Next/Diagnostics");
                         if write_report(&dir, slot, report.as_bytes()).is_ok() {
                             saved =
                                 Some(dir.join(format!("tip-{}-{slot}.log", std::process::id())));

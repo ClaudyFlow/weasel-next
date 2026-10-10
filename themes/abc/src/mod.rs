@@ -1,4 +1,4 @@
-//! 提供经典 ABC 风格的输入预编辑框与候选窗，绘制由 Direct2D/DirectWrite 完成，
+﻿//! 提供经典 ABC 风格的输入预编辑框与候选窗，绘制由 Direct2D/DirectWrite 完成，
 //!
 //! 窗口只呈现并转发候选快照中的交互事件；输入状态仍归 TIP 所有。原生窗口回调
 //! 使用稳定的 `Rc<Window>` 分配承载状态，绘图资源在创建它们的 UI 线程上使用。
@@ -224,7 +224,7 @@ fn create_window(
         // findable and closable: no WS_EX_TOOLWINDOW (task-bar button) and no
         // WS_EX_NOACTIVATE (activatable, so it can be closed).
         let (ex_style, title) = if preview && role == Role::Candidates {
-            ((WS_EX_TOPMOST) as u32, w!("Weasel-RS 皮肤预览"))
+            ((WS_EX_TOPMOST) as u32, w!("Weasel-Next 皮肤预览"))
         } else {
             (
                 (WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) as u32,

@@ -1,8 +1,8 @@
-import {
+﻿import {
   ABI_VERSION, Action, Capability, ErrorCode, EventKind, FrameResult, PointerPhase, View,
   begin_drag, draw_text, fill_rect, line_height, measure_text, options, readView, roundedRect,
   send_action, set_fixed_position, set_font, set_panel, set_size, set_visible, stroke_rect,
-} from "@weasel-rs/sdk-as/assembly";
+} from "@weasel-next/sdk-as/assembly";
 import {
   FONT_FACE, FONT_SIZE, POSITION_X, POSITION_Y, WIDTH,
 } from "./defaults";

@@ -1,4 +1,4 @@
-//! 为进程内 TIP 提供专用的命名管道 RPC 运行时。
+﻿//! 为进程内 TIP 提供专用的命名管道 RPC 运行时。
 //!
 //! TSF 在宿主应用的 COM 线程上调用 TIP；此模块把 Tokio 客户端和异步任务
 //! 限定在独立工作线程中，避免在 TSF 回调里运行执行器或等待网络响应。
@@ -1213,7 +1213,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_connection_releases_the_subscription_client_clone() {
-        let name = format!(r"\\.\pipe\weaselrs-tip-subscription-{}", std::process::id());
+        let name = format!(r"\\.\pipe\weaselnext-tip-subscription-{}", std::process::id());
         let listener = RpcServer::new(name.clone());
         let _ = tokio::time::timeout(Duration::from_millis(5), listener.accept()).await;
         let (finish, finished) = tokio::sync::oneshot::channel();
@@ -1251,7 +1251,7 @@ mod tests {
     #[tokio::test]
     async fn cancelled_handshake_never_publishes_backend_availability() {
         let name = format!(
-            r"\\.\pipe\weaselrs-tip-handshake-generation-{}",
+            r"\\.\pipe\weaselnext-tip-handshake-generation-{}",
             std::process::id()
         );
         let listener = RpcServer::new(name.clone());
@@ -1349,7 +1349,7 @@ mod tests {
 
     #[tokio::test]
     async fn idle_blur_and_layout_do_not_open_a_connection() {
-        let name = format!(r"\\.\pipe\weaselrs-tip-idle-{}", std::process::id());
+        let name = format!(r"\\.\pipe\weaselnext-tip-idle-{}", std::process::id());
         let listener = RpcServer::new(name.clone());
         // Keep a listening instance available: an accidental handshake would
         // hang dispatch and fail the timeout below.
@@ -1478,7 +1478,7 @@ mod tests {
 
     #[test]
     fn key_timeout_invalidates_connection_before_english_fallback() {
-        let name = format!(r"\\.\pipe\weaselrs-key-timeout-{}", std::process::id());
+        let name = format!(r"\\.\pipe\weaselnext-key-timeout-{}", std::process::id());
         let server_name = name.clone();
         let (ready, wait_ready) = mpsc::channel();
         let server = thread::spawn(move || {
@@ -1561,7 +1561,7 @@ mod tests {
 
     #[test]
     fn stop_cancels_stalled_handshake() {
-        let name = format!(r"\\.\pipe\weaselrs-tip-stop-{}", std::process::id());
+        let name = format!(r"\\.\pipe\weaselnext-tip-stop-{}", std::process::id());
         let (received, finish, server) = stalled_server(name.clone());
         let mut worker = RpcWorker::default();
         worker.start_with_pipe(name);
@@ -1612,7 +1612,7 @@ mod tests {
 
     #[test]
     fn worker_reconnects_after_server_disconnect() {
-        let name = format!(r"\\.\pipe\weaselrs-tip-reconnect-{}", std::process::id());
+        let name = format!(r"\\.\pipe\weaselnext-tip-reconnect-{}", std::process::id());
         let pipe = name.clone();
         let (ready_tx, ready_rx) = mpsc::channel();
         let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
@@ -1675,7 +1675,7 @@ mod tests {
 
     #[test]
     fn stalled_handshake_does_not_block_key_fallback_or_stop() {
-        let name = format!(r"\\.\pipe\weaselrs-tip-timeout-{}", std::process::id());
+        let name = format!(r"\\.\pipe\weaselnext-tip-timeout-{}", std::process::id());
         let (received, finish, server) = stalled_server(name.clone());
         let mut worker = RpcWorker::default();
         worker.start_with_pipe(name);

@@ -1,4 +1,4 @@
-//! 在 Windows 10/11 上发送桌面 Toast，并按需注册受控的激活动作。
+﻿//! 在 Windows 10/11 上发送桌面 Toast，并按需注册受控的激活动作。
 //!
 //! 调用方负责控制通知频率。操作系统禁用通知时不改用模态对话框；API 调用失败
 //! 会返回给通知中心，由其决定是否尝试 Task Dialog 回退。
@@ -44,7 +44,7 @@ impl Drop for ActiveToast {
 /// 与安装程序现有开始菜单快捷方式一致的通知身份。
 ///
 /// Windows 依赖该身份关联应用通知；发送通知本身不得创建或修改快捷方式。
-pub(crate) const APP_ID: &str = "WeaselRS.Broker";
+pub(crate) const APP_ID: &str = "WeaselNext.Broker";
 
 /// 显示一条 Toast，并将 Windows API 错误转换为字符串返回。
 ///

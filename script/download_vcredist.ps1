@@ -16,7 +16,7 @@ try {
     foreach ($architecture in @('x86', 'x64')) {
         $filename = "vc_redist.$architecture.exe"
         $temporaryFile = Join-Path ([IO.Path]::GetTempPath()) (
-            'weasel-rs-vcredist-{0}.exe' -f [Guid]::NewGuid().ToString('N')
+            'weasel-next-vcredist-{0}.exe' -f [Guid]::NewGuid().ToString('N')
         )
         $url = "https://aka.ms/vc14/$filename"
         Write-Host "Downloading $url"

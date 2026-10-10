@@ -38,12 +38,12 @@ jobs:
       - name: Upload installer and checksum
         uses: actions/upload-artifact@v7
         with:
-          name: Weasel-RS-${{ steps.build.outputs.version }}-x64
+          name: Weasel-Next-${{ steps.build.outputs.version }}-x64
           path: |
-            artifact/installer/Weasel-RS-${{ steps.build.outputs.version }}-x64-setup.exe
-            artifact/installer/Weasel-RS-${{ steps.build.outputs.version }}-x64-setup.exe.sha256
-            artifact/installer/Weasel-RS-${{ steps.build.outputs.version }}-x64-mini-setup.exe
-            artifact/installer/Weasel-RS-${{ steps.build.outputs.version }}-x64-mini-setup.exe.sha256
+            artifact/installer/Weasel-Next-${{ steps.build.outputs.version }}-x64-setup.exe
+            artifact/installer/Weasel-Next-${{ steps.build.outputs.version }}-x64-setup.exe.sha256
+            artifact/installer/Weasel-Next-${{ steps.build.outputs.version }}-x64-mini-setup.exe
+            artifact/installer/Weasel-Next-${{ steps.build.outputs.version }}-x64-mini-setup.exe.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
@@ -67,7 +67,7 @@ jobs:
       - name: Download installer and checksum
         uses: actions/download-artifact@v7
         with:
-          name: Weasel-RS-${{ needs.build.outputs.version }}-x64
+          name: Weasel-Next-${{ needs.build.outputs.version }}-x64
           path: release-asset
 
       - name: Prepare WinSparkle signer
@@ -83,7 +83,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           if ($env:RELEASE_TAG -cne "v$env:BUILD_VERSION") { throw 'Release tag and Cargo version differ.' }
-          ./script/sign-update.ps1 -Installer "release-assets/Weasel-RS-$env:BUILD_VERSION-x64-mini-setup.exe" -PublicKey $env:WINSPARKLE_PUBLIC_KEY
+          ./script/sign-update.ps1 -Installer "release-assets/Weasel-Next-$env:BUILD_VERSION-x64-mini-setup.exe" -PublicKey $env:WINSPARKLE_PUBLIC_KEY
 
       - name: Attach installer to release
         shell: pwsh
@@ -94,8 +94,8 @@ jobs:
           BUILD_VERSION: ${{ needs.build.outputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $installer = "release-assets/Weasel-RS-$env:BUILD_VERSION-x64-setup.exe"
-          $mini = "release-assets/Weasel-RS-$env:BUILD_VERSION-x64-mini-setup.exe"
+          $installer = "release-assets/Weasel-Next-$env:BUILD_VERSION-x64-setup.exe"
+          $mini = "release-assets/Weasel-Next-$env:BUILD_VERSION-x64-mini-setup.exe"
           $assets = @($installer, "$installer.sha256", $mini, "$mini.sha256", "$mini.edSignature")
           foreach ($file in $assets) {
             if (!(Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing release asset: $file" }

@@ -1,6 +1,6 @@
-//! 应用菜单相关功能
+﻿//! 应用菜单相关功能
 
-pub const BROKER_WINDOW_CLASS: &str = "weasel-rs-broker";
+pub const BROKER_WINDOW_CLASS: &str = "weasel-next-broker";
 pub const DEPLOY: u32 = 1001;
 pub const EXIT: u32 = 1002;
 pub const USER_DIRECTORY: u32 = 1003;
@@ -23,7 +23,7 @@ pub const ITEMS: &[(u32, &str)] = &[
     (0, ""),
     (HELP, "帮助 (&H)"),
     (FORUM, "论坛 (&F)"),
-    (ABOUT, "关于小狼毫RS (&A)"),
+    (ABOUT, "关于小狼毫Next (&A)"),
     (CHECK_UPDATES, "检查更新 (&C)"),
     // 分隔线
     (0, ""),

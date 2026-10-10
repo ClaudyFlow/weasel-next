@@ -9,6 +9,6 @@
     "build:debug": "node generate-defaults.mjs && asc assembly/index.ts --target debug && node ../../../script/package-theme-metadata.mjs --wasm build/weaselui-debug.wasm config.json && node copy-assets.mjs weaselui-debug",
     "test": "node test/theme-test.mjs"
   },
-  "dependencies": { "@weasel-rs/sdk-as": "file:../sdk-as" },
+  "dependencies": { "@weasel-next/sdk-as": "file:../sdk-as" },
   "devDependencies": { "assemblyscript": "0.28.20" }
 }

@@ -1,4 +1,4 @@
-//! 在 XAML Island 上方创建原生输入层，参考 Windows Terminal 的非客户区 Island 窗口实现。
+﻿//! 在 XAML Island 上方创建原生输入层，参考 Windows Terminal 的非客户区 Island 窗口实现。
 //!
 //! 输入层将空白区域转发为标题栏拖动，同时通过原生区域排除交互控件；不合成 `SC_MOVE`，
 //! 也不依赖 XAML 指针捕获。
@@ -54,7 +54,7 @@ impl DragLayer {
         root: &Grid,
         interactive: Vec<FrameworkElement>,
     ) -> Result<Self, String> {
-        let name = w!("WeaselRS.DeployDragInput");
+        let name = w!("WeaselNext.DeployDragInput");
         let class = WNDCLASSW {
             lpfnWndProc: Some(input_proc),
             hInstance: GetModuleHandleW(None),

@@ -1,4 +1,4 @@
-//! 实现 TSF 语言栏中的中/英输入模式按钮，并通过 `ITfLangBarItemSink` 通知外壳刷新。
+﻿//! 实现 TSF 语言栏中的中/英输入模式按钮，并通过 `ITfLangBarItemSink` 通知外壳刷新。
 //!
 //! 按钮状态由原子字段发布；当前上下文仅以弱引用关联，避免语言栏延长上下文生命周期。
 //! COM 回调会经边界保护转换错误；调用外壳或显示模态菜单时不持有服务锁，以容许同步重入。
@@ -285,7 +285,7 @@ impl ITfLangBarItem_Impl for ModeButton_Impl {
                 dwStyle: (TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_SHOWNINTRAY) as u32,
                 ..Default::default()
             };
-            let description = HSTRING::from("Weasel-RS 中/英输入模式");
+            let description = HSTRING::from("Weasel-Next 中/英输入模式");
             value.szDescription[..description.len()].copy_from_slice(&description);
             unsafe {
                 *info = value;

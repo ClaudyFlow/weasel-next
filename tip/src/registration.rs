@@ -1,4 +1,4 @@
-//! 为文本服务登记或撤销 COM 服务器、TSF 语言配置文件及类别。
+﻿//! 为文本服务登记或撤销 COM 服务器、TSF 语言配置文件及类别。
 //!
 //! 注册按 COM 服务器、语言配置文件、TSF 类别的顺序执行；中途失败时按相反方向回滚已完成
 //! 的步骤。此模块只负责注册表和 TSF 管理器交互，不参与运行期输入处理。
@@ -21,7 +21,7 @@ use windows_core::{Error, GUID, Result};
 use windows_registry::CLASSES_ROOT;
 use windows_strings::{HSTRING, PCWSTR, PWSTR};
 
-const DESCRIPTION: &str = "小狼毫RS";
+const DESCRIPTION: &str = "小狼毫Next";
 const CLSID_KEY_PREFIX: &str = "CLSID\\";
 const INPROC_SERVER: &str = "InprocServer32";
 const THREADING_MODEL: &str = "ThreadingModel";

@@ -1,4 +1,4 @@
-//! 仅供安装流程调用的 Windows 快捷方式创建功能。
+﻿//! 仅供安装流程调用的 Windows 快捷方式创建功能。
 //!
 //! Windows Toast 通知需要系统上存在具有 AppUserModel ID 的快捷方式
 use std::path::Path;
@@ -57,7 +57,7 @@ pub(crate) fn install(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         link.SetArguments(w!("")).ok()?;
         link.SetWorkingDirectory(&HSTRING::from(directory.as_os_str()))
             .ok()?;
-        link.SetDescription(w!("小狼毫RS算法服务")).ok()?;
+        link.SetDescription(w!("小狼毫Next算法服务")).ok()?;
         link.SetIconLocation(&HSTRING::from(executable.as_os_str()), 0)
             .ok()?;
         let properties: IPropertyStore = link.cast()?;

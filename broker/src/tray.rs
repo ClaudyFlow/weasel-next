@@ -1,4 +1,4 @@
-//! Windows 通知区域图标、隐藏窗口和菜单消息循环。
+﻿//! Windows 通知区域图标、隐藏窗口和菜单消息循环。
 
 use std::{
     cell::RefCell,
@@ -56,7 +56,7 @@ pub(crate) fn create() -> Result<TrayIcon, Box<dyn std::error::Error>> {
     }
     TASKBAR_CREATED.store(taskbar, Ordering::Release);
     let class_name = HSTRING::from(command_menu::BROKER_WINDOW_CLASS);
-    let title = w!("weasel-rs");
+    let title = w!("weasel-next");
     let hinstance = unsafe { GetModuleHandleW(None) };
     let window_class = WNDCLASSW {
         lpfnWndProc: Some(window_proc),
@@ -148,7 +148,7 @@ fn add_icon(window: HWND) -> Result<NOTIFYICONDATAW, Box<dyn std::error::Error>>
         hIcon: icon,
         ..Default::default()
     };
-    let tip = HSTRING::from("Weasel-RS 服务器");
+    let tip = HSTRING::from("Weasel-Next 服务器");
     let length = tip.len().min(data.szTip.len() - 1);
     data.szTip[..length].copy_from_slice(&tip[..length]);
     if !unsafe { Shell_NotifyIconW(NIM_ADD as u32, &data).as_bool() } {
@@ -316,7 +316,7 @@ fn show_diagnostics(window: HWND) {
 
 /// 显示属于托盘消息窗口的模态 Task Dialog。
 fn show_dialog(window: HWND, instruction: &str, content: &str, icon: TaskDialogIcon) {
-    if let Err(error) = TaskDialog::new("小狼毫RS", instruction)
+    if let Err(error) = TaskDialog::new("小狼毫Next", instruction)
         .owner(window.0 as usize)
         .icon(icon)
         .content(content)

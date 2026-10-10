@@ -31,7 +31,7 @@ try {
     & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'build-installer.ps1') -Mini
     if ($LASTEXITCODE -ne 0) { throw 'Mini installer build failed.' }
     foreach ($suffix in @('', '-mini')) {
-        $installer = Join-Path $projectRoot "artifact\installer\Weasel-RS-$version-x64$suffix-setup.exe"
+        $installer = Join-Path $projectRoot "artifact\installer\Weasel-Next-$version-x64$suffix-setup.exe"
         $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
         $filename = Split-Path -Leaf $installer
         Set-Content -LiteralPath "$installer.sha256" -Value "$hash  $filename" -Encoding utf8
