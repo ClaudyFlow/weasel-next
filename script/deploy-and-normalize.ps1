@@ -37,7 +37,19 @@ $luaSrc = Join-Path $root 'plugin\lua'
 $luaDst = Join-Path $userData 'plugin'
 if (Test-Path $luaSrc) {
     New-Item -ItemType Directory -Force -Path $luaDst | Out-Null
-    Copy-Item (Join-Path $luaSrc 'rime.lua') $luaDst -Force   # 只装引导 rime.lua ✓ 不动用户自己的插件 ✓
+    # ★ 整棵 plugin\lua 树打包进用户文件夹（rime.lua + 插件本体 ✓ 不进程序文件夹 ✓）
+    $installed = 0
+    foreach ($src in (Get-ChildItem $luaSrc -Recurse -File)) {
+        $rel = $src.FullName.Substring($luaSrc.Length).TrimStart('\')
+        $dstFile = Join-Path $luaDst $rel
+        New-Item -ItemType Directory -Force -Path (Split-Path $dstFile) | Out-Null
+        if ((Test-Path $dstFile) -and ((Get-FileHash $dstFile).Hash -ne (Get-FileHash $src.FullName).Hash)) {
+            Copy-Item $dstFile ($dstFile + '.bak-' + (Get-Date -Format 'MMdd-HHmm')) -Force
+        }
+        Copy-Item $src.FullName $dstFile -Force
+        $installed++
+    }
+    Ok ("已打包 lua 插件 $installed 个文件 → $luaDst")
     Ok ('已安装 lua 插件 → ' + $luaDst)
 } else { Warn '找不到 plugin\lua（跳过）' }
 Step '停栈并安装新 server'
