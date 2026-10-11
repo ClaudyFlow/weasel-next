@@ -130,7 +130,7 @@ foreach ($f in 'weasel-broker.exe', 'weasel-server.exe', 'weasel-renderer.exe', 
 $total = (Get-ChildItem $InstallDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
 Write-Ok ('共 {0:N1} MB' -f ($total / 1MB))
 # ★ 只打包 rime.lua 这个接口到**用户文件夹**（插件本体不进包 ✓ 用户自己放 ✓）
-$luaSrc = Join-Path $PSScriptRoot '..\plugin\lua\rime.lua'
+$luaSrc = Join-Path $PSScriptRoot '..\Rime-Next\plugin\rime.lua'   # ★ 打包源（按用户要求 ✓）
 $luaDst = Join-Path $env:APPDATA 'Rime-Next\plugin'
 if (Test-Path $luaSrc) {
     New-Item -ItemType Directory -Force -Path $luaDst | Out-Null
