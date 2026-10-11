@@ -532,7 +532,14 @@ impl Window {
                     // 面板本体：圆角矩形 + 40% 淡罩。
                     // 原来 15% 在深色背景上几乎看不出轮廓 → 圆角"像没了" ✗；
                     // 透明度低一点（40%）才既有玻璃感、又能看清圆角形状。
-                    let mut fill = color(p.background);
+                    // ★ 先铺满整窗黑底：面板绘制尺寸是按 DIP 算的，而窗口是**像素** ✗
+                    // 高分屏或舍入下会留下 1~2px 未绘制像素 → 在整窗统一透明下显示为**黑斑** ✗
+                    // 先铺一层满窗黑（圆角之外由 SetWindowRgn 裁掉 ✓），再画圆角面板 ✓
+                    let mut base = color(p.background);
+                    base.a = 1.0;
+                    brush.SetColor(&base);
+                    target.FillRectangle(&rect(0.0, 0.0, width + 4.0, height + 4.0), &brush);
+let mut fill = color(p.background);
                     fill.a = 1.0;   // 面板用真彩色 ✓ 透明由整窗 LWA_ALPHA 提供（否则 DWM 忽略逐像素 alpha → 又暗又平 ✗）
                     brush.SetColor(&fill);
                     target.FillRoundedRectangle(

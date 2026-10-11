@@ -226,7 +226,7 @@ impl Palette {
         // dark/light 两个分支都按黑底设计，只是黑度略不同，避免跟随系统变回白底 ✗。
         if dark {
             Self {
-                background: 0x0B0B0B,
+                background: 0x000000,   // ★ 纯黑面板（用户要求"候选做成黑色" ✓）
                 border: 0x3A3A3A,
                 active: 0x2C5F8C,   // ★ 对齐截图：沉稳蓝选中块 ✓
                 hover: 0x2C5F8C,
@@ -237,7 +237,7 @@ impl Palette {
             }
         } else {
             Self {
-                background: 0x0D0D0D,
+                background: 0x000000,   // ★ 纯黑面板 ✓
                 border: 0x3E3E3E,
                 active: 0x2F6394,   // ★ 对齐截图：沉稳蓝选中块 ✓
                 hover: 0x2C5F8C,   // 悬停与选中同色（用户要求 ✓）
