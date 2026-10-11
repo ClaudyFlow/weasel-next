@@ -129,19 +129,11 @@ foreach ($f in 'weasel-broker.exe', 'weasel-server.exe', 'weasel-renderer.exe', 
 }
 $total = (Get-ChildItem $InstallDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
 Write-Ok ('共 {0:N1} MB' -f ($total / 1MB))
-# ★ 打包 lua 统计插件到**用户文件夹**（不进程序文件夹 ✓ 用户级安装 ✓）
-$luaSrc = Join-Path $PSScriptRoot '..\plugin\lua'
+# ★ 只打包 rime.lua 这个接口到**用户文件夹**（插件本体不进包 ✓ 用户自己放 ✓）
+$luaSrc = Join-Path $PSScriptRoot '..\plugin\lua\rime.lua'
 $luaDst = Join-Path $env:APPDATA 'Rime-Next\plugin'
 if (Test-Path $luaSrc) {
     New-Item -ItemType Directory -Force -Path $luaDst | Out-Null
-    foreach ($src in (Get-ChildItem $luaSrc -Recurse -File)) {
-        $rel = $src.FullName.Substring($luaSrc.Length).TrimStart('\')
-        $dstFile = Join-Path $luaDst $rel
-        New-Item -ItemType Directory -Force -Path (Split-Path $dstFile) | Out-Null
-        if ((Test-Path $dstFile) -and ((Get-FileHash $dstFile).Hash -ne (Get-FileHash $src.FullName).Hash)) {
-            Copy-Item $dstFile ($dstFile + '.bak-' + (Get-Date -Format 'MMdd-HHmm')) -Force
-        }
-        Copy-Item $src.FullName $dstFile -Force
-    }
-    Write-Host ('lua 插件已打包 → ' + $luaDst)
+    Copy-Item $luaSrc $luaDst -Force
+    Write-Host ('rime.lua 已安装 → ' + $luaDst)
 }
