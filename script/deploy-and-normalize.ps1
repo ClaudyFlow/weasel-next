@@ -37,7 +37,7 @@ $luaSrc = Join-Path $root 'plugin\lua'
 $luaDst = Join-Path $userData 'plugin'
 if (Test-Path $luaSrc) {
     New-Item -ItemType Directory -Force -Path $luaDst | Out-Null
-    Copy-Item (Join-Path $luaSrc '*') $luaDst -Recurse -Force
+    Copy-Item (Join-Path $luaSrc 'rime.lua') $luaDst -Force   # 只装引导 rime.lua ✓ 不动用户自己的插件 ✓
     Ok ('已安装 lua 插件 → ' + $luaDst)
 } else { Warn '找不到 plugin\lua（跳过）' }
 Step '停栈并安装新 server'
