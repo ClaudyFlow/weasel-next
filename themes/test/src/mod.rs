@@ -1024,7 +1024,7 @@ unsafe fn apply_round_region(hwnd: HWND, width: f32, height: f32) {
     }
     // 分层窗口：整个（已裁圆的）窗口带统一透明度 ✓（逐像素 alpha 要等 DIB + UpdateLayeredWindow ✓）
     const LWA_ALPHA: u32 = 0x2;
-    SetLayeredWindowAttributes(hwnd, 0, 242, LWA_ALPHA);
+    SetLayeredWindowAttributes(hwnd, 0, 200, LWA_ALPHA);   // ★ Aero 玻璃 200 ≈ 78%：让 DWM 磨砂真正透出来 ✓
 }
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     // Catch every Rust callback, including paint and event delivery, before ABI return.
