@@ -552,7 +552,7 @@ let mut fill = color(p.background);
                     );
                     // 圆角描边：加厚到 2px、更亮 —— 轮廓清楚（内缩半个描边宽，避免被裁）。
                     let mut outline = color(p.border);   // 黑底外描边 ✓（下面把 alpha 调淡，避免顶部像一条黑边 ✗）
-                    outline.a = 0.45;   // ★ 调淡：顶部不再是一条黑 ✓
+                    outline.a = 0.60;   // Aero 外框：蓝灰、清晰但不硬 ✓
                     brush.SetColor(&outline);
                     target.DrawRoundedRectangle(
                         &D2D1_ROUNDED_RECT {
@@ -577,13 +577,13 @@ let mut fill = color(p.background);
                     for i in 0..steps {
                         let f = i as f32 / steps as f32;
                         let mut hl = color(0xffffff);
-                        hl.a = 0.34 * (1.0 - f) * (1.0 - f);   // ★ 高光加强（用户要求"多一点" ✓）
+                        hl.a = 0.55 * (1.0 - f) * (1.0 - f);   // ★ Aero 招牌：强顶光（玻璃上半那道白光 ✓）
                         brush.SetColor(&hl);
                         let y0 = band_start + i as f32 * band_h;
                         target.FillRectangle(&rect(0.0, y0, width, y0 + band_h), &brush);   // ★ 全宽高光带（溢出圆角的部分由 SetWindowRgn 裁掉 ✓）
                     }
                     let mut hl_line = color(0xffffff);
-                    hl_line.a = 0.50;   // 顶线同步加强 ✓
+                    hl_line.a = 0.75;   // Aero 顶端亮线（很亮 ✓）
                     brush.SetColor(&hl_line);
                     target.FillRectangle(&rect(0.0, band_start, width, band_start + 1.0), &brush);   // 亮线跟着高光带顶边 ✓
                     // 左右淡边（同样内缩 radius，止于上下圆角之间）
