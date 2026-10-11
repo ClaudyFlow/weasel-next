@@ -619,6 +619,30 @@ let mut fill = color(p.background);
                         p.text,
                     );
                 }
+                // ★★ 三层结构（用户要求 ✓）
+                //   ① 底层: 满窗底 + 圆角面板（上面已画 ✓）
+                //   ② 左侧候选区: 0 … fn_left（按 cell 画选中/悬停块 ✓）
+                //   ③ 右侧功能区: fn_left … width —— 独立成块（略深底色 + 左侧 1px 分隔线 ✓）
+                let fn_left = c
+                    .layout
+                    .cells
+                    .iter()
+                    .find(|cell| matches!(cell.hit, Hit::Previous))
+                    .map(|cell| cell.left)
+                    .unwrap_or(width);
+                if fn_left < width {
+                    let content_h = c.layout.height;
+                    let mut zone = color(0x000000);
+                    zone.a = 0.10;   // 功能区比面板略深，读作"独立一栏" ✓
+                    brush.SetColor(&zone);
+                    target.FillRectangle(&rect(fn_left, 0.0, width, content_h), &brush);
+                    let mut edge = color(0xFFFFFF);
+                    edge.a = 0.22;   // 功能区左沿分隔线 ✓
+                    brush.SetColor(&edge);
+                    target.FillRectangle(&rect(fn_left, 0.0, fn_left + 1.0, content_h), &brush);
+                    brush.SetColor(&color(p.text));
+                }
+
                 for cell in &c.layout.cells {
                     let selected = matches!(cell.hit, Hit::Candidate(i) if i == c.snapshot.selected_index as usize);
                     let usable = enabled(&c.snapshot, cell.hit);
