@@ -32,6 +32,14 @@ if (-not $SkipBuild) {
     Ok '编译通过'
 }
 
+Step '安装 lua 插件到用户文件夹（代码在 plugin\lua ✓ 不进程序文件夹 ✓）'
+$luaSrc = Join-Path $root 'plugin\lua'
+$luaDst = Join-Path $userData 'plugin'
+if (Test-Path $luaSrc) {
+    New-Item -ItemType Directory -Force -Path $luaDst | Out-Null
+    Copy-Item (Join-Path $luaSrc '*') $luaDst -Recurse -Force
+    Ok ('已安装 lua 插件 → ' + $luaDst)
+} else { Warn '找不到 plugin\lua（跳过）' }
 Step '停栈并安装新 server'
 Get-Process -Name 'weasel-broker', 'weasel-server', 'weasel-renderer' -ErrorAction SilentlyContinue |
     ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
