@@ -624,13 +624,13 @@ let mut fill = color(p.background);
                 let fn_left = c.layout.cells.iter()
                     .find(|cell| matches!(cell.hit, Hit::Previous))
                     .map(|cell| cell.left)
-                    .unwrap_or(width);
-                if fn_left < width {
+                    .unwrap_or(c.layout.width);
+                if fn_left < c.layout.width {
                     let content_h = c.layout.height;
-                    let mut zone = color(0x000000);
+                    let mut zone = color(0x000000);   // 功能区底色 ✓
                     zone.a = 0.10;   // 功能区比面板略深 → 读作"独立一栏" ✓
                     brush.SetColor(&zone);
-                    target.FillRectangle(&rect(fn_left, 0.0, width, content_h), &brush);
+                    target.FillRectangle(&rect(fn_left, 0.0, c.layout.width, content_h), &brush);
                     let mut edge = color(0xFFFFFF);
                     edge.a = 0.22;   // 功能区左沿 1px 分隔线 ✓
                     brush.SetColor(&edge);
