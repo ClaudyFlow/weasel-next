@@ -946,17 +946,27 @@ unsafe fn apply_round_region(hwnd: HWND, width: f32, height: f32) {
     if width <= 0.0 || height <= 0.0 {
         return;
     }
-    // 与绘制保持同一个半径：高度四分之一（logic 里的圆角算法一致 ✓）
-    let radius = (height / 6.0).max(4.0);   // 与绘制保持一致的**小**圆角 ✓
+    // ★ 单位换算（今晚踩的坑 ✗）：调用方给的是 **DIP**，而 SetWindowRgn 要的是**设备像素** ✗。
+    // 不换算时 DPI>96（125%/150% 缩放）区域会偏小 → 面板**右侧与底部被切掉** ✗（用户报的"右侧不全" ✓）。
+    let dpi = GetDpiForWindow(hwnd).max(96) as f32;
+    let scale = dpi / 96.0;
+    let radius = (height / 6.0).max(4.0) * scale;   // 半径同样换算成像素 ✓
     let d = (radius * 2.0).round() as i32;
-    let rgn = CreateRoundRectRgn(0, 0, width.round() as i32 + 1, height.round() as i32 + 1, d, d);
+    let rgn = CreateRoundRectRgn(
+        0,
+        0,
+        (width * scale).round() as i32 + 1,
+        (height * scale).round() as i32 + 1,
+        d,
+        d,
+    );
     if rgn != 0 {
-        // SetWindowRgn 接管 region 所有权，不需要再 DeleteObject ✓
+        // SetWindowRgn 接管 region 所有权，不需要 DeleteObject ✓
         SetWindowRgn(hwnd, rgn, 1);
     }
-    // 分层窗口：让整个（已裁剪为圆角的）窗口带一点透明度（LWA_ALPHA 是统一 alpha ✓）
+    // 分层窗口：整个（已裁圆的）窗口带统一透明度 ✓（逐像素 alpha 要等 DIB + UpdateLayeredWindow ✓）
     const LWA_ALPHA: u32 = 0x2;
-    SetLayeredWindowAttributes(hwnd, 0, 242, LWA_ALPHA);   // 242 ≈ 95%：用户要求"不要那么透明" ✓
+    SetLayeredWindowAttributes(hwnd, 0, 242, LWA_ALPHA);
 }
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     // Catch every Rust callback, including paint and event delivery, before ABI return.
