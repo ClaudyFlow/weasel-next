@@ -23,7 +23,7 @@ use weasel_common::{
 
 /// 判断 broker 返回的主题名称是否受当前 renderer 支持。
 fn supports_theme(name: &str) -> bool {
-    ["seven", "eleven", "ten", "abc", "void", "wasm"].contains(&name)
+    ["seven", "test", "eleven", "ten", "abc", "void", "wasm"].contains(&name)
 }
 
 /// 启动渲染器运行时、读取主题配置并运行 UI 与 RPC 服务。

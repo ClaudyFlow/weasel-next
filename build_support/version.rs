@@ -9,6 +9,7 @@ pub fn embed() {
         "weasel-tip" => ("Weasel-Next Text Input Processor", "weasel_tip.dll", true),
         "weasel-theme-ten" => ("Weasel-Next ten Theme", "weasel_theme_ten.dll", true),
         "weasel-theme-seven" => ("Weasel-Next seven Theme", "weasel_theme_seven.dll", true),
+        "weasel-theme-test" => ("Weasel-Next test Theme", "weasel_theme_test.dll", true),
         "weasel-theme-eleven" => ("Weasel-Next eleven Theme", "weasel_theme_eleven.dll", true),
         "weasel-theme-abc" => ("Weasel-Next abc Theme", "weasel_theme_abc.dll", true),
         "weasel-theme-void" => ("Weasel-Next void Theme", "weasel_theme_void.dll", true),

@@ -30,9 +30,11 @@ fn theme_candidates(preferred: &str) -> Vec<&'static dyn ThemeFactory> {
     static VOID: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
     static WASM: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
 static SEVEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
+static TEST: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
     let preferred = match preferred {
         "eleven" => "eleven",
             "seven" => "seven",
+            "test" => "test",
         "ten" => "ten",
         "abc" => "abc",
         "void" => "void",
@@ -48,6 +50,7 @@ static SEVEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::ne
                 "void" => &VOID,
                 "wasm" => &WASM,
                 "seven" => &SEVEN,
+                "test" => &TEST,
                 _ => unreachable!("candidate names are normalized above"),
             };
             let loaded = slot.get_or_init(|| {

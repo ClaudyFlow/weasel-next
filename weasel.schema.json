@@ -14,6 +14,7 @@
                                      "description":  "主题名称",
                                      "type":  "string",
                                      "enum":  [
+                                                  "test",
                                                   "seven",
                                                   "eleven",
                                                   "ten",
@@ -192,7 +193,10 @@
                                                                          },
                                                                 "seven":  {
 
-                                                                          }
+                                                                          },
+                                                                "test":  {
+
+                                                                         }
                                                             },
                                              "additionalProperties":  {
                                                                           "type":  "object"

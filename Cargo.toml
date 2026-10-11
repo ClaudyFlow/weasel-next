@@ -14,6 +14,7 @@ members = [
     "themes/support",
     "themes/ten",
     "themes/seven",
+    "themes/test",
     "themes/eleven",
     "themes/abc",
     "themes/void",
