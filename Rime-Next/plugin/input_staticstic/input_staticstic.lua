@@ -415,7 +415,7 @@ end
 
 local function translator_impl(input, seg, env)
   diag("translator input=" .. tostring(input))
-  local letter = input:match("^([rzynq]?)tj[qs]?$")
+  local letter = input:match("^/?([rzynq]?)tj[qs]?$")
   if letter == nil then return end
   diag("命中命令 input=" .. tostring(input))
   local range = range_of(letter)
