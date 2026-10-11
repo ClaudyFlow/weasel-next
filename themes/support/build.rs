@@ -22,6 +22,26 @@ fn main() {
         .input(&native_winmd)
         .input_default()
         .filters([
+            // ★ 逐像素 alpha（DIB + UpdateLayeredWindow）所需（filters 是白名单 ✓ 名字用扁平形式 ✓）
+            "Windows.Win32.CreateDIBSection",
+            "Windows.Win32.CreateCompatibleDC",
+            "Windows.Win32.SelectObject",
+            "Windows.Win32.DeleteDC",
+            "Windows.Win32.GetDC",
+            "Windows.Win32.ReleaseDC",
+            "Windows.Win32.BITMAPINFO",
+            "Windows.Win32.BITMAPINFOHEADER",
+            "Windows.Win32.DIB_RGB_COLORS",
+            "Windows.Win32.HBITMAP",
+            "Windows.Win32.HGDIOBJ",
+            "Windows.Win32.HDC",
+            "Windows.Win32.UpdateLayeredWindow",
+            "Windows.Win32.BLENDFUNCTION",
+            "Windows.Win32.ULW_ALPHA",
+            "Windows.Win32.AC_SRC_OVER",
+            "Windows.Win32.AC_SRC_ALPHA",
+            "Windows.Win32.ID2D1DCRenderTarget",
+            "Windows.Win32.D2D1_DC_INITIALIZE_MODE",
             "Windows.Win32.SWP_NOSIZE",
             "Windows.Win32.RegisterClassW",
             "Windows.Win32.CreateWindowExW",
@@ -212,7 +232,9 @@ fn main() {
             "Windows.UI.Xaml.Controls.Primitives.IButtonBaseFactory",
             "Windows.UI.Xaml.Controls.Primitives.IButtonBaseStatics",
             "Windows.Win32.LRESULT",
-        ])
+        // ★ 逐像素 alpha（DIB + UpdateLayeredWindow）需要的 Win32 API（逐个列出 ✓
+        //   filters 是白名单：不在里面就不会进绑定 ✗ —— 这就是昨晚"缺 GDI"的原因 ✓）
+    ])
         .write();
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=build_d2d.rs");
