@@ -564,19 +564,19 @@ impl Window {
                     // ★ Aero 招牌：顶部**高光带**（不是一条线 ✗）—— 24 层渐隐细线模拟线性渐变，
 // 顶部 alpha 0.72 二次衰减到 0，覆盖上半 48% 高度（无需渐变画刷 API ✓ 低风险 ✓）
                     let band_start = 0.0;   // ★ 去掉顶部暗边：高光从最顶端开始 ✓
-                    let band_end = height * 0.55;
+                    let band_end = height * 0.60;   // 高光带再宽一点 ✓
                     let steps = 24u32;
                     let band_h = (band_end - band_start) / steps as f32;
                     for i in 0..steps {
                         let f = i as f32 / steps as f32;
                         let mut hl = color(0xffffff);
-                        hl.a = 0.16 * (1.0 - f) * (1.0 - f);   // 对齐截图：极淡顶光 ✓
+                        hl.a = 0.34 * (1.0 - f) * (1.0 - f);   // ★ 高光加强（用户要求"多一点" ✓）
                         brush.SetColor(&hl);
                         let y0 = band_start + i as f32 * band_h;
                         target.FillRectangle(&rect(0.0, y0, width, y0 + band_h), &brush);   // ★ 全宽高光带（溢出圆角的部分由 SetWindowRgn 裁掉 ✓）
                     }
                     let mut hl_line = color(0xffffff);
-                    hl_line.a = 0.28;
+                    hl_line.a = 0.50;   // 顶线同步加强 ✓
                     brush.SetColor(&hl_line);
                     target.FillRectangle(&rect(0.0, band_start, width, band_start + 1.0), &brush);   // 亮线跟着高光带顶边 ✓
                     // 左右淡边（同样内缩 radius，止于上下圆角之间）
