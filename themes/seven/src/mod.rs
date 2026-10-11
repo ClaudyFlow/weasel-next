@@ -675,7 +675,7 @@ impl Window {
                             let glyph = match hit {
                                 Hit::Previous => "\u{2039}",   // ‹ 用普通文字字体画 ✓ 图标字体可能缺字形 ✗
                                 Hit::Next => "\u{203A}",   // › 同上 ✓
-                                _ => "\u{E76E}",
+                                _ => "\u{263A}",   // ☺ 用普通字体可显示的字形 ✓（原来 U+E76E 图标字体缺字形 → 空白 ✗）
                             };
                             let mut icon_rect = rect;
                             icon_rect.top -= 2.0 * SCALE;
@@ -956,7 +956,7 @@ unsafe fn apply_round_region(hwnd: HWND, width: f32, height: f32) {
     }
     // 分层窗口：让整个（已裁剪为圆角的）窗口带一点透明度（LWA_ALPHA 是统一 alpha ✓）
     const LWA_ALPHA: u32 = 0x2;
-    SetLayeredWindowAttributes(hwnd, 0, 216, LWA_ALPHA);   // 216 ≈ 85%：兼顾"透"与白字够亮 ✓
+    SetLayeredWindowAttributes(hwnd, 0, 242, LWA_ALPHA);   // 242 ≈ 95%：用户要求"不要那么透明" ✓
 }
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     // Catch every Rust callback, including paint and event delivery, before ABI return.
