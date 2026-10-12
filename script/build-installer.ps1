@@ -22,25 +22,25 @@ try {
 
     $requiredFiles = @(
         'weasel.json',
-        'target\x86_64-pc-windows-msvc\release\weasel-broker.exe',
+        'target\release\weasel-broker.exe',
         'artifact\winsparkle\WinSparkle.dll',
         'artifact\winsparkle\WinSparkle-LICENSE.txt',
         'artifact\winsparkle\WinSparkle-Expat-LICENSE.txt',
-        'target\x86_64-pc-windows-msvc\release\weasel-server.exe',
-        'target\x86_64-pc-windows-msvc\release\weasel-renderer.exe',
-        'target\x86_64-pc-windows-msvc\release\uiaccess\weasel-renderer.exe',
-        'target\x86_64-pc-windows-msvc\release\uiaccess\weasel_renderer.pdb',
+        'target\release\weasel-server.exe',
+        'target\release\weasel-renderer.exe',
+        'target\release\uiaccess\weasel-renderer.exe',
+        'target\release\uiaccess\weasel_renderer.pdb',
         'script\sign-renderer.ps1',
-        'target\x86_64-pc-windows-msvc\release\weasel-settings.exe',
-        'target\x86_64-pc-windows-msvc\release\weasel_tip.dll',
+        'target\release\weasel-settings.exe',
+        'target\release\weasel_tip.dll',
         'target\i686-pc-windows-msvc\release\weasel_tip.dll',
         'artifact\smoke\rime.dll',
         'Rime-Next\rime-data\default.yaml',
-                'target\x86_64-pc-windows-msvc\release\weasel_broker.pdb',
-        'target\x86_64-pc-windows-msvc\release\weasel_server.pdb',
-        'target\x86_64-pc-windows-msvc\release\weasel_renderer.pdb',
-        'target\x86_64-pc-windows-msvc\release\weasel_settings.pdb',
-        'target\x86_64-pc-windows-msvc\release\weasel_tip.pdb',
+                'target\release\weasel_broker.pdb',
+        'target\release\weasel_server.pdb',
+        'target\release\weasel_renderer.pdb',
+        'target\release\weasel_settings.pdb',
+        'target\release\weasel_tip.pdb',
         'target\i686-pc-windows-msvc\release\weasel_tip.pdb',
         'artifact\vcredist\vc_redist.x86.exe',
         'artifact\vcredist\vc_redist.x64.exe',
@@ -50,16 +50,16 @@ try {
         'THIRD-PARTY-LICENSES.txt',
         'THIRD-PARTY-GPL-3.0.txt',
         'settings\LICENSE-NOTICE.txt',
-        'installer\weasel-next.nsi',
+        'installer\weasel-rs.nsi',
         'script\launch-broker.ps1'
     )
-    foreach ($theme in @('ten', 'eleven', 'abc', 'void')) {
-        foreach ($extension in @('dll', 'pdb')) {
-            $requiredFiles += "target\x86_64-pc-windows-msvc\release\weasel_theme_$theme.$extension"
+    foreach ($theme in @('ten', 'eleven', 'abc', 'void', 'seven', 'test', 'official')) {
+        foreach ($extension in @('dll')) {   # ★ GNU 构建不产 pdb ✓ 只列 dll ✓
+            $requiredFiles += "target\release\weasel_theme_$theme.$extension"
         }
     }
     foreach ($theme in @('abc', 'eleven')) {
-        $requiredFiles += "target\x86_64-pc-windows-msvc\release\themes\weasel_theme_$theme.settings.json"
+        $requiredFiles += "target\release\themes\weasel_theme_$theme.settings.json"
     }
     if ($Mini) {
         $requiredFiles = @($requiredFiles | Where-Object { $_ -notlike '*.pdb' })
@@ -178,11 +178,11 @@ try {
         "/DPRODUCT_VERSION=$version",
         "/DOUTPUT_FILE=$outputFile",
         "/DPAYLOAD_INCLUDE=$payloadInclude",
-        (Join-Path $projectRoot 'installer\weasel-next.nsi')
+        (Join-Path $projectRoot 'installer\weasel-rs.nsi')
     )
     $buildDefinitions = @()
     if ($Mini) { $buildDefinitions += '/DMINI_INSTALLER' }
-    if (Test-Path -LiteralPath (Join-Path $projectRoot 'target\x86_64-pc-windows-msvc\release\weasel_theme_wasm.dll') -PathType Leaf) {
+    if (Test-Path -LiteralPath (Join-Path $projectRoot 'target\release\weasel_theme_wasm.dll') -PathType Leaf) {
         $buildDefinitions += '/DHAVE_WASM_THEME'
     }
     if ($Dev) {

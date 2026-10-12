@@ -105,13 +105,13 @@ pub fn load(paths: &RuntimePaths, document: &Document) -> Result<Catalog, String
     for (id, defaults, rich) in [
         (
             "abc",
-            include_bytes!("../../themes/abc/src/config.json").as_slice(),
-            include_bytes!("../../themes/abc/src/config.richschema.json").as_slice(),
+            include_bytes!("../schema/abc/config.json").as_slice(),
+            include_bytes!("../schema/abc/config.richschema.json").as_slice(),
         ),
         (
             "eleven",
-            "seven", include_bytes!("../../themes/eleven/src/config.json").as_slice(),
-            include_bytes!("../../themes/eleven/src/config.richschema.json").as_slice(),
+            include_bytes!("../schema/eleven/config.json").as_slice(),
+            include_bytes!("../schema/eleven/config.richschema.json").as_slice(),
         ),
     ] {
         let path = paths
