@@ -1,0 +1,55 @@
+[package]
+name = "weasel-settings"
+version = "0.1.8"
+edition = "2024"
+# 原创源码继续采用 BSD；链接 Slint 后的组合产物遵循 GPLv3，见 README。
+license.workspace = true
+
+# 框架无关的设置核心（配置文档、目录发现、schema 元数据、表单字段、应用选项）。
+
+[lib]
+name = "weasel_settings"
+path = "src/lib.rs"
+
+# Slint 界面本体；只有打开 `gui` 特性时才构建。
+[[bin]]
+name = "weasel-settings"
+path = "src/main.rs"
+required-features = ["gui"]
+
+[features]
+# `gui` = Slint 界面所需的全部依赖（含 bin 专用的 windows-* 绑定）。
+# 渲染后端默认 femtovg：纯 Rust + 系统 OpenGL，构建期不需要联网。
+# 原来的 skia 后端保留为可选特性：skia-bindings 会在构建期访问
+# chromium/skia.googlesource.com 拉源码或预编译包，离线/受限网络下必然失败。
+default = ["gui", "renderer-femtovg"]
+gui = [
+    "dep:slint",
+    "dep:windows-core",
+    "dep:windows-strings",
+    "dep:windows-version",
+    "dep:raw-window-handle",
+]
+renderer-femtovg = ["slint/renderer-femtovg"]
+renderer-skia = ["slint/renderer-skia"]
+renderer-software = ["slint/renderer-software"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+regex = "1"
+libloading = "0.8"
+weasel-common = { path = "../common", features = ["wasm-metadata"] }
+slint = { version = "=1.17.1", optional = true, default-features = false, features = ["std", "backend-winit", "unstable-winit-030", "compat-1-2", "accessibility"] }
+windows-core = { version = "0.100", optional = true }
+windows-strings = { version = "0.100", optional = true }
+windows-version = { version = "0.100", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+
+[build-dependencies]
+# 构建脚本始终编译这些依赖（保持 build.rs 无条件可编译），但只有 `gui` 打开时才真正
+# 生成界面绑定与图标/清单资源。
+windows-bindgen = "0.100"
+embed-resource = "3"
+slint-build = "=1.17.1"
