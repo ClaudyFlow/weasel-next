@@ -5884,6 +5884,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "weasel-style"
+version = "0.1.8"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "weasel-theme-api"
 version = "0.1.8"
 dependencies = [
