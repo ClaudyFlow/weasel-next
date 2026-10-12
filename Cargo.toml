@@ -12,8 +12,8 @@ members = [
     "common",
     "theme-api",
     "style",
-    "themes/official",
-    "themes/support",
+    "theme/official",
+    "theme/support",
 ]
 
 [workspace.package]
