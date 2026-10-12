@@ -1,0 +1,15 @@
+# 用户自定义（官方 Rime patch 机制 ✓）
+# 基底是出厂 weasel.yaml（36 套配色 + 全部 style 字段 ✓）
+#
+# 本项目扩展键（官方工具会忽略 ✓）:
+#   theme: 渲染器主题 DLL 名 → 程序文件夹里的 weasel_theme_<名字>.dll
+#          可选: official（照官方 WeaselUI ✓ 在建）· test · seven · ten · eleven · abc · void · wasm
+theme: test
+
+patch:
+  # 下面几行就是官方写法示例 ✓ 想改什么取消注释即可 ✓
+  # style/color_scheme: luna          # 明月／Luna（36 套任选 ✓）
+  # style/font_point: 16
+  # style/layout/corner_radius: 8
+  # style/layout/shadow_radius: 4
+  # preset_color_schemes/luna/back_color: 0x101010
