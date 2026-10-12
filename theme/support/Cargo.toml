@@ -5,7 +5,7 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
-weasel-theme-api = { path = "../../theme-api" }
+weasel-theme-api = { path = "../../theme/api" }
 windows-core = "0.100.0"
 windows-future = "0.100.0"
 windows-numerics = "0.100.0"

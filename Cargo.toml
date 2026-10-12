@@ -10,7 +10,7 @@ members = [
     # experimental panel. Keep both buildable so either can be launched.
     "settings",
     "common",
-    "theme-api",
+    "theme/api",
     "style",
     "theme/official",
     "theme/support",
