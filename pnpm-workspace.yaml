@@ -1,4 +1,0 @@
-packages:
-  - "settings-tauri"
-allowBuilds:
-  esbuild: true
