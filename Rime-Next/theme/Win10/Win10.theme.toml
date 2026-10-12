@@ -20,7 +20,7 @@ style = "d2d"
 variant = "auto"
 
 [geometry]
-# 与 themes/ten/src/logic.rs 的常量对应
+# 与 theme/ten/src/logic.rs 的常量对应
 scale = 0.6764706           # SCALE = 46.0 / 68.0
 height = 46.0               # HEIGHT（行高，DIP）
 indicator = 36.0            # INDICATOR_SIZE

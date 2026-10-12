@@ -308,18 +308,18 @@ FunctionEnd
 !macro RemoveProgramFiles
   !insertmacro RemoveRimePayload
   !insertmacro RemoveWasmPayload
-  Delete /REBOOTOK "$INSTDIR\themes\weasel_theme_abc.settings.json"
-  Delete /REBOOTOK "$INSTDIR\themes\weasel_theme_eleven.settings.json"
-  Delete /REBOOTOK "$INSTDIR\themes\weasel_theme_ten.dll"
-  Delete /REBOOTOK "$INSTDIR\themes\weasel_theme_ten.pdb"
-  Delete /REBOOTOK "$INSTDIR\themes\weasel_theme_eleven.dll"
-  Delete /REBOOTOK "$INSTDIR\themes\weasel_theme_eleven.pdb"
-  Delete /REBOOTOK "$INSTDIR\themes\weasel_theme_abc.dll"
-  Delete /REBOOTOK "$INSTDIR\themes\weasel_theme_abc.pdb"
-  Delete /REBOOTOK "$INSTDIR\themes\weasel_theme_void.dll"
-  Delete /REBOOTOK "$INSTDIR\themes\weasel_theme_void.pdb"
-  Delete /REBOOTOK "$INSTDIR\themes\weasel_theme_wasm.dll"
-  Delete /REBOOTOK "$INSTDIR\themes\weasel_theme_wasm.pdb"
+  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_abc.settings.json"
+  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_eleven.settings.json"
+  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_ten.dll"
+  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_ten.pdb"
+  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_eleven.dll"
+  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_eleven.pdb"
+  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_abc.dll"
+  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_abc.pdb"
+  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_void.dll"
+  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_void.pdb"
+  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_wasm.dll"
+  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_wasm.pdb"
   RMDir /REBOOTOK "$INSTDIR\themes"
   Delete /REBOOTOK "$INSTDIR\weasel-broker.exe"
   Delete /REBOOTOK "$INSTDIR\weasel-server.exe"
@@ -432,7 +432,7 @@ Section "eleven" SEC_THEME_ELEVEN
   ClearErrors
   SetOutPath "$INSTDIR\themes"
   !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_eleven.dll" "weasel_theme_eleven.dll"
-  !insertmacro ManagedFile "${X64_RELEASE}\themes\weasel_theme_eleven.settings.json" "weasel_theme_eleven.settings.json"
+  !insertmacro ManagedFile "${X64_RELEASE}\theme\weasel_theme_eleven.settings.json" "weasel_theme_eleven.settings.json"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 eleven 主题，请检查磁盘空间和文件权限。" /SD IDOK
     SetErrorLevel 1
@@ -444,7 +444,7 @@ Section "abc" SEC_THEME_ABC
   ClearErrors
   SetOutPath "$INSTDIR\themes"
   !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_abc.dll" "weasel_theme_abc.dll"
-  !insertmacro ManagedFile "${X64_RELEASE}\themes\weasel_theme_abc.settings.json" "weasel_theme_abc.settings.json"
+  !insertmacro ManagedFile "${X64_RELEASE}\theme\weasel_theme_abc.settings.json" "weasel_theme_abc.settings.json"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 abc 主题，请检查磁盘空间和文件权限。" /SD IDOK
     SetErrorLevel 1

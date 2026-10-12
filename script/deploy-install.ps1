@@ -121,7 +121,7 @@ else { Write-Warn2 "仍是: $value" ; Write-Warn2 "期望: $expect（请重跑�
 # 5) 清单
 Write-Step '安装目录关键文件'
 foreach ($f in 'weasel-broker.exe', 'weasel-server.exe', 'weasel-renderer.exe', 'weasel_tip.dll', 'rime.dll',
-    'Rime-Next\sound\typewriter-key.wav', 'Rime-Next\sound\typewriter-bell.wav', 'themes\weasel_theme_ten.dll') {
+    'Rime-Next\sound\typewriter-key.wav', 'Rime-Next\sound\typewriter-bell.wav', 'theme\weasel_theme_ten.dll') {
     $p = Join-Path $InstallDir $f
     $mark = if (Test-Path $p) { '✓' } else { '✗' }
     $size = if (Test-Path $p) { '{0:N0} 字节' -f (Get-Item $p).Length } else { '缺失' }

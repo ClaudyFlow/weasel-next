@@ -63,7 +63,7 @@ static TEST: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new
             .parent()
             .map(std::path::Path::to_path_buf)
             .ok_or("renderer executable has no directory")?;
-        // 主题 DLL 直接放在 renderer 所在目录（程序文件夹根）；兼容旧的 themes\ 子目录。
+        // 主题 DLL 直接放在 renderer 所在目录（程序文件夹根）；兼容旧的 theme\ 子目录。
         let file = format!("weasel_theme_{name}.dll");
         let root_path = directory.join(&file);
         let path = if root_path.is_file() {

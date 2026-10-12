@@ -114,7 +114,7 @@ try {
     $nodeCommand = Resolve-Application 'node'
     $metadataPackager = Join-Path $PSScriptRoot 'package-theme-metadata.mjs'
     foreach ($theme in @('abc', 'eleven')) {
-        & $nodeCommand $metadataPackager --native (Join-Path $projectRoot "themes\$theme\src\config.json") (Join-Path $themeDirectory "weasel_theme_$theme.settings.json")
+        & $nodeCommand $metadataPackager --native (Join-Path $projectRoot "theme\$theme\src\config.json") (Join-Path $themeDirectory "weasel_theme_$theme.settings.json")
         if ($LASTEXITCODE -ne 0) { throw "Metadata packaging failed for $theme." }
     }
     foreach ($theme in @('ten', 'eleven', 'abc', 'void', 'wasm')) {
@@ -128,7 +128,7 @@ try {
         $null = New-Item -ItemType Directory -Path $wasmArtifacts -Force
         # Rust cdylibs and AssemblyScript guests share the artifact directory.
         # SDK directories are deliberately excluded from guest discovery.
-        $guestDirectories = @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'themes\wasm') -Directory |
+        $guestDirectories = @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'theme\wasm') -Directory |
             Where-Object { $_.Name -like 'theme-*' } | Sort-Object Name)
         foreach ($guest in $guestDirectories) {
             Write-Host "Building WASM theme: $($guest.Name)"

@@ -476,14 +476,14 @@ mod tests {
         // 内置描述与后加载的 WASM 描述走同一路径。
         for (defaults, rich, expected_system, expected_count) in [
             (
-                include_str!("../../themes/eleven/src/config.json"),
-                include_str!("../../themes/eleven/src/config.richschema.json"),
+                include_str!("../../theme/eleven/src/config.json"),
+                include_str!("../../theme/eleven/src/config.richschema.json"),
                 true,
                 3,
             ),
             (
-                include_str!("../../themes/wasm/theme-weaselui/config.json"),
-                include_str!("../../themes/wasm/theme-weaselui/config.richschema.json"),
+                include_str!("../../theme/wasm/theme-weaselui/config.json"),
+                include_str!("../../theme/wasm/theme-weaselui/config.richschema.json"),
                 false,
                 13,
             ),

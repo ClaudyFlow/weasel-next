@@ -774,18 +774,18 @@ mod tests {
             ),
             (
                 "abc",
-                include_str!("../../themes/abc/src/config.json"),
-                include_str!("../../themes/abc/src/config.richschema.json"),
+                include_str!("../../theme/abc/src/config.json"),
+                include_str!("../../theme/abc/src/config.richschema.json"),
             ),
             (
                 "eleven",
-                "seven", include_str!("../../themes/eleven/src/config.json"),
-                include_str!("../../themes/eleven/src/config.richschema.json"),
+                "seven", include_str!("../../theme/eleven/src/config.json"),
+                include_str!("../../theme/eleven/src/config.richschema.json"),
             ),
             (
                 "weaselui",
-                include_str!("../../themes/wasm/theme-weaselui/config.json"),
-                include_str!("../../themes/wasm/theme-weaselui/config.richschema.json"),
+                include_str!("../../theme/wasm/theme-weaselui/config.json"),
+                include_str!("../../theme/wasm/theme-weaselui/config.richschema.json"),
             ),
         ] {
             let m = Metadata::from_parts(

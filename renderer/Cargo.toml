@@ -8,7 +8,7 @@ license.workspace = true
 serde_json = "1"
 serde = "1"
 weasel-theme-api = { path = "../theme-api" }
-weasel-theme-support = { path = "../themes/support" }
+weasel-theme-support = { path = "../theme/support" }
 weasel-common = { path = "../common" }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 windows-core = "0.100.0"

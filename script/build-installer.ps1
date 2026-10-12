@@ -59,7 +59,7 @@ try {
         }
     }
     foreach ($theme in @('abc', 'eleven')) {
-        $requiredFiles += "target\release\themes\weasel_theme_$theme.settings.json"
+        $requiredFiles += "target\release\theme\weasel_theme_$theme.settings.json"
     }
     if ($Mini) {
         $requiredFiles = @($requiredFiles | Where-Object { $_ -notlike '*.pdb' })

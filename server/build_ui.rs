@@ -7,7 +7,7 @@ pub fn generate() {
         std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not set"),
     );
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is not set"));
-    let native_rdl = manifest_dir.join("../themes/support/metadata/xaml_host_native.rdl");
+    let native_rdl = manifest_dir.join("../theme/support/metadata/xaml_host_native.rdl");
     let native_winmd = out.join("xaml-host-native.winmd");
     let manifest = manifest_dir.join("server.manifest");
 
