@@ -343,3 +343,42 @@ Lua 插件的落位（按官方约定 ✓）：
   （实际落在程序文件夹，会被归并器读到）。
 - 同类做法适用于只读出厂内容：`model\`（已做）、`eassy\`（本次）。
   用户数据目录（userdb/build/*.custom.yaml/installation.yaml）**绝不能**做链接。
+## 液态玻璃（折射 / 色散）实现要点
+
+调研时间：2026-10-12。结论：**没有"Vulkan 液态玻璃"这种专属教程**，液态玻璃不是某个图形 API 的特性，而是一段片元着色器的数学。Vulkan / D3D12 / Metal / WebGL / WebGPU 上做法完全一致，真正平台相关的只有一步：**如何拿到窗口背后的像素当纹理**。
+
+### 七步配方（照 masakazuimai 的 WebGL 折射实现整理）
+
+1. 铺背景（cover）。
+2. 用 **SDF** 定义玻璃形状；圆角矩形用 Inigo Quilez 的 sdRoundRect，函数返回带符号距离（内负外正）。
+3. 对距离场做**数值微分求梯度**，归一化后即该点外向法线，也就是"边缘朝向"。
+4. **折射**：位移 = 法线 × 边缘权重 curve × 折射强度 uRefraction × 最大位移；再按位移后的坐标采样背景。中心 curve 近 0 几乎不歪，越靠边弯曲越强 —— 这就是真实透镜的行为。
+5. **色差**：R / G / B 三通道分别用不同偏移采样，偏移 = 法线 × curve × uAberration × 14。
+6. **磨砂**：WebGL 没有 CSS 模糊，改为多点采样求平均（原文用中心 + 12 个固定方向的核）。
+7. **边缘高光 + 抗锯齿**：用法线做镜面反射；边界用 smoothstep 配合 SDF 做 1px 平滑。
+
+关键洞察：CSS 的 `backdrop-filter: blur()` 只能对背景像素**就地**处理，无法从别处取像素，所以永远做不出折射，必须写着色器。
+
+默认参数参考：折射 0.7、色差 0.4；模糊半径要乘 DPR。
+
+### 参考资料
+
+- masakazuimai，WebGL 液态玻璃折射七步详解（246 行，最系统）：https://github.com/masakazuimai/zenn-content/blob/main/articles/liquid-glass-webgl-refraction.md
+- aaaa-zhen/glsl-playground，单文件零依赖 GLSL demo，源码即教程；液态玻璃可在线玩、可上传截图实时折射：https://github.com/aaaa-zhen/glsl-playground/liquid-glass.html
+- 同仓库的 metaball-search：从屏幕顶部拖出液滴凝聚成黑玻璃搜索框，SDF 驱动折射：https://aaaa-zhen.github.io/glsl-playground/metaball-search.html
+- Codrops，Three.js + WebGPU + TSL 的三维液态玻璃网格：https://tympanus.net/codrops/2026/09/08/building-an-infinite-liquid-glass-grid-with-three-js-webgpu-and-tsl/
+- Spectral Glass 光谱色散 demo：https://saqoosha.github.io/Spectral-Glass/
+- Flutter liquid_glass_easy 的参数面（折射强度 / 色散 / 模糊 / 厚度）：https://pub.dev/documentation/liquid_glass_easy/3.5.0/liquid_glass_easy/LiquidGlassRefraction-class.html
+
+### Windows 上取背景的三条路（唯一平台相关部分）
+
+- **DWM 模糊**（DwmEnableBlurBehindWindow / SetWindowCompositionAttribute）：能出磨砂，但拿不到可采样的背景纹理，做不了折射。
+- **DirectComposition**（WS_EX_NOREDIRECTIONBITMAP + IDCompositionVisual 效果链）：能合成、能模糊，同样不给原始背景像素。
+- **抓屏**（Windows.Graphics.Capture 或 BitBlt）：抓窗口背后的区域当纹理喂给着色器，折射与色散想怎么算就怎么算。Vulkan 在这件事上和 D3D 处境相同，都得靠系统 API，见 Stack Overflow「Can Vulkan interop with DirectComposition for window background blur effects?」https://stackoverflow.com/questions/66628174
+
+### 本项目落地建议
+
+1. 着色器数学一次写成 **WGSL**，将来 wgpu 可全平台复用；也可先在 HLSL 里验证。
+2. 候选窗**先不做真折射**：用 D2D 内置高斯模糊（CLSID_D2D1GaussianBlur）+ 顶部高光 + 边缘亮线，观感即可接近官方，成本几乎为零。
+3. 真要做液态玻璃，再加背景抓取（Windows.Graphics.Capture 抓候选窗背后那条区域），并且**必须节流**，不要每帧全屏抓。
+4. 参数宁保守：候选窗是打字时盯着看的小面板，折射过强直接伤害可读性（苹果自家 Liquid Glass 也因可读性挨过批评）。
