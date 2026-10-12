@@ -6,3 +6,5 @@ pub use weasel_theme_support::{appearance, bindings, d2d_bindings, diagnostics, 
 #[path = "mod.rs"]
 mod theme;
 weasel_theme_api::export_theme!(theme::Factory);
+
+// 与官方 WeaselUI 的呈现层移植已写好，见 src\presenter.rs；
