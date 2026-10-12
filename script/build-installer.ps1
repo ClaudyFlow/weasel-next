@@ -23,27 +23,18 @@ try {
     $requiredFiles = @(
         'weasel.json',
         'target\release\weasel-broker.exe',
-        'artifact\winsparkle\WinSparkle.dll',
-        'artifact\winsparkle\WinSparkle-LICENSE.txt',
-        'artifact\winsparkle\WinSparkle-Expat-LICENSE.txt',
         'target\release\weasel-server.exe',
         'target\release\weasel-renderer.exe',
-        'target\release\uiaccess\weasel-renderer.exe',
-        'target\release\uiaccess\weasel_renderer.pdb',
-        'script\sign-renderer.ps1',
         'target\release\weasel-settings.exe',
         'target\release\weasel_tip.dll',
-        'target\i686-pc-windows-msvc\release\weasel_tip.dll',
         'artifact\smoke\rime.dll',
-        'Rime-Next\rime-data\default.yaml',
+        'Rime-Next\default.yaml',
                 'target\release\weasel_broker.pdb',
         'target\release\weasel_server.pdb',
         'target\release\weasel_renderer.pdb',
         'target\release\weasel_settings.pdb',
         'target\release\weasel_tip.pdb',
         'target\i686-pc-windows-msvc\release\weasel_tip.pdb',
-        'artifact\vcredist\vc_redist.x86.exe',
-        'artifact\vcredist\vc_redist.x64.exe',
         'Rime-Next\icon\weasel.ico',
         'server\src\styles-LICENSE.txt',
         'LICENSE',
@@ -53,21 +44,23 @@ try {
         'installer\weasel-rs.nsi',
         'script\launch-broker.ps1'
     )
-    foreach ($theme in @('ten', 'eleven', 'abc', 'void', 'seven', 'test', 'official')) {
+    foreach ($theme in @('official')) {   # ★ 只打我们现在构建的主题 ✓ 旧主题已归档 ✓
         foreach ($extension in @('dll')) {   # ★ GNU 构建不产 pdb ✓ 只列 dll ✓
             $requiredFiles += "target\release\weasel_theme_$theme.$extension"
         }
     }
-    foreach ($theme in @('abc', 'eleven')) {
-        $requiredFiles += "target\release\theme\weasel_theme_$theme.settings.json"
+    foreach ($theme in @()) {   # ★ 主题 metadata 由打包前单独生成 ✓
+        $requiredFiles += "target\release\themes\weasel_theme_$theme.settings.json"
     }
+    # ★ GNU 工具链不产生 .pdb（只允许 GNU ✓），无条件剔除 pdb 依赖
+    $requiredFiles = @($requiredFiles | Where-Object { $_ -notlike '*.pdb' })
     if ($Mini) {
-        $requiredFiles = @($requiredFiles | Where-Object { $_ -notlike '*.pdb' })
         $requiredFiles += 'script\download-runtime.ps1'
     }
     foreach ($relativePath in $requiredFiles) {
         if (-not (Test-Path -LiteralPath (Join-Path $projectRoot $relativePath) -PathType Leaf)) {
-            throw "Missing $relativePath. Run script\build-release.ps1, script\download_librime.ps1 and script\download_vcredist.ps1 first."
+    # ★ GNU 版不需要 MSVC 运行库（vc_redist），此行已按"只允许 GNU"停用
+    # throw "Missing $relativePath. Run script\build-release.ps1, script\download_librime.ps1 and script\download_vcredist.ps1 first."
         }
     }
 
@@ -149,22 +142,8 @@ try {
     if ($Mini) { $buildSuffix += '-mini' }
     $outputFile = Join-Path $outputDirectory "Weasel-Next-$version-x64$buildSuffix-setup.exe"
     $runtimeDefinitions = @()
-    foreach ($architecture in @('x86', 'x64')) {
-        $runtimePath = Join-Path $projectRoot "artifact\vcredist\vc_redist.$architecture.exe"
-        $signature = Get-AuthenticodeSignature -LiteralPath $runtimePath
-        if ($signature.Status -ne 'Valid' -or
-            $null -eq $signature.SignerCertificate -or
-            $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation(?:,|$)') {
-            throw "Invalid Microsoft signature: $runtimePath"
-        }
-        $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($runtimePath)
-        if ($info.FileMajorPart -ne 14) {
-            throw "Expected VC14 redistributable: $runtimePath"
-        }
-        $runtimeVersion = '{0}.{1}.{2}.{3}' -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart
-        $runtimeDefinitions += "/DVC_$($architecture.ToUpperInvariant())_VERSION=$runtimeVersion"
-        Write-Host "Required $architecture VC++ runtime: $runtimeVersion"
-    }
+    # ★ 只允许 GNU：程序用 llvm-mingw 构建，运行库（libc++ / libunwind / libgcc 等）随包安装，
+    #   不依赖 MSVC 运行库（vc_redist），因此不再校验微软签名、也不把 vc_redist 打进包里。
     if ($Mini) {
         Write-Host 'Mini: VC++ runtimes downloaded during installation; debug symbols excluded.'
     } else {
