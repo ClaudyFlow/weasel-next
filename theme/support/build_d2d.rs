@@ -63,6 +63,10 @@ pub fn generate() {
             "Windows.Win32.DQTAT_COM_NONE", "Windows.Win32.WS_EX_NOREDIRECTIONBITMAP",
             "Windows.Win32.WM_NCHITTEST", "Windows.Win32.HTTRANSPARENT", "Windows.Win32.HTCLIENT",
             "Windows.Win32.ScreenToClient",
+            "Windows.Win32.CreateDXGIFactory2",
+            "Windows.Win32.IDXGISwapChain",
+            "Windows.Win32.IDXGIObject",
+            "Windows.Win32.D2D_COLOR_F",
             // ★ 官方 WeaselUI 图形栈补齐（D3D11 + DXGI 交换链 + DirectComposition + D2D1.1）
             "Windows.Win32.D3D_FEATURE_LEVEL_11_0",
             "Windows.Win32.D3D_FEATURE_LEVEL_10_1",
