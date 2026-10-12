@@ -532,6 +532,148 @@ impl WeaselConfig {
     }
 }
 
+// ------------------------------------------------- 官方 weasel.custom.yaml 补丁
+
+/// 把官方 `weasel.custom.yaml` 的 `patch:` 段应用到 `weasel.yaml` 之上。
+///
+/// 官方（Rime）的写法是「路径 + 值」：
+///
+/// ```yaml
+/// patch:
+///   style/color_scheme: luna
+///   style/font_point: 16
+///   style/layout/corner_radius: 8
+///   preset_color_schemes/luna/back_color: 0x101010
+/// ```
+///
+/// 支持：任意深度的 `/` 路径、自动创建中间层。不支持（官方也少用）：`+`/`-` 追加删除、`__patch`。
+pub fn apply_patch(base: &mut Yaml, patch: &Yaml) {
+    let Some(entries) = patch.as_map() else {
+        return;
+    };
+    for (path, value) in entries {
+        set_path(base, path, value.clone());
+    }
+}
+
+fn set_path(root: &mut Yaml, path: &str, value: Yaml) {
+    let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    if parts.is_empty() {
+        return;
+    }
+    let mut cursor = root;
+    for part in &parts[..parts.len() - 1] {
+        if !matches!(cursor, Yaml::Map(_)) {
+            *cursor = Yaml::Map(BTreeMap::new());
+        }
+        let Yaml::Map(map) = cursor else { return };
+        cursor = map
+            .entry((*part).to_string())
+            .or_insert_with(|| Yaml::Map(BTreeMap::new()));
+    }
+    if !matches!(cursor, Yaml::Map(_)) {
+        *cursor = Yaml::Map(BTreeMap::new());
+    }
+    if let Yaml::Map(map) = cursor {
+        map.insert(parts[parts.len() - 1].to_string(), value);
+    }
+}
+
+/// 读官方两份文件：基底 `weasel.yaml` + 用户覆盖 `weasel.custom.yaml`。
+pub fn parse_with_patch(base: &str, custom: Option<&str>) -> Result<WeaselConfig, YamlError> {
+    let mut root = parse_yaml(base)?;
+    if let Some(text) = custom {
+        let user = parse_yaml(text)?;
+        match user.get("patch") {
+            Some(patch) => apply_patch(&mut root, patch),
+            None => {
+                if user.as_map().is_some_and(|map| !map.is_empty()) {
+                    // 没有 patch: 段 —— 容错：当作整份补丁
+                    apply_patch(&mut root, &user);
+                }
+            }
+        }
+    }
+    Ok(build(&root))
+}
+
+/// 一步到位：基底文件 + 可选用户文件。
+pub fn parse_files(
+    base: impl AsRef<Path>,
+    custom: Option<impl AsRef<Path>>,
+) -> Result<WeaselConfig, Box<dyn std::error::Error>> {
+    let base_text = std::fs::read_to_string(base)?;
+    let custom_text = match custom {
+        Some(path) => {
+            let path = path.as_ref();
+            if path.is_file() {
+                Some(std::fs::read_to_string(path)?)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+    Ok(parse_with_patch(&base_text, custom_text.as_deref())?)
+}
+
+#[cfg(test)]
+mod patch_tests {
+    use super::*;
+
+    const OFFICIAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/weasel.yaml");
+    const BASE: &str = "style:\n  color_scheme: aqua\n  font_point: 14\n  layout:\n    corner_radius: 4\npreset_color_schemes:\n  aqua:\n    back_color: 0xeeeeee\n  luna:\n    back_color: 0x111111\n";
+
+    #[test]
+    fn patch_overrides_style_and_scheme() {
+        let custom = "patch:\n  style/color_scheme: luna\n  style/font_point: 20\n  style/layout/corner_radius: 9\n  preset_color_schemes/aqua/back_color: 0xff0000\n";
+        let config = parse_with_patch(BASE, Some(custom)).expect("解析");
+        assert_eq!(config.style.color_scheme, "luna");
+        assert_eq!(config.style.font_point, 20);
+        assert_eq!(config.style.layout.corner_radius, 9);
+        assert_eq!(config.schemes["aqua"].back_color, 0x00ff_0000, "用户覆盖配色应生效");
+        assert_eq!(config.schemes["luna"].back_color, 0x0011_1111, "未覆盖的保持原值");
+    }
+
+    #[test]
+    fn patch_creates_missing_branches() {
+        let custom = "patch:\n  style/layout/hilite_padding_x: 6\n  preset_color_schemes/新配色/text_color: 0x00ff00\n";
+        let config = parse_with_patch(BASE, Some(custom)).expect("解析");
+        assert_eq!(config.style.layout.hilite_padding_x, 6);
+        assert_eq!(config.schemes["新配色"].text_color, 0x0000_ff00);
+    }
+
+    #[test]
+    fn custom_without_patch_block_is_tolerated() {
+        let config = parse_with_patch(BASE, Some("style/color_scheme: luna\n")).expect("解析");
+        assert_eq!(config.style.color_scheme, "luna");
+    }
+
+    #[test]
+    fn no_custom_keeps_base() {
+        let config = parse_with_patch(BASE, None).expect("解析");
+        assert_eq!(config.style.color_scheme, "aqua");
+        assert_eq!(config.style.font_point, 14);
+    }
+
+    #[test]
+    fn real_official_pair() {
+        let base = std::fs::read_to_string(OFFICIAL).expect("读官方 weasel.yaml");
+        let custom = "patch:\n  style/color_scheme: luna\n  style/font_point: 18\n  style/hover_type: hilite\n  style/layout/shadow_radius: 6\n  preset_color_schemes/luna/back_color: 0x202020\n";
+        let config = parse_with_patch(&base, Some(custom)).expect("解析");
+        assert_eq!(config.style.color_scheme, "luna");
+        assert_eq!(config.style.font_point, 18);
+        assert_eq!(config.style.hover_type, "hilite");
+        assert_eq!(config.style.layout.shadow_radius, 6);
+        assert_eq!(config.schemes["luna"].back_color, 0x0020_2020);
+        assert_eq!(config.schemes.len(), 36, "补丁不该减少配色数量");
+        println!(
+            "官方基底 + 用户补丁 → 方案 {:?} · 字号 {} · hover {:?} · 阴影 {} · luna 底色 {:#010x} · 配色 {} 套",
+            config.style.color_scheme, config.style.font_point, config.style.hover_type,
+            config.style.layout.shadow_radius, config.schemes["luna"].back_color, config.schemes.len()
+        );
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
