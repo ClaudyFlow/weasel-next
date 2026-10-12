@@ -203,6 +203,12 @@ pub struct UIStyle {
     pub vertical_text: bool,
     pub vertical_text_left_to_right: bool,
     pub vertical_text_with_wrap: bool,
+    /// 官方 `style/vertical_right_to_left`（竖排从右到左 ✓）
+    pub vertical_right_to_left: bool,
+    /// 官方 `style/enhanced_position`（增强定位 ✓）
+    pub enhanced_position: bool,
+    /// 官方 `style/text_orientation`（horizontal | vertical ✓ 与 vertical_text 冗余 ✓ 兼容 squirrel ✓）
+    pub text_orientation: String,
     // 文本格式
     pub label_format: String,
     pub mark_text: String,
@@ -230,6 +236,12 @@ pub struct Layout {
     pub hilite_padding: i32,
     pub hilite_padding_x: i32,
     pub hilite_padding_y: i32,
+    /// 官方 `style/layout/border`（与 `border_width` 同义 ✓ 两个键都认 ✓）
+    pub border: i32,
+    /// 官方 `style/layout/type`（0..5 六种布局 ✓，-1 = 未指定）
+    pub layout_type_mode: i32,
+    /// 官方 `style/layout/hilited_corner_radius`（高亮块自己的圆角 ✓ -1 = 跟随 corner_radius ✓）
+    pub hilited_corner_radius: i32,
     pub round_corner: i32,
     pub corner_radius: i32,
     pub shadow_radius: i32,
@@ -257,6 +269,9 @@ impl Default for Layout {
             hilite_padding: 2,
             hilite_padding_x: 0,
             hilite_padding_y: 0,
+            border: 3,
+            layout_type_mode: -1,
+            hilited_corner_radius: -1,
             round_corner: 0,
             corner_radius: 0,
             shadow_radius: 0,
@@ -293,6 +308,9 @@ impl Default for UIStyle {
             vertical_text: false,
             vertical_text_left_to_right: false,
             vertical_text_with_wrap: false,
+            vertical_right_to_left: false,
+            enhanced_position: false,
+            text_orientation: String::new(),
             label_format: "%s.".into(),
             mark_text: String::new(),
             color_scheme: "aqua".into(),
@@ -413,6 +431,9 @@ pub fn build(yaml: &Yaml) -> WeaselConfig {
         if let Some(v) = bool_of(style.get("vertical_text")) { s.vertical_text = v; }
         if let Some(v) = bool_of(style.get("vertical_text_left_to_right")) { s.vertical_text_left_to_right = v; }
         if let Some(v) = bool_of(style.get("vertical_text_with_wrap")) { s.vertical_text_with_wrap = v; }
+        if let Some(v) = bool_of(style.get("vertical_right_to_left")) { s.vertical_right_to_left = v; }
+        if let Some(v) = bool_of(style.get("enhanced_position")) { s.enhanced_position = v; }
+        if let Some(v) = text_of(style.get("text_orientation")) { s.text_orientation = v; }
         if let Some(v) = text_of(style.get("label_format")) { s.label_format = v; }
         if let Some(v) = text_of(style.get("mark_text")) { s.mark_text = v; }
         if let Some(v) = text_of(style.get("color_scheme")) { s.color_scheme = v; }
@@ -434,6 +455,10 @@ pub fn build(yaml: &Yaml) -> WeaselConfig {
             if let Some(v) = int_of(layout.get("hilite_padding")) { l.hilite_padding = v; }
             if let Some(v) = int_of(layout.get("hilite_padding_x")) { l.hilite_padding_x = v; }
             if let Some(v) = int_of(layout.get("hilite_padding_y")) { l.hilite_padding_y = v; }
+            if let Some(v) = int_of(layout.get("border")) { l.border = v; }
+            if let Some(v) = int_of(layout.get("border_width")) { l.border = v; }   // 出厂 yaml 用 border_width ✓ 两条都认 ✓
+            if let Some(v) = int_of(layout.get("type")) { l.layout_type_mode = v; }
+            if let Some(v) = int_of(layout.get("hilited_corner_radius")) { l.hilited_corner_radius = v; }
             if let Some(v) = int_of(layout.get("round_corner")) { l.round_corner = v; }
             if let Some(v) = int_of(layout.get("corner_radius")) { l.corner_radius = v; }
             if let Some(v) = int_of(layout.get("shadow_radius")) { l.shadow_radius = v; }
@@ -719,7 +744,7 @@ mod tests {
         assert_eq!(config.style.layout.border_width, 3);
         assert_eq!(config.style.layout.margin_x, 12);
         assert_eq!(config.style.layout.hilite_padding, 2);
-        assert_eq!(config.style.layout.max_width, 0); // 带 tab 注释
+        assert_eq!(config.style.layout.max_width, 0); // 带 tab 注释`r`n        assert_eq!(config.style.layout.border, 3, "border_width 应同时填进官方 border 键");`r`n        assert_eq!(config.style.layout.hilited_corner_radius, -1, "官方未填则保持 -1（跟随 corner_radius）");
         // app_options
         assert_eq!(
             config.app_options.get("cmd.exe").and_then(|m| m.get("ascii_mode")).copied(),
