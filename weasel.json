@@ -1,6 +1,6 @@
 {
     "$schema":  "weasel.schema.json",
-    "theme":  "eleven",
+    "theme":  "official",
     "inline_preedit":  true,
     "preedit_type":  "composition",
     "ascii_mode":  false,
