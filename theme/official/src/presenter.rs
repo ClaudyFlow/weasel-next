@@ -198,6 +198,13 @@ impl Presenter {
             .map_err(|error| format!("CreateBitmapFromDxgiSurface 失败: {error}"))
     }
 
+    /// 绘图句柄：`FillGeometry`、`DrawText`、`Clear`、`SetDpi` 等都在基接口 `ID2D1RenderTarget` 上，
+    /// 而设备上下文是它的派生接口，所以这里做一次转换交给绘制代码使用。
+    pub(crate) fn render_target(&self) -> ID2D1RenderTarget {
+        self.context
+            .cast()
+            .expect("ID2D1DeviceContext1 必须能转换为 ID2D1RenderTarget")
+    }
     pub(crate) fn device_context(&self) -> &ID2D1DeviceContext1 {
         &self.context
     }

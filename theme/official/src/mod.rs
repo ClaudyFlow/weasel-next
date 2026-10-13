@@ -5,6 +5,7 @@
 mod logic;
 
 use crate::d2d_bindings::*;
+use crate::presenter::Presenter;
 use crate::theme_api::CandidateView;
 use crate::{
     theme_api::EventSink,
@@ -39,8 +40,8 @@ struct Graphics {
     mode: IDWriteTextFormat,
     /// 翻页和表情操作的图标格式。
     icon: IDWriteTextFormat,
-    /// 与此 HWND 关联、可在设备丢失后丢弃并重建的绘制目标。
-    target: Option<ID2D1HwndRenderTarget>,
+    /// 与此 HWND 关联的呈现层：D3D11 + DXGI 组合交换链 + DirectComposition + D2D 设备上下文。逐像素 alpha 交给 DWM。
+    target: Option<Presenter>,
 }
 
 impl Graphics {
@@ -105,32 +106,18 @@ impl Graphics {
     ///
     /// 创建失败由调用方转换为主题错误或进入设备丢失恢复流程。
     fn ensure_target(&mut self, hwnd: HWND, dpi: u32) -> windows_core::Result<()> {
-        if self.target.is_none() {
             unsafe {
                 let mut rc = RECT::default();
                 GetClientRect(hwnd, &mut rc).ok()?;
-                let properties = D2D1_RENDER_TARGET_PROPERTIES {
-                    dpiX: dpi as f32,
-                    dpiY: dpi as f32,
-                    pixelFormat: D2D1_PIXEL_FORMAT {
-                        alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                };
-                self.target = Some(self.factory.CreateHwndRenderTarget(
-                    &properties,
-                    &D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                        hwnd,
-                        pixelSize: D2D_SIZE_U {
-                            width: (rc.right - rc.left).max(1) as u32,
-                            height: (rc.bottom - rc.top).max(1) as u32,
-                        },
-                        presentOptions: D2D1_PRESENT_OPTIONS_NONE,
-                    },
-                )?);
+                let width = (rc.right - rc.left).max(1) as u32;
+                let height = (rc.bottom - rc.top).max(1) as u32;
+                let presenter = Presenter::new(hwnd, width, height).map_err(|message| {
+                    crate::diagnostics::record(format_args!("呈现层创建失败: {message}"));
+                    windows_core::Error::from_hresult(E_UNEXPECTED)
+                })?;
+                presenter.render_target().SetDpi(dpi as f32, dpi as f32);
+                self.target = Some(presenter);
             }
-        }
         Ok(())
     }
 }
@@ -455,18 +442,21 @@ impl Window {
     }
     /// 将 Direct2D 目标的 DPI 和像素尺寸同步到当前客户区。
     fn resize(&self) -> windows_core::Result<()> {
-        let app = self.app.borrow();
-        if let Some(target) = &app.graphics.target {
+        let mut app = self.app.borrow_mut();
+        if let Some(presenter) = &mut app.graphics.target {
             unsafe {
                 let mut rc = RECT::default();
                 GetClientRect(self.hwnd.get(), &mut rc).ok()?;
-                target.SetDpi(self.dpi.get() as f32, self.dpi.get() as f32);
-                target
-                    .Resize(&D2D_SIZE_U {
-                        width: (rc.right - rc.left).max(1) as u32,
-                        height: (rc.bottom - rc.top).max(1) as u32,
-                    })
-                    .ok()?;
+                presenter.render_target().SetDpi(self.dpi.get() as f32, self.dpi.get() as f32);
+                presenter
+                    .resize(
+                        (rc.right - rc.left).max(1) as u32,
+                        (rc.bottom - rc.top).max(1) as u32,
+                    )
+                    .map_err(|message| {
+                        crate::diagnostics::record(format_args!("交换链尺寸调整失败: {message}"));
+                        windows_core::Error::from_hresult(E_UNEXPECTED)
+                    })?;
             }
         }
         Ok(())
@@ -498,18 +488,19 @@ impl Window {
         let mut app = self.app.borrow_mut();
         app.graphics
             .ensure_target(self.hwnd.get(), self.dpi.get())?;
-        let target = app
+        let presenter = app
             .graphics
             .target
             .as_ref()
             .ok_or_else(|| windows_core::Error::from_hresult(E_UNEXPECTED))?;
+        let target = presenter.render_target();
         let p = app.palette;
         unsafe {
             // Allocate fallible resources before BeginDraw; EndDraw is RAII too.
             let brush = target.CreateSolidColorBrush(&color(p.text), None)?;
-            target.BeginDraw();
+            presenter.begin_draw();
             let draw = DrawGuard {
-                target,
+                presenter,
                 ended: false,
             };
             // 玻璃：把背景清成完全透明（A=0）。窗口上已开 DwmEnableBlurBehindWindow，
@@ -611,7 +602,7 @@ let mut fill = color(p.background);
             if let Some(c) = &app.content {
                 if let Some(indicator) = &c.snapshot.mode_indicator {
                     text(
-                        target,
+                        &target,
                         &brush,
                         &app.graphics.mode,
                         if indicator.ascii_mode { "英" } else { "中" },
@@ -661,7 +652,7 @@ let mut fill = color(p.background);
                         Hit::Candidate(i) => {
                             let item = &c.snapshot.items[i];
                             text(
-                                target,
+                                &target,
                                 &brush,
                                 &app.graphics.number,
                                 &(i + 1).to_string(),
@@ -675,7 +666,7 @@ let mut fill = color(p.background);
                                 },
                             );
                             text(
-                                target,
+                                &target,
                                 &brush,
                                 &app.graphics.text,
                                 &item.primary_text,
@@ -684,7 +675,7 @@ let mut fill = color(p.background);
                             );
                             if !item.secondary_text.is_empty() {
                                 text(
-                                    target,
+                                    &target,
                                     &brush,
                                     &app.graphics.comment,
                                     &item.secondary_text,
@@ -707,7 +698,7 @@ let mut fill = color(p.background);
                             icon_rect.top -= 2.0 * SCALE;
                             icon_rect.bottom -= 2.0 * SCALE;
                             text(
-                                target,
+                                &target,
                                 &brush,
                                 &app.graphics.number,   // 箭头与表情改用正文/数字字体 ✓ 保证有字形 ✓
                                 glyph,
@@ -928,23 +919,24 @@ impl Drop for PaintGuard {
     }
 }
 struct DrawGuard<'a> {
-    target: &'a ID2D1HwndRenderTarget,
+    presenter: &'a Presenter,
     ended: bool,
 }
 impl DrawGuard<'_> {
-    /// 显式结束 Direct2D 绘制，并将设备错误交给调用方。
+    /// 显式结束这一帧：先 EndDraw，再提交交换链，让 DWM 取走这一帧。
     fn finish(mut self) -> windows_core::Result<()> {
         self.ended = true;
-        unsafe { self.target.EndDraw(None, None).ok() }
+        self.presenter.end_draw().map_err(|message| {
+            crate::diagnostics::record(format_args!("呈现失败: {message}"));
+            windows_core::Error::from_hresult(E_UNEXPECTED)
+        })
     }
 }
 impl Drop for DrawGuard<'_> {
-    /// 尚未显式结束时尽力配对 `EndDraw`，避免遗留未完成的绘制事务。
+    /// 尚未显式结束时尽力配对结束，避免遗留未完成的绘制事务。
     fn drop(&mut self) {
         if !self.ended {
-            unsafe {
-                let _ = self.target.EndDraw(None, None);
-            }
+            let _ = self.presenter.end_draw();
         }
     }
 }
@@ -1210,7 +1202,7 @@ fn rect_with(mut rect: D2D_RECT_F, left: f32, right: f32) -> D2D_RECT_F {
 }
 /// 设置画刷颜色并在给定裁剪矩形内绘制单行 UTF-16 文本。
 unsafe fn text(
-    target: &ID2D1HwndRenderTarget,
+    target: &ID2D1RenderTarget,
     brush: &ID2D1SolidColorBrush,
     format: &IDWriteTextFormat,
     value: &str,
