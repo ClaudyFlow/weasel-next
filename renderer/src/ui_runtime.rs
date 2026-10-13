@@ -828,7 +828,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(selected, "ten");
-        assert_eq!(attempted, ["eleven"]);
+        assert_eq!(attempted, ["eleven", "ten"]);
     }
 
     #[test]
