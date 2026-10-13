@@ -50,9 +50,4 @@ Function CleanupOldDllBackups
   !insertmacro CleanupDllBackups "$INSTDIR\x64" "weasel_tip.dll"
   !insertmacro CleanupDllBackups "$INSTDIR\x64" "rime.dll"
   !insertmacro CleanupDllBackups "$INSTDIR\x86" "weasel_tip.dll"
-  !insertmacro CleanupDllBackups "$INSTDIR\themes" "weasel_theme_ten.dll"
-  !insertmacro CleanupDllBackups "$INSTDIR\themes" "weasel_theme_eleven.dll"
-  !insertmacro CleanupDllBackups "$INSTDIR\themes" "weasel_theme_abc.dll"
-  !insertmacro CleanupDllBackups "$INSTDIR\themes" "weasel_theme_void.dll"
-  !insertmacro CleanupDllBackups "$INSTDIR\themes" "weasel_theme_wasm.dll"
 FunctionEnd

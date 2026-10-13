@@ -308,18 +308,6 @@ FunctionEnd
 !macro RemoveProgramFiles
   !insertmacro RemoveRimePayload
   !insertmacro RemoveWasmPayload
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_abc.settings.json"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_eleven.settings.json"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_ten.dll"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_ten.pdb"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_eleven.dll"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_eleven.pdb"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_abc.dll"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_abc.pdb"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_void.dll"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_void.pdb"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_wasm.dll"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_wasm.pdb"
   RMDir /REBOOTOK "$INSTDIR\themes"
   Delete /REBOOTOK "$INSTDIR\weasel-broker.exe"
   Delete /REBOOTOK "$INSTDIR\weasel-server.exe"
@@ -416,67 +404,11 @@ Section "设置应用" SEC_SETTINGS
 SectionEnd
 
 SectionGroup /e "候选主题" SEC_THEMES
-Section "ten（必选）" SEC_THEME_TEN
-  SectionIn RO
-  ClearErrors
-  SetOutPath "$INSTDIR\themes"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_ten.dll" "weasel_theme_ten.dll"
-  ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "无法安装 ten 主题，请检查磁盘空间和文件权限。" /SD IDOK
-    SetErrorLevel 1
-    Abort
-  ${EndIf}
-SectionEnd
 
-Section "eleven" SEC_THEME_ELEVEN
-  ClearErrors
-  SetOutPath "$INSTDIR\themes"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_eleven.dll" "weasel_theme_eleven.dll"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\theme\weasel_theme_eleven.settings.json" "weasel_theme_eleven.settings.json"
-  ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "无法安装 eleven 主题，请检查磁盘空间和文件权限。" /SD IDOK
-    SetErrorLevel 1
-    Abort
-  ${EndIf}
-SectionEnd
 
-Section "abc" SEC_THEME_ABC
-  ClearErrors
-  SetOutPath "$INSTDIR\themes"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_abc.dll" "weasel_theme_abc.dll"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\theme\weasel_theme_abc.settings.json" "weasel_theme_abc.settings.json"
-  ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "无法安装 abc 主题，请检查磁盘空间和文件权限。" /SD IDOK
-    SetErrorLevel 1
-    Abort
-  ${EndIf}
-SectionEnd
 
-Section "void" SEC_THEME_VOID
-  ClearErrors
-  SetOutPath "$INSTDIR\themes"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_void.dll" "weasel_theme_void.dll"
-  ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "无法安装 void 主题，请检查磁盘空间和文件权限。" /SD IDOK
-    SetErrorLevel 1
-    Abort
-  ${EndIf}
-SectionEnd
 
 !ifdef HAVE_WASM_THEME
-Section "wasm" SEC_THEME_WASM
-  ClearErrors
-  SetOutPath "$INSTDIR\themes"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_wasm.dll" "weasel_theme_wasm.dll"
-  SetOutPath "$INSTDIR\theme-wasm"
-  ; Optional artifacts: preserve offline/skipped-build packaging.
-  !insertmacro WasmPayload
-  ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "无法安装 WASM 主题，请检查磁盘空间和文件权限。" /SD IDOK
-    SetErrorLevel 1
-    Abort
-  ${EndIf}
-SectionEnd
 !endif
 
 SectionGroupEnd
@@ -501,22 +433,11 @@ Section /o "调试符号" SEC_SYMBOLS
   SetOutPath "$INSTDIR\x86"
 ; ★ 只允许 GNU：  !insertmacro ManagedFile "${X86_RELEASE}\weasel_tip.pdb" "weasel_tip.pdb"
   SetOutPath "$INSTDIR\themes"
-  ${If} ${SectionIsSelected} ${SEC_THEME_TEN}
-; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_ten.pdb" "weasel_theme_ten.pdb"
   ${EndIf}
-  ${If} ${SectionIsSelected} ${SEC_THEME_ELEVEN}
-; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_eleven.pdb" "weasel_theme_eleven.pdb"
   ${EndIf}
-  ${If} ${SectionIsSelected} ${SEC_THEME_ABC}
-; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_abc.pdb" "weasel_theme_abc.pdb"
   ${EndIf}
-  ${If} ${SectionIsSelected} ${SEC_THEME_VOID}
-; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_void.pdb" "weasel_theme_void.pdb"
   ${EndIf}
 !ifdef HAVE_WASM_THEME
-  ${If} ${SectionIsSelected} ${SEC_THEME_WASM}
-!if 0   ; ★ 只允许 GNU：原为 !if /FileExists "${X64_RELEASE}\weasel_theme_wasm.pdb"
-; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_wasm.pdb" "weasel_theme_wasm.pdb"
 !endif
   ${EndIf}
 !endif
@@ -640,12 +561,7 @@ FunctionEnd
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_SYMBOLS} "用于崩溃分析的调试符号。"
 !endif
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_THEMES} "选择安装的候选窗口主题。"
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_THEME_TEN} "Direct2D 候选栏，作为必选回退主题。"
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_THEME_ELEVEN} "XAML 候选栏，适用于 Windows 10 1903 及以上。"
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_THEME_ABC} "复古候选窗口，支持外部预编辑。"
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_THEME_VOID} "不显示窗口的主题及接口示例。"
 !ifdef HAVE_WASM_THEME
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_THEME_WASM} "WebAssembly 候选主题后端及随附主题（含 Orbit 月轨动画主题），支持加载自定义 .wasm 主题文件。"
 !endif
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 !endif

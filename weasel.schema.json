@@ -15,12 +15,7 @@
                                      "type":  "string",
                                      "enum":  [
                                                   "test",
-                                                  "seven",
-                                                  "eleven",
-                                                  "ten",
-                                                  "abc",
-                                                  "void",
-                                                  "wasm"
+                                                  "seven"
                                               ],
                                      "title":  "主题",
                                      "default":  "eleven"
@@ -121,76 +116,6 @@
                                              "description":  "按主题划分的自定义设置，键为主题名称，值为该主题的设置对象",
                                              "type":  "object",
                                              "properties":  {
-                                                                "wasm":  {
-                                                                             "type":  "object",
-                                                                             "properties":  {
-                                                                                                "theme":  {
-                                                                                                              "type":  "string",
-                                                                                                              "pattern":  "^[A-Za-z0-9_-]+$",
-                                                                                                              "description":  "加载同名 .wasm 模块",
-                                                                                                              "title":  "主题",
-                                                                                                              "default":  "weaselui"
-                                                                                                          },
-                                                                                                "modules":  {
-                                                                                                                "type":  "object",
-                                                                                                                "propertyNames":  {
-                                                                                                                                      "pattern":  "^[A-Za-z0-9_-]+$"
-                                                                                                                                  },
-                                                                                                                "additionalProperties":  {
-                                                                                                                                             "type":  "object",
-                                                                                                                                             "properties":  {
-                                                                                                                                                                "name":  {
-                                                                                                                                                                             "type":  "string",
-                                                                                                                                                                             "title":  "名称"
-                                                                                                                                                                         },
-                                                                                                                                                                "config":  {
-                                                                                                                                                                               "type":  "object",
-                                                                                                                                                                               "title":  "配置"
-                                                                                                                                                                           },
-                                                                                                                                                                "file":  {
-                                                                                                                                                                             "type":  "string",
-                                                                                                                                                                             "description":  "模块路径；依次查找程序目录 theme-wasm/\u003cid\u003e.wasm、用户数据目录 \u003cid\u003e.wasm",
-                                                                                                                                                                             "title":  "模块文件"
-                                                                                                                                                                         }
-                                                                                                                                                            },
-                                                                                                                                             "additionalProperties":  false
-                                                                                                                                         },
-                                                                                                                "title":  "WASM 模块",
-                                                                                                                "default":  {
-                                                                                                                                "weaselui":  {
-                                                                                                                                                 "name":  "旧版 Weasel UI"
-                                                                                                                                             },
-                                                                                                                                "glass":  {
-                                                                                                                                              "name":  "Glass"
-                                                                                                                                          },
-                                                                                                                                "orbit":  {
-                                                                                                                                              "name":  "Orbit · 月轨"
-                                                                                                                                          },
-                                                                                                                                "statusbar":  {
-                                                                                                                                                  "name":  "经典桌面状态栏"
-                                                                                                                                              }
-                                                                                                                            }
-                                                                                                            }
-                                                                                            },
-                                                                             "additionalProperties":  false,
-                                                                             "default":  {
-                                                                                             "theme":  "weaselui",
-                                                                                             "modules":  {
-                                                                                                             "weaselui":  {
-                                                                                                                              "name":  "旧版 Weasel UI"
-                                                                                                                          },
-                                                                                                             "glass":  {
-                                                                                                                           "name":  "Glass"
-                                                                                                                       },
-                                                                                                             "orbit":  {
-                                                                                                                           "name":  "Orbit · 月轨"
-                                                                                                                       },
-                                                                                                             "statusbar":  {
-                                                                                                                               "name":  "经典桌面状态栏"
-                                                                                                                           }
-                                                                                                         }
-                                                                                         }
-                                                                         },
                                                                 "seven":  {
 
                                                                           },

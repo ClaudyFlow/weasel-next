@@ -24,7 +24,8 @@ const WM_RENDERER_THEME: u32 = WM_APP as u32 + 12;
 ///
 /// DLL 只从 renderer 所在目录的 `themes` 子目录加载；成功或失败结果均缓存到进程退出。
 fn theme_candidates(preferred: &str) -> Vec<&'static dyn ThemeFactory> {
-    static ELEVEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
+    static OFFICIAL: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
+static ELEVEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
     static TEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
     static ABC: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
     static VOID: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
@@ -32,6 +33,7 @@ fn theme_candidates(preferred: &str) -> Vec<&'static dyn ThemeFactory> {
 static SEVEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
 static TEST: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
     let preferred = match preferred {
+        "official" => "official",
         "eleven" => "eleven",
             "seven" => "seven",
             "test" => "test",
@@ -39,12 +41,14 @@ static TEST: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new
         "abc" => "abc",
         "void" => "void",
         "wasm" => "wasm",
-        _ => "ten",
+        // 任何未知/已删除的名字一律落到官方主题（旧的 ten、eleven 等 DLL 已不再分发）
+        _ => "official",
     };
     std::iter::once(preferred)
         .filter_map(|name| {
             let slot = match name {
-                "eleven" => &ELEVEN,
+                "official" => &OFFICIAL,
+        "eleven" => &ELEVEN,
                 "ten" => &TEN,
                 "abc" => &ABC,
                 "void" => &VOID,
