@@ -145,7 +145,7 @@ Function .onInit
     ${If} $InstalledVersion != ""
       ${VersionCompare} "$InstalledVersion" "${PRODUCT_VERSION}" $1
       ${If} $1 == 1
-        MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "已安装 $InstalledVersion，即将安装较旧版本 ${PRODUCT_VERSION}。是否继续降级？" /SD IDNO IDYES version_confirmed
+        MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "已安装 $InstalledVersion，即将安装较旧版本 ${PRODUCT_VERSION}。是否继续降级？" /SD IDYES IDYES version_confirmed
         SetErrorLevel 1
         Quit
         version_confirmed:
@@ -186,7 +186,7 @@ Function .onInit
   ${EndIf}
   Goto registration_checked
   foreign_registration:
-    MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "检测到不属于当前安装记录的 TIP 注册：$\r$\n$\r$\nx86：$PreviousTip32$\r$\nx64：$PreviousTip64$\r$\n$\r$\n继续安装将用当前版本替换这些注册。是否继续？" /SD IDNO IDYES registration_checked
+    MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "检测到不属于当前安装记录的 TIP 注册：$\r$\n$\r$\nx86：$PreviousTip32$\r$\nx64：$PreviousTip64$\r$\n$\r$\n继续安装将用当前版本替换这些注册。是否继续？" /SD IDYES IDYES registration_checked
     SetErrorLevel 1
     Quit
   registration_checked:
@@ -220,7 +220,7 @@ Function StopApplicationProcesses
   Call ScanApplicationProcesses
   StrCmp $ScanResult 0 processes_stopped
   StrCmp $ScanResult 10 0 process_error
-  MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "算法服务未能正常退出。是否强制结束仍在运行的小狼毫Next服务进程？" /SD IDNO IDYES force_stop
+  MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "算法服务未能正常退出。是否强制结束仍在运行的小狼毫Next服务进程？" /SD IDYES IDYES force_stop
   SetErrorLevel 1
   Abort
   force_stop:
