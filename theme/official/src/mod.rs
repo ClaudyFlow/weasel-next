@@ -200,7 +200,7 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
             graphics: Graphics::new().map_err(|e| e.to_string())?,
             content: None,
             gesture: Gesture::default(),
-            palette: Palette::new(crate::appearance::is_dark()),
+            palette: logic::palette_from_official(crate::appearance::is_dark()),
         }),
         error: RefCell::new(None),
         recovery: RefCell::new(Recovery::default()),
@@ -768,7 +768,7 @@ impl ThemeBackend for Ten {
     }
     /// 重新读取系统明暗外观并请求重绘。
     fn refresh_appearance(&mut self) -> Result<(), String> {
-        self.window.app.borrow_mut().palette = Palette::new(crate::appearance::is_dark());
+        self.window.app.borrow_mut().palette = logic::palette_from_official(crate::appearance::is_dark());
         self.window.invalidate();
         self.window.health()
     }

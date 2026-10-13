@@ -391,3 +391,114 @@ mod tests {
         }
     }
 }
+// ---------------------------------------------------------------- 官方皮肤
+
+/// 官方配色是 `0xAARRGGBB`（alpha 为 0 时按不透明处理），我们的 `Palette` 只存 RGB。
+fn rgb_of(color: u32) -> u32 {
+    color & 0x00FF_FFFF
+}
+
+/// 按给定路径读取 `*.theme.toml` 并覆盖内置色板；失败时原样返回内置色板。
+///
+/// 映射关系照官方语义：`back_color` → 栏体底色，`border_color` → 外框，
+/// `hilited_candidate_back_color` → 选中与悬停背景（用户要求两者同色），
+/// `candidate_text_color`（缺失时退回 `text_color`）→ 主文本，
+/// `comment_text_color` → 次要文本，`hilited_candidate_text_color` → 选中序号。
+pub fn palette_from_path(path: &std::path::Path, dark: bool) -> Palette {
+    let mut palette = Palette::new(dark);
+    let Ok(file) = weasel_style::theme::parse_file(path) else {
+        crate::diagnostics::record(format_args!("皮肤读取失败: {}", path.display()));
+        return palette;
+    };
+    let config = file.into_config();
+    let scheme = config.active_scheme(dark);
+    palette.background = rgb_of(scheme.back_color);
+    palette.border = rgb_of(scheme.border_color);
+    palette.active = rgb_of(scheme.hilited_candidate_back_color);
+    palette.hover = palette.active;
+    palette.text = if scheme.candidate_text_color != 0 {
+        rgb_of(scheme.candidate_text_color)
+    } else {
+        rgb_of(scheme.text_color)
+    };
+    palette.secondary = rgb_of(scheme.comment_text_color);
+    palette.active_number = if scheme.hilited_candidate_text_color != 0 {
+        rgb_of(scheme.hilited_candidate_text_color)
+    } else {
+        palette.text
+    };
+    crate::diagnostics::record(format_args!(
+        "皮肤已加载: {} · 配色 {}（{}）· 底色 #{:06x} · 文字 #{:06x}",
+        path.display(),
+        config.style.color_scheme,
+        scheme.name,
+        palette.background,
+        palette.text
+    ));
+    palette
+}
+
+/// 按 librime 的查找顺序读官方皮肤：先用户目录，再程序文件夹。
+///
+/// 程序文件夹从**宿主进程**的 exe 目录推得（主题 DLL 与渲染器同目录），
+/// 因此路径是 `<程序文件夹>\Rime-Next\theme\default.theme.toml`。
+pub fn palette_from_official(dark: bool) -> Palette {
+    const NAME: &str = "default";
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        candidates.push(
+            std::path::PathBuf::from(appdata)
+                .join("Rime-Next")
+                .join("theme")
+                .join(format!("{NAME}.theme.toml")),
+        );
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(
+                dir.join("Rime-Next")
+                    .join("theme")
+                    .join(format!("{NAME}.theme.toml")),
+            );
+        }
+    }
+    for candidate in candidates {
+        if candidate.is_file() {
+            return palette_from_path(&candidate, dark);
+        }
+    }
+    crate::diagnostics::record(format_args!("未找到 {NAME}.theme.toml，使用内置色板"));
+    Palette::new(dark)
+}
+
+#[cfg(test)]
+mod skin_tests {
+    use super::*;
+
+    const DEFAULT_THEME: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../Rime-Next/theme/default.theme.toml");
+
+    #[test]
+    fn palette_comes_from_official_theme_file() {
+        let builtin = Palette::new(false);
+        let palette = palette_from_path(std::path::Path::new(DEFAULT_THEME), false);
+        println!(
+            "底色 #{:06x}（内置 #{:06x}）· 文字 #{:06x} · 选中 #{:06x} · 序号 #{:06x}",
+            palette.background, builtin.background, palette.text, palette.active, palette.active_number
+        );
+        // 官方 aqua 的 back_color 是 0x00eceeee，映射后应为 0xeceeee
+        assert_eq!(palette.background, 0x00ec_eeee, "底色应来自 default.theme.toml");
+        assert_ne!(palette.background, builtin.background, "不能还是内置色板");
+        // aqua 的 candidate_text_color 是 0x00000000，也就是黑色 —— 0 是合法颜色 ✓
+        assert_eq!(palette.text, 0x000000, "文字色应等于官方 aqua 的 text_color");
+        assert_ne!(palette.active, builtin.active, "选中块颜色也应来自官方皮肤");
+        assert_eq!(palette.hover, palette.active, "悬停与选中同色");
+    }
+
+    #[test]
+    fn missing_file_falls_back_to_builtin() {
+        let builtin = Palette::new(true);
+        let palette = palette_from_path(std::path::Path::new("Z:\\不存在\\x.theme.toml"), true);
+        assert_eq!(palette.background, builtin.background, "读不到时应回退内置色板");
+    }
+}

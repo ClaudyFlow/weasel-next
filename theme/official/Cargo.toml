@@ -12,6 +12,7 @@ serde_json = "1"
 weasel-common = { path = "../../common" }
 weasel-theme-api = { path = "../../theme/api" }
 weasel-theme-support = { path = "../support" }
+weasel-style = { path = "../../style" }
 windows-core = "0.100.0"
 
 windows-strings = "0.100.0"
