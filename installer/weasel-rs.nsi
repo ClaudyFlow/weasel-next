@@ -308,16 +308,16 @@ FunctionEnd
 !macro RemoveProgramFiles
   !insertmacro RemoveRimePayload
   !insertmacro RemoveWasmPayload
-  RMDir /REBOOTOK "$INSTDIR\themes"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  RMDir /REBOOTOK "$INSTDIR\themes"
   Delete /REBOOTOK "$INSTDIR\weasel-broker.exe"
   Delete /REBOOTOK "$INSTDIR\weasel-server.exe"
   Delete /REBOOTOK "$INSTDIR\weasel-renderer.exe"
   Delete /REBOOTOK "$INSTDIR\weasel-settings.exe"
-  Delete /REBOOTOK "$INSTDIR\x64\rime.dll"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  Delete /REBOOTOK "$INSTDIR\x64\rime.dll"
   Delete /REBOOTOK "$INSTDIR\rime.dll"
-  Delete /REBOOTOK "$INSTDIR\x64\weasel_tip.dll"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  Delete /REBOOTOK "$INSTDIR\x64\weasel_tip.dll"
   Delete /REBOOTOK "$INSTDIR\weasel_tip.dll"
-  Delete /REBOOTOK "$INSTDIR\x86\weasel_tip.dll"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  Delete /REBOOTOK "$INSTDIR\x86\weasel_tip.dll"
 ; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\weasel_broker.pdb"
 ; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\weasel_server.pdb"
 ; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\weasel_renderer.pdb"
@@ -338,9 +338,9 @@ FunctionEnd
   Delete "$INSTDIR\files.lst"
   Delete "$INSTDIR\files.pending.lst"
   Delete /REBOOTOK "$INSTDIR\weasel-installer-helper.exe"
-  RMDir /REBOOTOK "$INSTDIR\x86"
-  RMDir /REBOOTOK "$INSTDIR\x64"
-  RMDir /REBOOTOK "$INSTDIR\Rime-Next\rime-data"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  RMDir /REBOOTOK "$INSTDIR\x86"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  RMDir /REBOOTOK "$INSTDIR\x64"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  RMDir /REBOOTOK "$INSTDIR\Rime-Next\rime-data"
   RMDir /REBOOTOK "$INSTDIR\theme-wasm"
   RMDir /REBOOTOK "$INSTDIR"
 !macroend
@@ -365,11 +365,11 @@ Section "Weasel-Next" SEC_MAIN
   !insertmacro ManagedFile "${PROJECT_ROOT}\weasel.json" "weasel.json"
   !insertmacro ManagedFile "${PROJECT_ROOT}\THIRD-PARTY-LICENSES.txt" "THIRD-PARTY-LICENSES.txt"
   !insertmacro ManagedFile "${PROJECT_ROOT}\THIRD-PARTY-GPL-3.0.txt" "THIRD-PARTY-GPL-3.0.txt"
-  SetOutPath "$INSTDIR\x64"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  SetOutPath "$INSTDIR\x64"
   !insertmacro ManagedFile "${X64_RELEASE}\weasel_tip.dll" "weasel_tip.dll"
-  SetOutPath "$INSTDIR\x86"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  SetOutPath "$INSTDIR\x86"
 ; ★ 只允许 GNU：  !insertmacro ManagedFile "${X86_RELEASE}\weasel_tip.dll" "weasel_tip.dll"
-  CreateDirectory "$INSTDIR\Rime-Next\rime-data"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  CreateDirectory "$INSTDIR\Rime-Next\rime-data"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 Weasel-Next 文件，请检查磁盘空间和文件权限。" /SD IDOK
     SetErrorLevel 1
@@ -388,7 +388,7 @@ Section "librime" SEC_LIBRIME
   !insertmacro ManagedFile "${PROJECT_ROOT}\runtime\libgcc_s_seh-1.dll" "libgcc_s_seh-1.dll"
   !insertmacro ManagedFile "${PROJECT_ROOT}\runtime\libglog.dll" "libglog.dll"
   !insertmacro ManagedFile "${PROJECT_ROOT}\runtime\libopencc.dll" "libopencc.dll"
-  SetOutPath "$INSTDIR\Rime-Next\rime-data"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  SetOutPath "$INSTDIR\Rime-Next\rime-data"
   !insertmacro RimePayload
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 librime，请检查磁盘空间和文件权限。" /SD IDOK
@@ -431,11 +431,11 @@ Section /o "调试符号" SEC_SYMBOLS
 ; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_settings.pdb" "weasel_settings.pdb"
   ${EndIf}
 ; ★ 只允许 GNU：  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\librime\dist\lib\rime.pdb" "rime.pdb"
-  SetOutPath "$INSTDIR\x64"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  SetOutPath "$INSTDIR\x64"
 ; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_tip.pdb" "weasel_tip.pdb"
-  SetOutPath "$INSTDIR\x86"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  SetOutPath "$INSTDIR\x86"
 ; ★ 只允许 GNU：  !insertmacro ManagedFile "${X86_RELEASE}\weasel_tip.pdb" "weasel_tip.pdb"
-  SetOutPath "$INSTDIR\themes"
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  SetOutPath "$INSTDIR\themes"
 !ifdef HAVE_WASM_THEME
 !endif
   ${If} ${Errors}
@@ -477,7 +477,7 @@ Section "-注册与安装信息" SEC_REGISTER
   ; RegDLL is 32-bit in this installer; use native regsvr32 for the x64 DLL.
   SetOutPath "$INSTDIR"
   ClearErrors
-  ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\x86\weasel_tip.dll"' $0
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\x86\weasel_tip.dll"' $0
   ${If} ${Errors}
     !insertmacro InstallLog "ERROR: 无法启动 x86 TIP 注册程序"
     Goto install_failed
@@ -643,7 +643,7 @@ Section "Uninstall"
   SetOutPath "$TEMP"
   Call un.StopApplicationProcesses
   ClearErrors
-  ExecWait '"$SYSDIR\regsvr32.exe" /s /u "$INSTDIR\x86\weasel_tip.dll"' $0
+; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  ExecWait '"$SYSDIR\regsvr32.exe" /s /u "$INSTDIR\x86\weasel_tip.dll"' $0
   IfErrors uninstall_failed
   StrCmp $0 0 0 uninstall_failed
   ; Run in the interactive shell's context; the elevated HKCU may belong to
