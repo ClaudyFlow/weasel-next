@@ -382,6 +382,12 @@ Section "librime" SEC_LIBRIME
   ClearErrors
   SetOutPath "$INSTDIR"
   !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\smoke\rime.dll" "rime.dll"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\runtime\libc++.dll" "libc++.dll"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\runtime\libunwind.dll" "libunwind.dll"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\runtime\libwinpthread-1.dll" "libwinpthread-1.dll"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\runtime\libgcc_s_seh-1.dll" "libgcc_s_seh-1.dll"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\runtime\libglog.dll" "libglog.dll"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\runtime\libopencc.dll" "libopencc.dll"
   SetOutPath "$INSTDIR\Rime-Next\rime-data"
   !insertmacro RimePayload
   ${If} ${Errors}
