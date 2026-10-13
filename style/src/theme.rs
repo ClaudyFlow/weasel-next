@@ -264,7 +264,14 @@ impl ThemeFile {
 /// `name` 是主题名（例如 `default`）。
 pub fn theme_candidates(shared: &Path, user: &Path, name: &str) -> Vec<PathBuf> {
     let file = format!("{name}.theme.toml");
-    vec![user.join("theme").join(&file), shared.join("theme").join(file)]
+    vec![
+        // 树结构：theme/<名字>/<名字>.theme.toml（首选）
+        user.join("theme").join(name).join(&file),
+        shared.join("theme").join(name).join(&file),
+        // 兼容旧的扁平位置：theme/<名字>.theme.toml
+        user.join("theme").join(&file),
+        shared.join("theme").join(file),
+    ]
 }
 
 /// 按搜索顺序读第一个存在的主题文件。

@@ -73,15 +73,16 @@ pub fn normalize(root: &Path) -> io::Result<Vec<Move>> {
         } else if let Some(stem) = name.strip_suffix(".eassy.toml") {
             ("eassy", stem.to_string())
         } else if let Some(stem) = name.strip_suffix(".gram") {
-            ("model", String::new())
+            ("model", stem.to_string())
+        } else if let Some(stem) = name.strip_suffix(".theme.toml") {
+            ("theme", stem.to_string())
+        } else if let Some(stem) = name.strip_suffix(".lua") {
+            ("plugin", stem.to_string())
         } else {
             continue;
         };
-        let target_dir = if dir == "model" {
-            root.join("model")
-        } else {
-            root.join(dir).join(&stem)
-        };
+        // 统一成树：<类型>/<名字>/<名字>.<后缀>（model / theme / plugin 也带名字这一层）
+        let target_dir = root.join(dir).join(&stem);
         fs::create_dir_all(&target_dir)?;
         let target = target_dir.join(&name);
         if target.exists() {
