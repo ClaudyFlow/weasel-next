@@ -404,13 +404,10 @@ Section "设置应用" SEC_SETTINGS
 SectionEnd
 
 SectionGroup /e "候选主题" SEC_THEMES
-
-
-
-
-!ifdef HAVE_WASM_THEME
-!endif
-
+  Section "official（官方皮肤）" SEC_THEME_OFFICIAL
+    SetOutPath "$INSTDIR"
+    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_official.dll" "weasel_theme_official.dll"
+  SectionEnd
 SectionGroupEnd
 
 !ifndef MINI_INSTALLER
@@ -433,13 +430,7 @@ Section /o "调试符号" SEC_SYMBOLS
   SetOutPath "$INSTDIR\x86"
 ; ★ 只允许 GNU：  !insertmacro ManagedFile "${X86_RELEASE}\weasel_tip.pdb" "weasel_tip.pdb"
   SetOutPath "$INSTDIR\themes"
-  ${EndIf}
-  ${EndIf}
-  ${EndIf}
-  ${EndIf}
 !ifdef HAVE_WASM_THEME
-!endif
-  ${EndIf}
 !endif
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装调试符号，请检查磁盘空间和文件权限。" /SD IDOK
@@ -561,7 +552,12 @@ FunctionEnd
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_SYMBOLS} "用于崩溃分析的调试符号。"
 !endif
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_THEMES} "选择安装的候选窗口主题。"
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_THEME_TEN} "Direct2D 候选栏，作为必选回退主题。"
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_THEME_ELEVEN} "XAML 候选栏，适用于 Windows 10 1903 及以上。"
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_THEME_ABC} "复古候选窗口，支持外部预编辑。"
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_THEME_VOID} "不显示窗口的主题及接口示例。"
 !ifdef HAVE_WASM_THEME
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_THEME_WASM} "WebAssembly 候选主题后端及随附主题（含 Orbit 月轨动画主题），支持加载自定义 .wasm 主题文件。"
 !endif
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 !endif
