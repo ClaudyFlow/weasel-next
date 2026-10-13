@@ -5889,6 +5889,7 @@ version = "0.1.8"
 dependencies = [
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]
@@ -5907,6 +5908,7 @@ dependencies = [
  "embed-resource",
  "serde_json",
  "weasel-common",
+ "weasel-style",
  "weasel-theme-api",
  "weasel-theme-support",
  "windows-core 0.100.0",
