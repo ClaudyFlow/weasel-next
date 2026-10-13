@@ -1,6 +1,5 @@
 warning: in the working copy of 'src/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'src/rime/dict/dict_compiler.cc', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'src/rime/resource.cc', LF will be replaced by CRLF the next time Git touches it
 diff --git a/src/rime/dict/dict_compiler.cc b/src/rime/dict/dict_compiler.cc
 index f8049b0..c603d3d 100644
 --- a/src/rime/dict/dict_compiler.cc
@@ -52,7 +51,7 @@ index f8049b0..c603d3d 100644
      LOG(ERROR) << "source file '" << dict_file << "' does not exist.";
      build_table_from_source = false;
 diff --git a/src/rime/resource.cc b/src/rime/resource.cc
-index 09a9a5c..271d848 100644
+index 09a9a5c..49c51fd 100644
 --- a/src/rime/resource.cc
 +++ b/src/rime/resource.cc
 @@ -1,4 +1,4 @@
@@ -61,7 +60,7 @@ index 09a9a5c..271d848 100644
  // Copyright RIME Developers
  // Distributed under the BSD License
  //
-@@ -39,35 +39,75 @@ path ResourceResolver::ResolvePath(const string& resource_id) {
+@@ -39,35 +39,87 @@ path ResourceResolver::ResolvePath(const string& resource_id) {
    // 子目录里没有、扁平位置有时回退扁平 → 兼容旧安装与旧布局。
    auto subdir = std::string();
    const auto& sfx = type_.suffix;
@@ -91,13 +90,21 @@ index 09a9a5c..271d848 100644
 +      // [Weasel-Next 补丁] 配置层请求 "<方案>.schema" / "<词典>.dict"：类型后缀是 ".yaml"，
 +      // 必须单独判断，否则归类规则不会命中（SchemaComponent::Create 走的就是这条路）。
 +      const std::string stem = resource_id.substr(0, resource_id.find_last_of('.'));
-+      subdir = "schema/" + (stem.empty() ? resource_id : stem);
++      // [Weasel-Next 补丁] 部署目录（build/）里按**方案名**分类，内部不再分层：
++      //   build/<方案>/<方案>.schema.yaml 与 <方案>.table.bin 等放在同一层。
++      // 源目录（程序文件夹/用户目录）仍然按 <类型>/<名字>/ 分类。
++      const std::string leaf = stem.empty() ? resource_id : stem;
++      subdir = "schema/" + leaf;   // staging 与源目录都按 <类型>/<名字>/
 +    } else if (!is_staging_root && (boost::ends_with(sfx, ".schema.yaml") ||
 +               boost::ends_with(sfx, ".dict.yaml"))) {
 +      // [Weasel-Next 补丁] resource_id 自带后缀（luna_pinyin.schema.yaml），
 +      // 目录名必须去掉后缀，否则会拼出 schema/luna_pinyin.schema.yaml/… 这种不存在的路径。
 +      const std::string stem = resource_id.substr(0, resource_id.find_last_of('.'));
-+      subdir = "schema/" + (stem.empty() ? resource_id : stem);
++      // [Weasel-Next 补丁] 部署目录（build/）里按**方案名**分类，内部不再分层：
++      //   build/<方案>/<方案>.schema.yaml 与 <方案>.table.bin 等放在同一层。
++      // 源目录（程序文件夹/用户目录）仍然按 <类型>/<名字>/ 分类。
++      const std::string leaf = stem.empty() ? resource_id : stem;
++      subdir = "schema/" + leaf;   // staging 与源目录都按 <类型>/<名字>/
 +    } else if (boost::ends_with(sfx, ".txt")) {
 +      subdir = "eassy";                           // eassy/（essay.txt 等生成物）
 +    } else if (boost::ends_with(sfx, ".theme.toml")) {
@@ -108,6 +115,10 @@ index 09a9a5c..271d848 100644
    if (!subdir.empty()) {
      // 没有回退：文件必须待在既定子目录里，防止有人乱放 ✓
      if (boost::ends_with(sfx, ".bin") || boost::ends_with(sfx, ".gram")) {
++      LOG(INFO) << "[Weasel-Next] early root=" << root_path_.string()
++                << " id=" << resource_id << " sfx=" << sfx
++                << " subdir=" << subdir << " staging=" << is_staging_root
++                << " -> " << (root_path_ / subdir / (type_.prefix + resource_id + type_.suffix)).string();
        return std::filesystem::absolute(
            root_path_ / subdir / (type_.prefix + resource_id + type_.suffix));
      }
