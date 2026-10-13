@@ -8,7 +8,7 @@ members = [
     "renderer",
     # 设置界面（Slint 版）
     # experimental panel. Keep both buildable so either can be launched.
-    "settings",
+    "setting",
     "common",
     "theme/api",
     "style",

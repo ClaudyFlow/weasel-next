@@ -32,8 +32,8 @@ ManifestSupportedOS all
 
 !define PRODUCT_KEY "Software\Weasel-Next"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Weasel-Next"
-!define X64_RELEASE "${PROJECT_ROOT}\target\x86_64-pc-windows-msvc\release"
-!define X86_RELEASE "${PROJECT_ROOT}\target\i686-pc-windows-msvc\release"
+!define X64_RELEASE "${PROJECT_ROOT}\target\release"   ; ★ GNU 输出目录
+; ★ 只允许 GNU：!define X86_RELEASE "${PROJECT_ROOT}\target\i686-pc-windows-msvc\release"
 
 Name "${PRODUCT_NAME}"
 OutFile "${OUTPUT_FILE}"
@@ -79,10 +79,10 @@ Var PreviousTip64
 
 !include "${PROJECT_ROOT}\installer\records.nsh"
 !include "${PROJECT_ROOT}\installer\cleanup-backups.nsh"
-!include "${PROJECT_ROOT}\installer\vcredist.nsh"
+; ★ 只允许 GNU：!include "${PROJECT_ROOT}\installer\vcredist.nsh"
 !include "${PROJECT_ROOT}\installer\processes.nsh"
 !include "${PROJECT_ROOT}\installer\launch-broker.nsh"
-!include "${PROJECT_ROOT}\installer\uiaccess.nsh"
+; ★ 只允许 GNU：!include "${PROJECT_ROOT}\installer\uiaccess.nsh"
 !include "${PAYLOAD_INCLUDE}"
 
 Function .onInstSuccess
@@ -308,18 +308,18 @@ FunctionEnd
 !macro RemoveProgramFiles
   !insertmacro RemoveRimePayload
   !insertmacro RemoveWasmPayload
-  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_abc.settings.json"
-  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_eleven.settings.json"
-  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_ten.dll"
-  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_ten.pdb"
-  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_eleven.dll"
-  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_eleven.pdb"
-  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_abc.dll"
-  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_abc.pdb"
-  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_void.dll"
-  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_void.pdb"
-  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_wasm.dll"
-  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_wasm.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_abc.settings.json"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_eleven.settings.json"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_ten.dll"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_ten.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_eleven.dll"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_eleven.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_abc.dll"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_abc.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_void.dll"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_void.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_wasm.dll"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\theme\weasel_theme_wasm.pdb"
   RMDir /REBOOTOK "$INSTDIR\themes"
   Delete /REBOOTOK "$INSTDIR\weasel-broker.exe"
   Delete /REBOOTOK "$INSTDIR\weasel-server.exe"
@@ -330,15 +330,15 @@ FunctionEnd
   Delete /REBOOTOK "$INSTDIR\x64\weasel_tip.dll"
   Delete /REBOOTOK "$INSTDIR\weasel_tip.dll"
   Delete /REBOOTOK "$INSTDIR\x86\weasel_tip.dll"
-  Delete /REBOOTOK "$INSTDIR\weasel_broker.pdb"
-  Delete /REBOOTOK "$INSTDIR\weasel_server.pdb"
-  Delete /REBOOTOK "$INSTDIR\weasel_renderer.pdb"
-  Delete /REBOOTOK "$INSTDIR\weasel_settings.pdb"
-  Delete /REBOOTOK "$INSTDIR\weasel_tip.pdb"
-  Delete /REBOOTOK "$INSTDIR\x64\weasel_tip.pdb"
-  Delete /REBOOTOK "$INSTDIR\rime.pdb"
-  Delete /REBOOTOK "$INSTDIR\x86\weasel_tip.pdb"
-  Delete /REBOOTOK "$INSTDIR\x64\rime.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\weasel_broker.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\weasel_server.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\weasel_renderer.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\weasel_settings.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\weasel_tip.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\x64\weasel_tip.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\rime.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\x86\weasel_tip.pdb"
+; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\x64\rime.pdb"
   Delete /REBOOTOK "$INSTDIR\styles-LICENSE.txt"
   Delete /REBOOTOK "$INSTDIR\LICENSE"
   Delete /REBOOTOK "$INSTDIR\weasel.json"
@@ -366,12 +366,12 @@ Section "Weasel-Next" SEC_MAIN
   SetOutPath "$INSTDIR"
   ClearErrors
   !insertmacro ManagedFile "${X64_RELEASE}\weasel-broker.exe" "weasel-broker.exe"
-  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\winsparkle\WinSparkle.dll" "WinSparkle.dll"
-  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\winsparkle\WinSparkle-LICENSE.txt" "WinSparkle-LICENSE.txt"
-  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\winsparkle\WinSparkle-Expat-LICENSE.txt" "WinSparkle-Expat-LICENSE.txt"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\winsparkle\WinSparkle.dll" "WinSparkle.dll"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\winsparkle\WinSparkle-LICENSE.txt" "WinSparkle-LICENSE.txt"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\winsparkle\WinSparkle-Expat-LICENSE.txt" "WinSparkle-Expat-LICENSE.txt"
   !insertmacro ManagedFile "${X64_RELEASE}\weasel-server.exe" "weasel-server.exe"
   !insertmacro ManagedFile "${X64_RELEASE}\weasel-renderer.exe" "weasel-renderer.exe"
-  Call PrepareUiAccessRenderer
+; ★ 只允许 GNU：  Call PrepareUiAccessRenderer
   !insertmacro ManagedFile "${PROJECT_ROOT}\server\src\styles-LICENSE.txt" "styles-LICENSE.txt"
   !insertmacro ManagedFile "${PROJECT_ROOT}\LICENSE" "LICENSE"
   !insertmacro ManagedFile "${PROJECT_ROOT}\weasel.json" "weasel.json"
@@ -380,7 +380,7 @@ Section "Weasel-Next" SEC_MAIN
   SetOutPath "$INSTDIR\x64"
   !insertmacro ManagedFile "${X64_RELEASE}\weasel_tip.dll" "weasel_tip.dll"
   SetOutPath "$INSTDIR\x86"
-  !insertmacro ManagedFile "${X86_RELEASE}\weasel_tip.dll" "weasel_tip.dll"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${X86_RELEASE}\weasel_tip.dll" "weasel_tip.dll"
   CreateDirectory "$INSTDIR\Rime-Next\rime-data"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 Weasel-Next 文件，请检查磁盘空间和文件权限。" /SD IDOK
@@ -393,7 +393,7 @@ Section "librime" SEC_LIBRIME
   SectionIn RO
   ClearErrors
   SetOutPath "$INSTDIR"
-  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\librime\dist\lib\rime.dll" "rime.dll"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\smoke\rime.dll" "rime.dll"
   SetOutPath "$INSTDIR\Rime-Next\rime-data"
   !insertmacro RimePayload
   ${If} ${Errors}
@@ -407,7 +407,7 @@ Section "设置应用" SEC_SETTINGS
   ClearErrors
   SetOutPath "$INSTDIR"
   !insertmacro ManagedFile "${X64_RELEASE}\weasel-settings.exe" "weasel-settings.exe"
-  !insertmacro ManagedFile "${PROJECT_ROOT}\settings\LICENSE-NOTICE.txt" "SETTINGS-LICENSE.txt"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\setting\LICENSE-NOTICE.txt" "SETTINGS-LICENSE.txt"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装设置应用，请检查磁盘空间和文件权限。" /SD IDOK
     SetErrorLevel 1
@@ -420,7 +420,7 @@ Section "ten（必选）" SEC_THEME_TEN
   SectionIn RO
   ClearErrors
   SetOutPath "$INSTDIR\themes"
-  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_ten.dll" "weasel_theme_ten.dll"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_ten.dll" "weasel_theme_ten.dll"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 ten 主题，请检查磁盘空间和文件权限。" /SD IDOK
     SetErrorLevel 1
@@ -431,8 +431,8 @@ SectionEnd
 Section "eleven" SEC_THEME_ELEVEN
   ClearErrors
   SetOutPath "$INSTDIR\themes"
-  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_eleven.dll" "weasel_theme_eleven.dll"
-  !insertmacro ManagedFile "${X64_RELEASE}\theme\weasel_theme_eleven.settings.json" "weasel_theme_eleven.settings.json"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_eleven.dll" "weasel_theme_eleven.dll"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\theme\weasel_theme_eleven.settings.json" "weasel_theme_eleven.settings.json"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 eleven 主题，请检查磁盘空间和文件权限。" /SD IDOK
     SetErrorLevel 1
@@ -443,8 +443,8 @@ SectionEnd
 Section "abc" SEC_THEME_ABC
   ClearErrors
   SetOutPath "$INSTDIR\themes"
-  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_abc.dll" "weasel_theme_abc.dll"
-  !insertmacro ManagedFile "${X64_RELEASE}\theme\weasel_theme_abc.settings.json" "weasel_theme_abc.settings.json"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_abc.dll" "weasel_theme_abc.dll"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\theme\weasel_theme_abc.settings.json" "weasel_theme_abc.settings.json"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 abc 主题，请检查磁盘空间和文件权限。" /SD IDOK
     SetErrorLevel 1
@@ -455,7 +455,7 @@ SectionEnd
 Section "void" SEC_THEME_VOID
   ClearErrors
   SetOutPath "$INSTDIR\themes"
-  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_void.dll" "weasel_theme_void.dll"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_void.dll" "weasel_theme_void.dll"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 void 主题，请检查磁盘空间和文件权限。" /SD IDOK
     SetErrorLevel 1
@@ -467,7 +467,7 @@ SectionEnd
 Section "wasm" SEC_THEME_WASM
   ClearErrors
   SetOutPath "$INSTDIR\themes"
-  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_wasm.dll" "weasel_theme_wasm.dll"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_wasm.dll" "weasel_theme_wasm.dll"
   SetOutPath "$INSTDIR\theme-wasm"
   ; Optional artifacts: preserve offline/skipped-build packaging.
   !insertmacro WasmPayload
@@ -485,38 +485,38 @@ SectionGroupEnd
 Section /o "调试符号" SEC_SYMBOLS
   ClearErrors
   SetOutPath "$INSTDIR"
-  !insertmacro ManagedFile "${X64_RELEASE}\weasel_broker.pdb" "weasel_broker.pdb"
-  !insertmacro ManagedFile "${X64_RELEASE}\weasel_server.pdb" "weasel_server.pdb"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_broker.pdb" "weasel_broker.pdb"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_server.pdb" "weasel_server.pdb"
   ${If} $UseUiAccess == 1
-    !insertmacro ManagedFile "${X64_RELEASE}\uiaccess\weasel_renderer.pdb" "weasel_renderer.pdb"
+; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\uiaccess\weasel_renderer.pdb" "weasel_renderer.pdb"
   ${Else}
-    !insertmacro ManagedFile "${X64_RELEASE}\weasel_renderer.pdb" "weasel_renderer.pdb"
+; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_renderer.pdb" "weasel_renderer.pdb"
   ${EndIf}
   ${If} ${SectionIsSelected} ${SEC_SETTINGS}
-    !insertmacro ManagedFile "${X64_RELEASE}\weasel_settings.pdb" "weasel_settings.pdb"
+; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_settings.pdb" "weasel_settings.pdb"
   ${EndIf}
-  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\librime\dist\lib\rime.pdb" "rime.pdb"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\librime\dist\lib\rime.pdb" "rime.pdb"
   SetOutPath "$INSTDIR\x64"
-  !insertmacro ManagedFile "${X64_RELEASE}\weasel_tip.pdb" "weasel_tip.pdb"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_tip.pdb" "weasel_tip.pdb"
   SetOutPath "$INSTDIR\x86"
-  !insertmacro ManagedFile "${X86_RELEASE}\weasel_tip.pdb" "weasel_tip.pdb"
+; ★ 只允许 GNU：  !insertmacro ManagedFile "${X86_RELEASE}\weasel_tip.pdb" "weasel_tip.pdb"
   SetOutPath "$INSTDIR\themes"
   ${If} ${SectionIsSelected} ${SEC_THEME_TEN}
-    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_ten.pdb" "weasel_theme_ten.pdb"
+; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_ten.pdb" "weasel_theme_ten.pdb"
   ${EndIf}
   ${If} ${SectionIsSelected} ${SEC_THEME_ELEVEN}
-    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_eleven.pdb" "weasel_theme_eleven.pdb"
+; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_eleven.pdb" "weasel_theme_eleven.pdb"
   ${EndIf}
   ${If} ${SectionIsSelected} ${SEC_THEME_ABC}
-    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_abc.pdb" "weasel_theme_abc.pdb"
+; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_abc.pdb" "weasel_theme_abc.pdb"
   ${EndIf}
   ${If} ${SectionIsSelected} ${SEC_THEME_VOID}
-    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_void.pdb" "weasel_theme_void.pdb"
+; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_void.pdb" "weasel_theme_void.pdb"
   ${EndIf}
 !ifdef HAVE_WASM_THEME
   ${If} ${SectionIsSelected} ${SEC_THEME_WASM}
-!if /FileExists "${X64_RELEASE}\weasel_theme_wasm.pdb"
-    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_wasm.pdb" "weasel_theme_wasm.pdb"
+!if 0   ; ★ 只允许 GNU：原为 !if /FileExists "${X64_RELEASE}\weasel_theme_wasm.pdb"
+; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_wasm.pdb" "weasel_theme_wasm.pdb"
 !endif
   ${EndIf}
 !endif
@@ -541,8 +541,8 @@ Section "-注册与安装信息" SEC_REGISTER
   Call CloseRecords
 
   ; Prerequisite failure must leave the existing application untouched.
-  Call InstallRuntime_x86
-  Call InstallRuntime_x64
+; ★ 只允许 GNU：  Call InstallRuntime_x86
+; ★ 只允许 GNU：  Call InstallRuntime_x64
   Call StopApplicationProcesses
   Call RemoveOldPayload
   Delete "$INSTDIR\files.lst"
@@ -653,7 +653,7 @@ FunctionEnd
 Function .onInstFailed
   ${If} $TransactionCommitted != 1
     ${If} ${FileExists} "$PLUGINSDIR\new-uiaccess.cer"
-      !insertmacro CleanupUiAccessCertificate "$PLUGINSDIR\new-uiaccess.cer"
+; ★ 只允许 GNU：      !insertmacro CleanupUiAccessCertificate "$PLUGINSDIR\new-uiaccess.cer"
     ${EndIf}
   ${EndIf}
   !insertmacro InstallLog "ERROR: 安装未完成；保留当前文件，不执行回滚；日志：$InstallLog"

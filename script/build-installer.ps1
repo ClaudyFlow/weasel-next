@@ -40,7 +40,7 @@ try {
         'LICENSE',
         'THIRD-PARTY-LICENSES.txt',
         'THIRD-PARTY-GPL-3.0.txt',
-        'settings\LICENSE-NOTICE.txt',
+        'setting\LICENSE-NOTICE.txt',
         'installer\weasel-rs.nsi',
         'script\launch-broker.ps1'
     )
@@ -75,10 +75,9 @@ try {
     $payloadRemovalPaths = [Collections.Generic.List[string]]::new()
     $payloadDestinations = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($payload in @(
-        @{ Macro = 'RimePayload'; RemoveMacro = 'RemoveRimePayload'; ValidateMacro = 'ValidateRimePayloadRemoval'; Source = 'Rime-Next\rime-data'; Target = 'Rime-Next\rime-data' },
-        @{ Macro = 'WasmPayload'; RemoveMacro = 'RemoveWasmPayload'; ValidateMacro = 'ValidateWasmPayloadRemoval'; Source = 'artifact\theme-wasm'; Target = 'theme-wasm' },
-        # 按键/上屏音效：随包安装到 $INSTDIR\Rime-Next\sound，服务端按配置的 asset 目录解析 sound/。
-        @{ Macro = 'SoundsPayload'; RemoveMacro = 'RemoveSoundsPayload'; ValidateMacro = 'ValidateSoundsPayloadRemoval'; Source = 'Rime-Next\sound'; Target = 'Rime-Next\sound' }
+        # 整个 Rime-Next（含 theme\ 皮肤、eassy、schema、weasel.yaml 等）
+        @{ Macro = 'RimePayload'; RemoveMacro = 'RemoveRimePayload'; ValidateMacro = 'ValidateRimePayloadRemoval'; Source = 'Rime-Next'; Target = 'Rime-Next' },
+        @{ Macro = 'WasmPayload'; RemoveMacro = 'RemoveWasmPayload'; ValidateMacro = 'ValidateWasmPayloadRemoval'; Source = 'artifact\theme-wasm'; Target = 'theme-wasm' }
     )) {
         $files = @()
         $payloadLines.Add('!macro ' + $payload.Macro)
