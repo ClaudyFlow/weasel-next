@@ -1,6 +1,58 @@
 warning: in the working copy of 'src/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/rime/dict/dict_compiler.cc', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/rime/resource.cc', LF will be replaced by CRLF the next time Git touches it
+diff --git a/src/rime/dict/dict_compiler.cc b/src/rime/dict/dict_compiler.cc
+index f8049b0..c603d3d 100644
+--- a/src/rime/dict/dict_compiler.cc
++++ b/src/rime/dict/dict_compiler.cc
+@@ -51,6 +51,21 @@ static bool get_dict_files_from_settings(vector<path>* dict_files,
+     for (auto it = tables->begin(); it != tables->end(); ++it) {
+       string dict_name = As<ConfigValue>(*it)->str();
+       auto dict_file = source_resolver->ResolvePath(dict_name + ".dict.yaml");
++  // [Weasel-Next 补丁] 同 Compile：用户目录没有时去共享数据目录按分类路径找，再退回扁平。
++  if (!std::filesystem::exists(dict_file)) {
++    const auto& shared = Service::instance().deployer().shared_data_dir;
++    if (!shared.empty()) {
++      const auto nested = shared / "schema" / dict_name / (dict_name + ".dict.yaml");
++      if (std::filesystem::exists(nested)) {
++        dict_file = nested;
++      } else {
++        const auto flat = shared / (dict_name + ".dict.yaml");
++        if (std::filesystem::exists(flat)) {
++          dict_file = flat;
++        }
++      }
++    }
++  }
+       if (!std::filesystem::exists(dict_file)) {
+         LOG(ERROR) << "source file '" << dict_file << "' does not exist.";
+         return false;
+@@ -82,6 +97,23 @@ bool DictCompiler::Compile(const path& schema_file) {
+   bool build_table_from_source = true;
+   DictSettings settings;
+   auto dict_file = source_resolver_->ResolvePath(dict_name_ + ".dict.yaml");
++  // [Weasel-Next 补丁] 用户目录没有时，去共享数据目录（程序文件夹）按分类路径找：
++  //   <shared>/schema/<词典>/<词典>.dict.yaml，再退回扁平的 <shared>/<词典>.dict.yaml。
++  // 原实现只问用户目录，所以"数据只在共享目录 + 分类布局"时永远找不到词典。
++  if (!std::filesystem::exists(dict_file)) {
++    const auto& shared = Service::instance().deployer().shared_data_dir;
++    if (!shared.empty()) {
++      const auto nested = shared / "schema" / dict_name_ / (dict_name_ + ".dict.yaml");
++      if (std::filesystem::exists(nested)) {
++        dict_file = nested;
++      } else {
++        const auto flat = shared / (dict_name_ + ".dict.yaml");
++        if (std::filesystem::exists(flat)) {
++          dict_file = flat;
++        }
++      }
++    }
++  }
+   if (!std::filesystem::exists(dict_file)) {
+     LOG(ERROR) << "source file '" << dict_file << "' does not exist.";
+     build_table_from_source = false;
 diff --git a/src/rime/resource.cc b/src/rime/resource.cc
-index 09a9a5c..3f0e013 100644
+index 09a9a5c..271d848 100644
 --- a/src/rime/resource.cc
 +++ b/src/rime/resource.cc
 @@ -1,4 +1,4 @@
@@ -9,7 +61,7 @@ index 09a9a5c..3f0e013 100644
  // Copyright RIME Developers
  // Distributed under the BSD License
  //
-@@ -39,29 +39,59 @@ path ResourceResolver::ResolvePath(const string& resource_id) {
+@@ -39,35 +39,75 @@ path ResourceResolver::ResolvePath(const string& resource_id) {
    // 子目录里没有、扁平位置有时回退扁平 → 兼容旧安装与旧布局。
    auto subdir = std::string();
    const auto& sfx = type_.suffix;
@@ -32,7 +84,7 @@ index 09a9a5c..3f0e013 100644
 +    if (boost::ends_with(sfx, ".bin")) {
 +      subdir = resource_id;                       // build/<方案>/
 +    } else if (boost::ends_with(sfx, ".gram")) {
-+      subdir = "model";                           // model/
++      subdir = "model/" + resource_id;            // model/<名字>/
 +    } else if (!is_staging_root && sfx == ".yaml" &&
 +               (boost::ends_with(resource_id, ".schema") ||
 +                boost::ends_with(resource_id, ".dict"))) {
@@ -49,9 +101,9 @@ index 09a9a5c..3f0e013 100644
 +    } else if (boost::ends_with(sfx, ".txt")) {
 +      subdir = "eassy";                           // eassy/（essay.txt 等生成物）
 +    } else if (boost::ends_with(sfx, ".theme.toml")) {
-+      subdir = "theme";                           // theme/（皮肤文件）
++      subdir = "theme/" + resource_id;            // theme/<名字>/
 +    } else if (boost::ends_with(sfx, ".lua")) {
-+      subdir = "plugin";                          // plugin/（脚本）
++      subdir = "plugin/" + resource_id;           // plugin/<名字>/
 +    }
    if (!subdir.empty()) {
      // 没有回退：文件必须待在既定子目录里，防止有人乱放 ✓
@@ -84,3 +136,19 @@ index 09a9a5c..3f0e013 100644
    }
    return flat;
  }
+ 
+ path FallbackResourceResolver::ResolvePath(const string& resource_id) {
+   auto default_path = ResourceResolver::ResolvePath(resource_id);
++  // [Weasel-Next 补丁] 本根没有时，去回退根（共享数据目录）用**同一套分类规则**再解析一次。
++  // 原实现是直接拼扁平名字，分类布局（schema/<方案>/<方案>.schema.yaml）永远找不到。
++  if (!std::filesystem::exists(default_path) && !fallback_root_path_.empty()) {
++    ResourceResolver fallback_resolver(type_);
++    fallback_resolver.set_root_path(fallback_root_path_);
++    auto fallback_path = fallback_resolver.ResolvePath(resource_id);
++    if (std::filesystem::exists(fallback_path)) {
++      return fallback_path;
++    }
++  }
+   if (!std::filesystem::exists(default_path)) {
+     auto fallback_path = std::filesystem::absolute(
+         fallback_root_path_ / (type_.prefix + resource_id + type_.suffix));
