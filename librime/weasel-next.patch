@@ -1,0 +1,86 @@
+warning: in the working copy of 'src/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
+diff --git a/src/rime/resource.cc b/src/rime/resource.cc
+index 09a9a5c..3f0e013 100644
+--- a/src/rime/resource.cc
++++ b/src/rime/resource.cc
+@@ -1,4 +1,4 @@
+-﻿//
++//
+ // Copyright RIME Developers
+ // Distributed under the BSD License
+ //
+@@ -39,29 +39,59 @@ path ResourceResolver::ResolvePath(const string& resource_id) {
+   // 子目录里没有、扁平位置有时回退扁平 → 兼容旧安装与旧布局。
+   auto subdir = std::string();
+   const auto& sfx = type_.suffix;
+-  if (boost::ends_with(sfx, ".bin")) {
+-    subdir = resource_id;                       // build/<方案>/
+-  } else if (boost::ends_with(sfx, ".gram")) {
+-    subdir = "model";                           // model/
+-  } else if (boost::ends_with(sfx, ".schema.yaml") ||
+-             boost::ends_with(sfx, ".dict.yaml")) {
+-    subdir = "schema/" + resource_id;           // schema/<名字>/
+-  } else if (boost::ends_with(sfx, ".txt")) {
+-    subdir = "dict";                            // dict/（essay 等文本词库）
+-  } else if (boost::ends_with(sfx, ".lua")) {
+-    subdir = "plugin";                          // plugin/（脚本）
+-  }
++  // [Weasel-Next 补丁] 根判定：编译产物目录（…/build）不套用 schema/<名字>/ 分类规则。
++  // 原因：引擎要求 <staging>/<方案>.schema.yaml 保持扁平；分类布局只用于"源"根
++  //（用户目录 Rime-Next、程序目录 Rime-Next 的 schema/<名字>/<方案>.schema.yaml）。
++    const bool is_staging_root = root_path_.filename() == "build";
++    if (boost::ends_with(sfx, ".bin")) {
++      subdir = resource_id;                       // build/<方案>/
++    } else if (boost::ends_with(sfx, ".gram")) {
++      subdir = "model";                           // model/
++    } else if (!is_staging_root && sfx == ".yaml" &&
++               (boost::ends_with(resource_id, ".schema") ||
++                boost::ends_with(resource_id, ".dict"))) {
++      // [Weasel-Next 补丁] 配置层请求 "<方案>.schema" / "<词典>.dict"：类型后缀是 ".yaml"，
++      // 必须单独判断，否则归类规则不会命中（SchemaComponent::Create 走的就是这条路）。
++      const std::string stem = resource_id.substr(0, resource_id.find_last_of('.'));
++      subdir = "schema/" + (stem.empty() ? resource_id : stem);
++    } else if (!is_staging_root && (boost::ends_with(sfx, ".schema.yaml") ||
++               boost::ends_with(sfx, ".dict.yaml"))) {
++      // [Weasel-Next 补丁] resource_id 自带后缀（luna_pinyin.schema.yaml），
++      // 目录名必须去掉后缀，否则会拼出 schema/luna_pinyin.schema.yaml/… 这种不存在的路径。
++      const std::string stem = resource_id.substr(0, resource_id.find_last_of('.'));
++      subdir = "schema/" + (stem.empty() ? resource_id : stem);
++    } else if (boost::ends_with(sfx, ".txt")) {
++      subdir = "eassy";                           // eassy/（essay.txt 等生成物）
++    } else if (boost::ends_with(sfx, ".theme.toml")) {
++      subdir = "theme";                           // theme/（皮肤文件）
++    } else if (boost::ends_with(sfx, ".lua")) {
++      subdir = "plugin";                          // plugin/（脚本）
++    }
+   if (!subdir.empty()) {
+     // 没有回退：文件必须待在既定子目录里，防止有人乱放 ✓
+     if (boost::ends_with(sfx, ".bin") || boost::ends_with(sfx, ".gram")) {
+       return std::filesystem::absolute(
+           root_path_ / subdir / (type_.prefix + resource_id + type_.suffix));
+     }
++      LOG(INFO) << "[Weasel-Next] resolve root=" << root_path_.string()
++                << " id=" << resource_id << " sfx=" << sfx
++                << " subdir=" << subdir << " staging=" << is_staging_root;
+     const auto nested = std::filesystem::absolute(
+         root_path_ / subdir / (type_.prefix + resource_id + type_.suffix));
+-    if (std::filesystem::exists(nested) || !std::filesystem::exists(flat)) {
+-      return nested;
+-    }
++      LOG(INFO) << "[Weasel-Next] nested=" << nested.string()
++                << " nested_exists=" << std::filesystem::exists(nested)
++                << " flat=" << flat.string()
++                << " flat_exists=" << std::filesystem::exists(flat);
++      // [Weasel-Next 补丁] 分三种情况返回，绝不返回"不存在的路径"：
++      // 返回不存在的路径会中断 librime 的数据目录回退链，导致共享目录里的
++      // 分类方案永远读不到（用户目录问一次就判定缺失）。
++      if (std::filesystem::exists(nested)) {
++        return nested;
++      }
++      if (std::filesystem::exists(flat)) {
++        return flat;
++      }
++      return {};   // 两侧都没有：交回上层，继续尝试下一个数据目录
+   }
+   return flat;
+ }
