@@ -53,11 +53,11 @@ const DT_VCENTER: u32 = 0x0004;
 const DT_SINGLELINE: u32 = 0x0020;
 const MB_OK: u32 = 0x0000;
 const MB_ICONWARNING: u32 = 0x0030;
-const IDD_STYLE_SETTING: u16 = 102;
-const IDD_SWITCHER_SETTING: u16 = 101;
-const IDD_DICT_MANAGEMENT: u16 = 103;
+const IDD_STYLE_SETTING: u16 = 130;
+const IDD_SWITCHER_SETTING: u16 = 129;
+const IDD_DICT_MANAGEMENT: u16 = 132;
 
-const IDC_COLOR_SCHEME: i32 = 1001;
+const IDC_COLOR_SCHEME: i32 = 1004;
 const IDC_COLOR_LIST: i32 = 1002;
 const IDC_COLOR_VALUE: i32 = 1003;
 const IDC_SET_COLOR: i32 = 1004;
@@ -403,10 +403,7 @@ pub fn run_from_args(args: &[String], shared: &Path, user: &Path) -> bool {
             return true;
         }
         if arg == "/switcher" || arg == "--switcher" || arg == "-switcher" {
-            // 方案选单的**数据填充**还有递归问题（往 ListView 插行时同步收到
-            // WM_NOTIFY，更新简介又触发通知，栈溢出），先只显示官方模板，
-            // 保证这个入口能打开、不崩；数据接线在 switcher_dialog.rs 里继续查。
-            if let Err(error) = show_placeholder(IDD_SWITCHER_SETTING) {
+            if let Err(error) = crate::switcher_dialog::show(shared, user) {
                 eprintln!("weasel-settings: {error}");
             }
             return true;

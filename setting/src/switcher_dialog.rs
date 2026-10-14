@@ -19,12 +19,12 @@ use weasel_common::bindings::*;
 use weasel_style::switcher::{self, SchemaInfo};
 use windows_core::PCWSTR;
 
-const IDD_SWITCHER_SETTING: u16 = 101;
+const IDD_SWITCHER_SETTING: u16 = 129;
 /// `ICC_LISTVIEW_CLASSES`：初始化 SysListView32 控件类（commctrl.h 的宏）。
 const ICC_LISTVIEW_CLASSES: u32 = 0x0000_0001;
-const IDC_SCHEMA_LIST: i32 = 1208;
+const IDC_SCHEMA_LIST: i32 = 1000;
 const IDC_SCHEMA_DESCRIPTION: i32 = 1209;
-const IDC_HOTKEYS: i32 = 1210;
+const IDC_HOTKEYS: i32 = 1003;
 const IDC_GET_SCHEMATA: i32 = 1211;
 
 // ---- ListView 的消息与常量（commctrl.h，值固定）--------------------------
@@ -199,7 +199,34 @@ unsafe fn show_details(hwnd: HWND, row: &SchemaInfo) {
     }
 }
 
+thread_local! {
+    /// 对话框过程的进入深度。用来把重入挡在栈溢出之前：
+    /// 一旦某个消息链条把自己套进去，深度会迅速增长，这里直接截断并打印消息号，
+    /// 既避免崩溃，也把"是谁在递归"记录下来。
+    static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// 对话框过程入口：带深度守卫，超深就记日志并忽略该消息。
 unsafe extern "system" fn proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
+    let depth = DEPTH.with(|cell| {
+        let value = cell.get();
+        cell.set(value + 1);
+        value
+    });
+    if depth > 0 {
+        // 只在重入时记录，正常消息不刷日志
+        eprintln!("weasel-settings: 对话框消息重入 depth={depth} message=0x{message:04X}");
+    }
+    if depth > 6 {
+        eprintln!("weasel-settings: 重入过深，忽略 message=0x{message:04X}（防止栈溢出）");
+        DEPTH.with(|cell| cell.set(cell.get() - 1));
+        return 0;
+    }
+    let result = handle(hwnd, message, wparam, lparam);
+    DEPTH.with(|cell| cell.set(cell.get() - 1));
+    result
+}
+fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
     match message {
         WM_INITDIALOG_ => {
             let list = unsafe { GetDlgItem(Some(hwnd), IDC_SCHEMA_LIST) };
@@ -261,6 +288,9 @@ unsafe extern "system" fn proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                     }
                 });
             }
+            // 显式显示：这个模板创建出来后一直不可见（/style 同模板却正常），
+            // 这里主动 ShowWindow 一次。
+            unsafe { ShowWindow(hwnd, 5) }; // SW_SHOW
             1
         }
         WM_NOTIFY_ => {
