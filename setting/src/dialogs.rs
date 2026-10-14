@@ -386,6 +386,14 @@ unsafe extern "system" fn style_proc(
 ///
 /// 返回 `true` 表示已由对话框处理（调用方不要再启动 Slint 界面）。
 pub fn run_from_args(args: &[String], shared: &Path, user: &Path) -> bool {
+    // SysListView32 属于通用控件库，创建任何含它的对话框之前都要先初始化。
+    unsafe {
+        let classes = weasel_common::bindings::INITCOMMONCONTROLSEX {
+            dwSize: std::mem::size_of::<weasel_common::bindings::INITCOMMONCONTROLSEX>() as u32,
+            dwICC: 0x0000_0001, // ICC_LISTVIEW_CLASSES
+        };
+        weasel_common::bindings::InitCommonControlsEx(&classes);
+    }
     for arg in args {
         let arg = arg.to_ascii_lowercase();
         if arg == "/style" || arg == "--style" || arg == "-style" {
@@ -395,7 +403,10 @@ pub fn run_from_args(args: &[String], shared: &Path, user: &Path) -> bool {
             return true;
         }
         if arg == "/switcher" || arg == "--switcher" || arg == "-switcher" {
-            if let Err(error) = crate::switcher_dialog::show(shared, user) {
+            // 方案选单的**数据填充**还有递归问题（往 ListView 插行时同步收到
+            // WM_NOTIFY，更新简介又触发通知，栈溢出），先只显示官方模板，
+            // 保证这个入口能打开、不崩；数据接线在 switcher_dialog.rs 里继续查。
+            if let Err(error) = show_placeholder(IDD_SWITCHER_SETTING) {
                 eprintln!("weasel-settings: {error}");
             }
             return true;
