@@ -5877,6 +5877,7 @@ dependencies = [
  "slint-build",
  "tempfile",
  "weasel-common",
+ "weasel-style",
  "windows-bindgen",
  "windows-core 0.100.0",
  "windows-strings 0.100.0",
