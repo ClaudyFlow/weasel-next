@@ -109,8 +109,20 @@ impl Graphics {
             unsafe {
                 let mut rc = RECT::default();
                 GetClientRect(hwnd, &mut rc).ok()?;
-                let width = (rc.right - rc.left).max(1) as u32;
-                let height = (rc.bottom - rc.top).max(1) as u32;
+                let raw_width = rc.right - rc.left;
+                let raw_height = rc.bottom - rc.top;
+                if raw_width <= 0 || raw_height <= 0 {
+                    // 窗口还没显示时客户区就是空的。官方这时直接返回、什么都不做；
+                    // 报错会被上层当成"主题不可用"，进而让渲染器退出（表现为候选窗一闪不出）。
+                    crate::diagnostics::record(format_args!(
+                        "客户区还是空的（{}x{}），等窗口显示后再建绘制目标",
+                        raw_width,
+                        raw_height
+                    ));
+                    return Ok(());
+                }
+                let width = raw_width as u32;
+                let height = raw_height as u32;
                 let presenter = Presenter::new(hwnd, width, height).map_err(|message| {
                     crate::diagnostics::record(format_args!("呈现层创建失败: {message}"));
                     windows_core::Error::from_hresult(E_UNEXPECTED)
