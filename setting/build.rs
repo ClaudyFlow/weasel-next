@@ -92,3 +92,4 @@ fn main() {
     // 用资源编译进 exe，运行时由 DialogBoxParam 弹出，界面与官方同一套控件与布局。
     println!("cargo:rerun-if-changed=ui/deployer.rc");
     let _ = embed_resource::compile("ui/deployer.rc", embed_resource::NONE);
+}
