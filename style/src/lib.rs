@@ -14,6 +14,8 @@
 //! 缩进映射、标量、`#` 注释、单双引号、空行。够用且可测。
 
 pub mod settings;
+/// 方案选单的数据层（读方案目录与 schema_list，写 default.custom.yaml）。
+pub mod switcher;
 pub mod theme;
 
 use std::collections::BTreeMap;
