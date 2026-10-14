@@ -41,7 +41,17 @@ impl Skins {
 
     /// 重新读两份文件（用户改过之后调用）。
     pub fn reload(&mut self) {
-        self.base = weasel_style::parse_file(&self.base_path).ok();
+        // 用户文件是 `patch:` 段，必须**叠加**到出厂配置上才是生效结果；
+        // 直接把补丁当完整配置解析会读不到 style/color_scheme（补丁里没写的东西都不存在）。
+        // 用文本合并（parse_with_patch）而不是 parse_files：前者与 style 里"官方基底 + 用户补丁"
+        // 的测试路径完全一致，行为已被验证。
+        let base_text = std::fs::read_to_string(&self.base_path).ok();
+        let custom_text = std::fs::read_to_string(&self.custom_path).ok();
+        self.base = match base_text {
+            Some(base) => weasel_style::parse_with_patch(&base, custom_text.as_deref()).ok(),
+            None => None,
+        };
+        // 原始补丁单独保留：界面用它标记"改过哪些配色"，与合并结果无关。
         self.custom = weasel_style::parse_file(&self.custom_path).ok();
     }
 
@@ -70,8 +80,10 @@ impl Skins {
 
     /// 当前生效的配色 id。
     pub fn active_id(&self) -> String {
+        // 合并结果就在 self.base 里（出厂 + 用户补丁），直接读它的 style/color_scheme。
+        // 不能把原始补丁交给 active_scheme —— 单独解析补丁文件时读到的只是默认值。
         match &self.base {
-            Some(base) => weasel_style::settings::active_scheme(base, self.custom.as_ref()),
+            Some(base) => base.style.color_scheme.clone(),
             None => String::new(),
         }
     }
