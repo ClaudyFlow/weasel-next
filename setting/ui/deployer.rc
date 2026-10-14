@@ -1,0 +1,95 @@
+// 官方设置界面的对话框模板，取自 fxliang/weasel 的 WeaselDeployer\WeaselDeployer.rc。
+//
+// 为什么用 .rc 而不是自绘界面：官方这三个对话框是标准 Win32 DIALOGEX 模板，
+// 控件类型、坐标、尺寸、字体、按钮文字都在资源里。把它们原样编译进程序、
+// 用 DialogBoxParam 弹出来，得到的就是**同一个界面**（同样的控件类、同样的
+// 布局单位、同样的 MS Shell Dlg 9pt），差别只在背后的处理逻辑由 Rust 实现。
+//
+// 与官方模板的差异（只有两处，都是官方 .rc 本身的问题，不改会影响我们）：
+//   1. 官方多处复用 IDC_STATIC1 作为静态文本 ID。Win32 允许，但 GetDlgItem 会
+//      取到第一个，容易误用。这里给每个静态文本独立编号。
+//   2. 官方在 205,207 同时放了 IDC_STYLE_VALUE_COMBO 与 IDC_STYLE_VALUE_EDIT
+//      （运行时按字段类型显示其一）。这里保留两者，由代码隐藏 / 显示，行为一致。
+//
+// 文本与官方一致（简体中文版）；多语言的资源分节（LANGUAGE）留待需要时补。
+
+#include <windows.h>
+
+// ---- 控件 ID：与官方 resource.h 对齐 -------------------------------------
+#define IDD_SWITCHER_SETTING            101
+#define IDD_STYLE_SETTING               102
+#define IDD_DICT_MANAGEMENT             103
+#define IDD_DIALOG_FONT                 104
+
+#define IDC_COLOR_SCHEME                1001
+#define IDC_COLOR_LIST                  1002
+#define IDC_COLOR_VALUE                 1003
+#define IDC_SET_COLOR                   1004
+#define IDC_SELECT_FONT                 1005
+#define IDC_STYLE_LIST                  1006
+#define IDC_STYLE_VALUE_COMBO           1007
+#define IDC_STYLE_VALUE_EDIT            1008
+#define IDC_SET_STYLE                   1009
+
+#define IDC_USER_DICT_LIST              1101
+#define IDC_BACKUP                      1102
+#define IDC_RESTORE                     1103
+#define IDC_EXPORT                      1104
+#define IDC_IMPORT                      1105
+
+// 官方复用的 IDC_STATIC1，这里拆成独立编号
+#define IDC_STYLE_LABEL_SCHEME          1201
+#define IDC_STYLE_LABEL_STYLE           1202
+#define IDC_DICT_LABEL_LIST             1203
+#define IDC_DICT_HINT_SNAPSHOT          1204
+#define IDC_DICT_HINT_TEXT              1205
+#define IDC_SWITCHER_LABEL_SCHEMA       1206
+#define IDC_SWITCHER_LABEL_HOTKEY       1207
+
+// ---- 界面风格设定（官方 IDD_STYLE_SETTING）-------------------------------
+IDD_STYLE_SETTING DIALOGEX 0, 0, 500, 250
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "【小狼毫】界面风格设定"
+FONT 9, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "请选取你最喜欢的配色：",IDC_STYLE_LABEL_SCHEME,7,7,81,8
+    COMBOBOX        IDC_COLOR_SCHEME,7,20,190,120,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LISTBOX         IDC_COLOR_LIST,7,43,190,160,LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+    EDITTEXT        IDC_COLOR_VALUE,7,207,140,14,ES_AUTOHSCROLL
+    PUSHBUTTON      "修改",IDC_SET_COLOR,152,207,45,14
+    PUSHBUTTON      "设定字体...",IDC_SELECT_FONT,7,230,53,14
+    LTEXT           "样式设置",IDC_STYLE_LABEL_STYLE,205,7,110,8
+    LISTBOX         IDC_STYLE_LIST,205,20,285,183,LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+    COMBOBOX        IDC_STYLE_VALUE_COMBO,205,207,285,200,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    EDITTEXT        IDC_STYLE_VALUE_EDIT,205,207,230,14,ES_AUTOHSCROLL
+    PUSHBUTTON      "设置",IDC_SET_STYLE,440,207,50,14
+    DEFPUSHBUTTON   "中",IDOK,440,230,50,14
+END
+
+// ---- 方案选单设定（官方 IDD_SWITCHER_SETTING）----------------------------
+IDD_SWITCHER_SETTING DIALOGEX 0, 0, 316, 190
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "【小狼毫】方案选单设定"
+FONT 9, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "方案选单：",IDC_SWITCHER_LABEL_SCHEMA,7,7,57,8
+    LISTBOX         IDC_USER_DICT_LIST,7,23,150,155,LBS_SORT | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "请选择要出现在方案选单中的方案。",IDC_SWITCHER_LABEL_HOTKEY,165,23,144,30
+    DEFPUSHBUTTON   "中",IDOK,259,165,50,14
+END
+
+// ---- 用户词典管理（官方 IDD_DICT_MANAGEMENT）-----------------------------
+IDD_DICT_MANAGEMENT DIALOGEX 0, 0, 316, 185
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "【小狼毫】用户词典管理"
+FONT 9, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "用户词典列表：",IDC_DICT_LABEL_LIST,7,7,57,8
+    LISTBOX         IDC_USER_DICT_LIST,7,23,108,155,LBS_SORT | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+    LTEXT           " 当你需要将包含输入习惯的用户词典迁移到另一份配备了Rime输入法的系统,请在左列选中词典名称,“输出词典快照”,将快照文件传到另一系统上,“合入词典快照”。快照文件中的词条将合并到其所属的词典中。",IDC_DICT_HINT_SNAPSHOT,128,23,181,45
+    PUSHBUTTON      "输出词典快照",IDC_BACKUP,128,73,84,14
+    PUSHBUTTON      "合入词典快照",IDC_RESTORE,225,73,84,14
+    LTEXT           "「导出文本码表」，是为输入方案制作者设计的功能，将使用期间新造的词组以Rime词典中的码表格式导出，以便查看、编辑。「导入文本码表」可用于将其他来源的词库整理成TSV格式后导入到Rime。在Rime输入法之间转移数据，请使用词典快照。",IDC_DICT_HINT_TEXT,128,98,181,44
+    PUSHBUTTON      "导出文本码表",IDC_EXPORT,128,148,84,14
+    PUSHBUTTON      "导入文本码表",IDC_IMPORT,225,148,84,14
+END
