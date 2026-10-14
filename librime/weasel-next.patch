@@ -1,6 +1,6 @@
-warning: in the working copy of 'src/rime/dict/dict_compiler.cc', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
 diff --git a/src/rime/dict/dict_compiler.cc b/src/rime/dict/dict_compiler.cc
-index f8049b0..c603d3d 100644
+index f8049b0..97f5111 100644
 --- a/src/rime/dict/dict_compiler.cc
 +++ b/src/rime/dict/dict_compiler.cc
 @@ -51,6 +51,21 @@ static bool get_dict_files_from_settings(vector<path>* dict_files,
@@ -49,8 +49,28 @@ index f8049b0..c603d3d 100644
    if (!std::filesystem::exists(dict_file)) {
      LOG(ERROR) << "source file '" << dict_file << "' does not exist.";
      build_table_from_source = false;
+@@ -210,6 +242,19 @@ bool DictCompiler::Compile(const path& schema_file) {
+ static path relocate_target(const path& source_path,
+                             ResourceResolver* target_resolver) {
+   auto resource_id = source_path.filename().to_utf8_string();
++  // [Weasel-Next 补丁] 目标解析器的资源类型是 {"target_file", "", ""}，没有后缀，
++  // 归类规则不会命中，于是产物落到 build/ 根下。这里按方案名归位：
++  //   luna_pinyin.table.bin → <root>/luna_pinyin/luna_pinyin.table.bin
++  // 只改这一个函数，不动全局解析语义（那会把别处的路径一起改坏）。
++  const auto dot = resource_id.find('.');
++  if (dot != string::npos && dot > 0) {
++    const auto stem = resource_id.substr(0, dot);
++    const auto nested = std::filesystem::absolute(
++        target_resolver->root_path() / stem / resource_id);
++    std::error_code ec;
++    std::filesystem::create_directories(nested.parent_path(), ec);
++    return nested;
++  }
+   return target_resolver->ResolvePath(resource_id);
+ }
+ 
 diff --git a/src/rime/resource.cc b/src/rime/resource.cc
-index 09a9a5c..49c51fd 100644
+index 09a9a5c..e51a1c3 100644
 --- a/src/rime/resource.cc
 +++ b/src/rime/resource.cc
 @@ -1,4 +1,4 @@
@@ -80,7 +100,7 @@ index 09a9a5c..49c51fd 100644
 +  //（用户目录 Rime-Next、程序目录 Rime-Next 的 schema/<名字>/<方案>.schema.yaml）。
 +    const bool is_staging_root = root_path_.filename() == "build";
 +    if (boost::ends_with(sfx, ".bin")) {
-+      subdir = resource_id;                       // build/<方案>/
++      subdir = resource_id;                      // build/<方案>/
 +    } else if (boost::ends_with(sfx, ".gram")) {
 +      subdir = "model/" + resource_id;            // model/<名字>/
 +    } else if (!is_staging_root && sfx == ".yaml" &&
