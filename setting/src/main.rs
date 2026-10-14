@@ -4,6 +4,7 @@ mod backdrop;
 mod bindings;
 mod broker;
 mod colors;
+mod skins;
 mod frame;
 mod updater;
 mod wasm_modules;
@@ -222,6 +223,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .select()?;
     let window = SettingsWindow::new()?;
+    wire_skins(&window);
     // 首帧就以透明背景初始化渲染表面；apply 失败时恢复纯色。
     window.set_mica_enabled(backdrop::supported());
     colors::install(&window);
@@ -598,5 +600,80 @@ fn finish_app_edit(state: &mut State, ui: &SettingsWindow, result: Result<(), St
             }
         }
         Err(error) => ui.set_status(error.into()),
+    }
+}
+// ---------------------------------------------------------------- 皮肤页接线
+
+/// 皮肤页与数据层的接线：读官方皮肤文件、把配色喂给界面、把选择写回补丁。
+///
+/// 路径约定与 librime 一致：出厂文件在程序文件夹的 `Rime-Next\weasel.yaml`，
+/// 用户补丁在 `%APPDATA%\Rime-Next\weasel.custom.yaml`。界面只负责显示与回调。
+fn wire_skins(ui: &SettingsWindow) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let shared = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("Rime-Next")))
+        .unwrap_or_default();
+    let user = std::env::var_os("APPDATA")
+        .map(|appdata| std::path::PathBuf::from(appdata).join("Rime-Next"))
+        .unwrap_or_default();
+
+    let skins = Rc::new(RefCell::new(skins::Skins::load(&shared, &user)));
+    push_skins(ui, &skins.borrow());
+
+    // 重新读取：用户在别处改过配置时手动刷新
+    {
+        let ui_weak = ui.as_weak();
+        let skins = skins.clone();
+        ui.on_scheme_refresh(move || {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            skins.borrow_mut().reload();
+            push_skins(&ui, &skins.borrow());
+        });
+    }
+
+    // 选中一套配色：写补丁 → 重读 → 刷新界面，并把结果写进状态栏
+    {
+        let ui_weak = ui.as_weak();
+        let skins = skins.clone();
+        ui.on_scheme_picked(move |id| {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            match skins.borrow_mut().select(id.as_str()) {
+                Ok(message) => {
+                    ui.set_status(message.into());
+                }
+                Err(error) => {
+                    ui.set_status(error.into());
+                }
+            }
+            push_skins(&ui, &skins.borrow());
+        });
+    }
+}
+
+/// 把数据层的状态推给界面：行模型、当前配色、状态栏、预览颜色。
+fn push_skins(ui: &SettingsWindow, skins: &skins::Skins) {
+    use slint::{Model, VecModel};
+    use std::rc::Rc;
+
+    let rows = skins.rows();
+    // 当前配色的预览颜色取自它自己的行（找不到就退回默认色）
+    let active = skins.active_id();
+    let current = rows
+        .iter()
+        .find(|row| row.id == active.as_str())
+        .cloned();
+    ui.set_schemes(Rc::new(VecModel::from(rows)).into());
+    ui.set_active_scheme(active.as_str().into());
+    ui.set_scheme_status(skins.status().into());
+    if let Some(row) = current {
+        ui.set_scheme_preview_back(row.back_color);
+        ui.set_scheme_preview_border(row.border_color);
+        ui.set_scheme_preview_text(row.text_color);
+        ui.set_scheme_preview_hilited_back(row.hilited_back_color);
+        ui.set_scheme_preview_hilited_text(row.hilited_text_color);
+        ui.set_scheme_preview_comment(row.comment_color);
     }
 }

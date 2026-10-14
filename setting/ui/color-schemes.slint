@@ -1,0 +1,237 @@
+// 皮肤页：对应官方设置界面的「样式设置」对话框（WeaselDeployer\UIStyleSettingsDialog）。
+//
+// 官方那边的做法：左侧下拉框列出 preset_color_schemes 里每套配色的显示名，
+// 右侧是颜色键列表，底部由 GDI 自绘一行行预览。这里换成 Slint：
+//
+// * 上方一行是配色预览——直接按该方案的 back_color / border_color / text_color /
+//   hilited_candidate_back_color 画一个小号候选窗，所见即所得；
+// * 下方是可滚动列表，每行显示显示名与作者，当前生效的一套高亮，被用户改过的标一个点。
+//
+// 组件只负责显示与回调，读写配置全部由 Rust 侧（weasel_style::settings）完成，
+// 与官方"界面不参与渲染、数据层不参与显示"的分工一致。
+
+import { Button, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+/// 列表里的一行。
+export struct SchemeRow {
+    /// 配置里的 id（`preset_color_schemes/<id>`）。
+    id: string,
+    /// 显示名（官方 `name`，例如「碧水／Aqua」）。
+    name: string,
+    /// 作者（官方 `author`，可能为空）。
+    author: string,
+    /// 是否是当前生效的配色。
+    active: bool,
+    /// 用户是否改过这套配色里的颜色。
+    modified: bool,
+    /// 预览用颜色，已转成 `#rrggbb`。
+    back-color: color,
+    border-color: color,
+    text-color: color,
+    hilited-back-color: color,
+    hilited-text-color: color,
+    comment-color: color,
+}
+
+/// 一个小号候选窗预览：底色 + 边框 + 三个候选，第一个是选中态。
+component CandidatePreview inherits Rectangle {
+    in property <color> panel-back: #eceeee;
+    in property <color> panel-border: #b0b0b0;
+    in property <color> text-color: #000000;
+    in property <color> hilited-back: #fa3a0a;
+    in property <color> hilited-text: #ffffff;
+    in property <color> comment-color: #888888;
+    in property <string> scheme-name: "";
+
+    height: 96px;
+    border-radius: 6px;
+    background: panel-back;
+    border-width: 1px;
+    border-color: panel-border;
+
+    HorizontalBox {
+        padding: 10px;
+        spacing: 6px;
+        alignment: start;
+
+        // 第一个候选：选中态
+        Rectangle {
+            width: 78px;
+            height: 34px;
+            border-radius: 4px;
+            background: root.hilited-back;
+            Text {
+                text: "1. 候选";
+                color: root.hilited-text;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        // 第二、三个候选：普通态
+        Rectangle {
+            width: 70px;
+            height: 34px;
+            background: transparent;
+            Text {
+                text: "2. 候选";
+                color: root.text-color;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            width: 70px;
+            height: 34px;
+            background: transparent;
+            Text {
+                text: "3. 候选";
+                color: root.text-color;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        // 注释文字（官方的 comment_text_color）
+        Rectangle {
+            width: 54px;
+            height: 34px;
+            background: transparent;
+            Text {
+                text: "备注";
+                color: root.comment-color;
+                font-size: 12px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // 右下角标出当前配色名
+    Text {
+        x: parent.width - self.width - 10px;
+        y: parent.height - self.height - 6px;
+        text: root.scheme-name;
+        color: root.comment-color;
+        font-size: 11px;
+    }
+}
+
+/// 列表里的一行。
+component SchemeItem inherits Rectangle {
+    in property <SchemeRow> entry;
+    in property <bool> is-active: false;
+    callback picked(string);
+
+    height: 46px;
+    background: touch.has-hover || is-active ? #e8f0fe : transparent;
+    border-radius: 4px;
+
+    HorizontalBox {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+
+        // 当前生效的标记
+        Rectangle {
+            width: 3px;
+            background: is-active ? #1a73e8 : transparent;
+            border-radius: 2px;
+        }
+        VerticalBox {
+            alignment: center;
+            Text {
+                text: entry.name;
+                font-size: 13px;
+                color: #202124;
+                vertical-alignment: center;
+            }
+            Text {
+                text: entry.author;
+                font-size: 11px;
+                color: #5f6368;
+                vertical-alignment: center;
+            }
+        }
+        // 改过的标一个点
+        Rectangle {
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+            background: entry.modified ? #1a73e8 : transparent;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.picked(root.entry.id); }
+    }
+}
+
+/// 皮肤页本体。
+export component ColorSchemesPage inherits VerticalBox {
+    in property <[SchemeRow]> schemes;
+    // 预览颜色由 Rust 侧按当前生效配色算好传进来（Slint 表达式不支持查找式循环 ✓）
+    in property <color> preview-back: #eceeee;
+    in property <color> preview-border: #b0b0b0;
+    in property <color> preview-text: #000000;
+    in property <color> preview-hilited-back: #fa3a0a;
+    in property <color> preview-hilited-text: #ffffff;
+    in property <color> preview-comment: #888888;
+    in property <string> active-id;
+    in property <string> status;
+    in property <bool> editable: true;
+    callback picked(string);
+    callback refresh();
+
+    padding: 12px;
+    spacing: 10px;
+
+    // 顶部：预览 + 说明
+    VerticalBox {
+        spacing: 6px;
+        CandidatePreview {
+            scheme-name: root.active-id;
+            panel-back: root.preview-back;
+            panel-border: root.preview-border;
+            text-color: root.preview-text;
+            hilited-back: root.preview-hilited-back;
+            hilited-text: root.preview-hilited-text;
+            comment-color: root.preview-comment;
+        }
+        HorizontalBox {
+            spacing: 8px;
+            Text {
+                text: root.status;
+                font-size: 12px;
+                color: #5f6368;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Button {
+                text: "重新读取";
+                enabled: root.editable;
+                clicked => { root.refresh(); }
+            }
+        }
+    }
+
+    // 配色列表
+    Rectangle {
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: #dadce0;
+        background: #ffffff;
+        vertical-stretch: 1;
+        ScrollView {
+            VerticalBox {
+                for item in root.schemes: SchemeItem {
+                    entry: item;
+                    is-active: item.id == root.active-id;
+                    picked(id) => { root.picked(id); }
+                }
+            }
+        }
+    }
+
+}

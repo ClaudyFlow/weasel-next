@@ -2,6 +2,7 @@ import { Button, VerticalBox, HorizontalBox, ComboBox, ScrollView, LineEdit, Tex
 import { AppOptions, AppEntry, IconAction } from "app-options.slint";
 import { ColorEditor } from "color-editor.slint";
 import { WasmModules, WasmEntry } from "wasm-modules.slint";
+import { ColorSchemesPage, SchemeRow } from "color-schemes.slint";
 export { ColorCodec } from "color-editor.slint";
 export struct SettingField { source-index: int, section: string, shown: bool, title: string, key: string, description: string, choices: [string], selected: int, checked: bool, text: string, text-input: bool, boolean: bool, overridden: bool, enum-number: bool, color-input: bool, allow-system-color: bool, adaptive-color: bool, multiline: bool }
 export component SettingsWindow inherits Window {
@@ -28,6 +29,17 @@ export component SettingsWindow inherits Window {
     in-out property <string> app-add-error;
     in property <[AppEntry]> apps;
     in property <[WasmEntry]> wasm-modules;
+    in property <[SchemeRow]> schemes;
+    in property <string> active-scheme;
+    in property <string> scheme-status;
+    in property <color> scheme-preview-back: #eceeee;
+    in property <color> scheme-preview-border: #b0b0b0;
+    in property <color> scheme-preview-text: #000000;
+    in property <color> scheme-preview-hilited-back: #fa3a0a;
+    in property <color> scheme-preview-hilited-text: #ffffff;
+    in property <color> scheme-preview-comment: #888888;
+    callback scheme-picked(string);
+    callback scheme-refresh();
     callback module-action(string, string, string, string) -> string;
     callback app-add(string) -> bool;
     callback app-remove(string);
@@ -76,7 +88,25 @@ export component SettingsWindow inherits Window {
                         entries: root.wasm-modules;
                         action(kind, id, key, value) => { return root.module-action(kind, id, key, value); }
                     }
-                    if field.multiline && field.key != "app_options" && field.key != "modules": Rectangle {
+                    if root.schemes.length > 0: VerticalBox {
+                        padding: 0px;
+                        spacing: 8px;
+                        ColorSchemesPage {
+                            schemes: root.schemes;
+                            active-id: root.active-scheme;
+                            status: root.scheme-status;
+                            editable: root.editable;
+                            preview-back: root.scheme-preview-back;
+                            preview-border: root.scheme-preview-border;
+                            preview-text: root.scheme-preview-text;
+                            preview-hilited-back: root.scheme-preview-hilited-back;
+                            preview-hilited-text: root.scheme-preview-hilited-text;
+                            preview-comment: root.scheme-preview-comment;
+                            picked(id) => { root.scheme-picked(id); }
+                            refresh() => { root.scheme-refresh(); }
+                        }
+                    }
+                    if field.multiline && field.key != "app_options" && field.key != "modules" && field.key != "color_schemes": Rectangle {
                         background: Palette.control-background;
                         border-radius: 6px;
                         vertical-stretch: 0;
