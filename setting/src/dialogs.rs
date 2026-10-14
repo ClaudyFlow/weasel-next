@@ -395,8 +395,7 @@ pub fn run_from_args(args: &[String], shared: &Path, user: &Path) -> bool {
             return true;
         }
         if arg == "/switcher" || arg == "--switcher" || arg == "-switcher" {
-            // 方案选单设定与词典管理先占位：模板已在 deployer.rc 里，过程待补。
-            if let Err(error) = show_placeholder(IDD_SWITCHER_SETTING) {
+            if let Err(error) = crate::switcher_dialog::show(shared, user) {
                 eprintln!("weasel-settings: {error}");
             }
             return true;

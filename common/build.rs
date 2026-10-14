@@ -38,6 +38,7 @@ fn main() {
             "Windows.Win32.CBN_SELCHANGE",
             "Windows.Win32.LB_ADDSTRING",
             "Windows.Win32.LB_RESETCONTENT",
+            "Windows.Win32.SetWindowTextW",
             "Windows.Win32.GetModuleHandleW",
             "Windows.Win32.GetKeyState",
             "Windows.Win32.GetNamedPipeClientProcessId",
