@@ -403,7 +403,10 @@ pub fn run_from_args(args: &[String], shared: &Path, user: &Path) -> bool {
             return true;
         }
         if arg == "/switcher" || arg == "--switcher" || arg == "-switcher" {
-            if let Err(error) = crate::switcher_dialog::show(shared, user) {
+            // 模板已验证可用（标题「【小狼毫】方案选单设定」、可见、含 SysListView32）；
+            // 但往里插行的调用还没生效（跨进程查 LVM_GETITEMCOUNT 得 0），
+            // 先用模板版保证入口正常，数据填充在 switcher_dialog.rs 里继续查。
+            if let Err(error) = show_placeholder(IDD_SWITCHER_SETTING) {
                 eprintln!("weasel-settings: {error}");
             }
             return true;
