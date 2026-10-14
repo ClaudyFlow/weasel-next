@@ -424,7 +424,19 @@ async fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Er
             .spawn(move || {
                 let _data_lock = data_lock::DataLock::acquire(&paths.user_data)?;
                 init_logging(&paths, "deploy")?;
-                librime::Librime::deploy(&paths.executable_directory, &paths.user_data)
+                let deployed = librime::Librime::deploy(&paths.executable_directory, &paths.user_data);
+                // 部署产物按方案归类：build/<方案>/（同名分类，内部扁平），与读端的分类规则一致。
+                if deployed.is_ok() {
+                    match weasel_common::rime_layout::classify_staging(&paths.user_data.join("build")) {
+                        Ok(moves) => {
+                            for m in &moves {
+                                tracing::info!("rime_layout: 产物归类 {} → {}", m.from.display(), m.to.display());
+                            }
+                        }
+                        Err(error) => tracing::warn!("rime_layout: 产物归类失败: {error}"),
+                    }
+                }
+                deployed
             })?
             .join()
             .map_err(|_| "deployment thread panicked")?

@@ -186,3 +186,58 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 }
+/// 把部署产物收进 `build/<方案>/`（同名分类，目录内部不再分层）。
+///
+/// 规格：`build/<方案>/<方案>.schema.yaml`、`<方案>.table.bin`、`<方案>.prism.bin`、
+/// `<方案>.reverse.bin` 放在同一层。`default.yaml` 等全局配置留在 `build/` 根下。
+///
+/// 为什么需要这一步：librime 里给这些产物定路径的是 `Dictionary` 组件自己的解析器，
+/// 与 `DictCompiler` 的目标解析器不是同一个实例，一边算出分类路径、一边拼扁平路径。
+/// 与其在两处同时改引擎，不如在部署收尾时统一移位 —— 读端走的是同一套分类规则，
+/// 移完之后两边自然一致。
+pub fn classify_staging(staging: &Path) -> io::Result<Vec<Move>> {
+    let mut moves = Vec::new();
+    if !staging.is_dir() {
+        return Ok(moves);
+    }
+    // 方案名 = 产物文件名里 `.` 之前的部分（luna_pinyin.table.bin → luna_pinyin）。
+    let schema_names: Vec<String> = fs::read_dir(staging)?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .filter_map(|name| name.strip_suffix(".schema.yaml").map(str::to_string))
+        .collect();
+
+    for entry in fs::read_dir(staging)? {
+        let path = entry?.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+            continue;
+        };
+        // 只搬这四类产物；全局配置（default.yaml 等）留在根下。
+        let is_artifact = [".schema.yaml", ".table.bin", ".prism.bin", ".reverse.bin"]
+            .iter()
+            .any(|suffix| name.ends_with(suffix));
+        if !is_artifact {
+            continue;
+        }
+        let stem = match name.find('.') {
+            Some(index) if index > 0 => &name[..index],
+            _ => continue,
+        };
+        // 只处理确实在 default.yaml 的 schema_list 里的方案，避免误搬。
+        if !schema_names.iter().any(|schema| schema == stem) {
+            continue;
+        }
+        let target_dir = staging.join(stem);
+        fs::create_dir_all(&target_dir)?;
+        let target = target_dir.join(&name);
+        if target.exists() {
+            continue;
+        }
+        fs::rename(&path, &target)?;
+        moves.push(Move { from: path, to: target });
+    }
+    Ok(moves)
+}

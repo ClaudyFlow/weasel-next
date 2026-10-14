@@ -1,4 +1,3 @@
-warning: in the working copy of 'src/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'src/rime/dict/dict_compiler.cc', LF will be replaced by CRLF the next time Git touches it
 diff --git a/src/rime/dict/dict_compiler.cc b/src/rime/dict/dict_compiler.cc
 index f8049b0..c603d3d 100644
