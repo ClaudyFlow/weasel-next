@@ -1,9 +1,10 @@
 warning: in the working copy of 'src/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/rime/dict/dict_compiler.cc', LF will be replaced by CRLF the next time Git touches it
 diff --git a/src/rime/dict/dict_compiler.cc b/src/rime/dict/dict_compiler.cc
-index f8049b0..97f5111 100644
+index f8049b0..263f1e4 100644
 --- a/src/rime/dict/dict_compiler.cc
 +++ b/src/rime/dict/dict_compiler.cc
-@@ -51,6 +51,21 @@ static bool get_dict_files_from_settings(vector<path>* dict_files,
+@@ -51,6 +51,26 @@ static bool get_dict_files_from_settings(vector<path>* dict_files,
      for (auto it = tables->begin(); it != tables->end(); ++it) {
        string dict_name = As<ConfigValue>(*it)->str();
        auto dict_file = source_resolver->ResolvePath(dict_name + ".dict.yaml");
@@ -11,7 +12,12 @@ index f8049b0..97f5111 100644
 +  if (!std::filesystem::exists(dict_file)) {
 +    const auto& shared = Service::instance().deployer().shared_data_dir;
 +    if (!shared.empty()) {
-+      const auto nested = shared / "schema" / dict_name / (dict_name + ".dict.yaml");
++      auto folder = dict_name;
++      const auto dot = folder.find_last_of('.');
++      if (dot != string::npos && dot > 0) {
++        folder = folder.substr(0, dot);   // cangjie5.base → cangjie5（与解析器的归类规则一致）
++      }
++      const auto nested = shared / "schema" / folder / (dict_name + ".dict.yaml");
 +      if (std::filesystem::exists(nested)) {
 +        dict_file = nested;
 +      } else {
@@ -25,7 +31,7 @@ index f8049b0..97f5111 100644
        if (!std::filesystem::exists(dict_file)) {
          LOG(ERROR) << "source file '" << dict_file << "' does not exist.";
          return false;
-@@ -82,6 +97,23 @@ bool DictCompiler::Compile(const path& schema_file) {
+@@ -82,6 +102,28 @@ bool DictCompiler::Compile(const path& schema_file) {
    bool build_table_from_source = true;
    DictSettings settings;
    auto dict_file = source_resolver_->ResolvePath(dict_name_ + ".dict.yaml");
@@ -35,7 +41,12 @@ index f8049b0..97f5111 100644
 +  if (!std::filesystem::exists(dict_file)) {
 +    const auto& shared = Service::instance().deployer().shared_data_dir;
 +    if (!shared.empty()) {
-+      const auto nested = shared / "schema" / dict_name_ / (dict_name_ + ".dict.yaml");
++      auto folder = dict_name_;
++      const auto dot = folder.find_last_of('.');
++      if (dot != string::npos && dot > 0) {
++        folder = folder.substr(0, dot);   // cangjie5.base → cangjie5（与解析器的归类规则一致）
++      }
++      const auto nested = shared / "schema" / folder / (dict_name_ + ".dict.yaml");
 +      if (std::filesystem::exists(nested)) {
 +        dict_file = nested;
 +      } else {
@@ -49,7 +60,7 @@ index f8049b0..97f5111 100644
    if (!std::filesystem::exists(dict_file)) {
      LOG(ERROR) << "source file '" << dict_file << "' does not exist.";
      build_table_from_source = false;
-@@ -210,6 +242,19 @@ bool DictCompiler::Compile(const path& schema_file) {
+@@ -210,6 +252,19 @@ bool DictCompiler::Compile(const path& schema_file) {
  static path relocate_target(const path& source_path,
                              ResourceResolver* target_resolver) {
    auto resource_id = source_path.filename().to_utf8_string();
