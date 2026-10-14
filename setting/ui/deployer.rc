@@ -37,7 +37,11 @@
 #define IDC_EXPORT                      1104
 #define IDC_IMPORT                      1105
 
-// 官方复用的 IDC_STATIC1，这里拆成独立编号
+#define IDC_SCHEMA_LIST                 1208
+#define IDC_SCHEMA_DESCRIPTION          1209
+#define IDC_HOTKEYS                     1210
+#define IDC_GET_SCHEMATA                1211
+
 #define IDC_STYLE_LABEL_SCHEME          1201
 #define IDC_STYLE_LABEL_STYLE           1202
 #define IDC_DICT_LABEL_LIST             1203
@@ -45,6 +49,7 @@
 #define IDC_DICT_HINT_TEXT              1205
 #define IDC_SWITCHER_LABEL_SCHEMA       1206
 #define IDC_SWITCHER_LABEL_HOTKEY       1207
+
 
 // ---- 界面风格设定（官方 IDD_STYLE_SETTING）-------------------------------
 IDD_STYLE_SETTING DIALOGEX 0, 0, 500, 250
