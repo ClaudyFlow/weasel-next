@@ -2,7 +2,7 @@
 
 pub mod about;
 #[cfg(windows)]
-mod bindings;
+pub mod bindings;
 pub mod command_menu;
 #[cfg(windows)]
 pub mod comrt;

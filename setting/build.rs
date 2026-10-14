@@ -87,4 +87,8 @@ fn main() {
             println!("cargo:rustc-link-arg-bin=weasel-settings=-Wl,--stack,8000000");
         }
     }
-}
+
+    // 官方设置界面的对话框模板（照搬 WeaselDeployer.rc 的三个 DIALOGEX）。
+    // 用资源编译进 exe，运行时由 DialogBoxParam 弹出，界面与官方同一套控件与布局。
+    println!("cargo:rerun-if-changed=ui/deployer.rc");
+    let _ = embed_resource::compile("ui/deployer.rc", embed_resource::NONE);

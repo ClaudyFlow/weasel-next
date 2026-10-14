@@ -19,9 +19,40 @@ use std::rc::Rc;
 
 use weasel_style::settings as style_settings;
 
-use crate::bindings::*;
+use weasel_common::bindings::*;
+use windows_core::PCWSTR;
 
 /// 对话框 ID，与 `ui/deployer.rc` 一致。
+// Win32 宏常量：这些不是 API 也不是元数据里的项（都是 #define），
+// 值在 Windows 头文件里固定不变，这里直接定义，省去向绑定生成器要它们。
+//
+// 数值来源：winuser.h / winnt.h / wingdi.h
+const DWLP_USER: i32 = 16;
+const IDOK: i32 = 1;
+const IDCANCEL: i32 = 2;                 // DWLP_MSGRESULT(8) + sizeof(LRESULT)(8)
+const WM_INITDIALOG_: u32 = 0x0110;
+const WM_COMMAND_: u32 = 0x0111;
+const WM_CLOSE_: u32 = 0x0010;
+const WM_MEASUREITEM_: u32 = 0x002C;
+const WM_DRAWITEM_: u32 = 0x002B;
+const CB_ADDSTRING: u32 = 0x0143;
+const CB_SETCURSEL: u32 = 0x014E;
+const CB_GETCURSEL: u32 = 0x0147;
+const CBN_SELCHANGE: u32 = 1;
+const LB_ADDSTRING: u32 = 0x0180;
+const LB_RESETCONTENT: u32 = 0x0184;
+const ODS_SELECTED: u32 = 0x0001;
+const SW_HIDE: i32 = 0;
+const COLOR_WINDOW: i32 = 5;
+const COLOR_WINDOWTEXT: i32 = 8;
+const COLOR_HIGHLIGHT: i32 = 13;
+const COLOR_HIGHLIGHTTEXT: i32 = 14;
+const TRANSPARENT_: i32 = 1;
+const DT_LEFT: u32 = 0x0000;
+const DT_VCENTER: u32 = 0x0004;
+const DT_SINGLELINE: u32 = 0x0020;
+const MB_OK: u32 = 0x0000;
+const MB_ICONWARNING: u32 = 0x0030;
 const IDD_STYLE_SETTING: u16 = 102;
 const IDD_SWITCHER_SETTING: u16 = 101;
 const IDD_DICT_MANAGEMENT: u16 = 103;
@@ -164,11 +195,11 @@ pub fn show_style(shared: &Path, user: &Path) -> Result<(), String> {
     let instance = unsafe { GetModuleHandleW(None) };
     let result = unsafe {
         DialogBoxParamW(
-            instance,
-            MAKEINTRESOURCEW(IDD_STYLE_SETTING),
+            Some(HINSTANCE(instance.0)),
+            PCWSTR(IDD_STYLE_SETTING as usize as *const u16),
             None,
             Some(style_proc),
-            pointer as isize,
+            LPARAM(pointer as isize),
         )
     };
     // 无论正常关闭还是出错，都要把引用计数还回去。
@@ -182,7 +213,7 @@ pub fn show_style(shared: &Path, user: &Path) -> Result<(), String> {
 
 /// 取回对话框状态（`DWLP_USER` 里存的是 `Rc<RefCell<StyleDialog>>` 的裸指针）。
 unsafe fn state_of(hwnd: HWND) -> Option<Rc<RefCell<StyleDialog>>> {
-    let raw = unsafe { GetWindowLongPtrW(hwnd, DWLP_USER) } as *const RefCell<StyleDialog>;
+    let raw = unsafe { GetWindowLongPtrW(hwnd, DWLP_USER as i32) } as *const RefCell<StyleDialog>;
     if raw.is_null() {
         return None;
     }
@@ -205,8 +236,8 @@ unsafe extern "system" fn style_proc(
     lparam: LPARAM,
 ) -> isize {
     match message {
-        WM_INITDIALOG => {
-            unsafe { SetWindowLongPtrW(hwnd, DWLP_USER, lparam) };
+        WM_INITDIALOG_ => {
+            unsafe { SetWindowLongPtrW(hwnd, DWLP_USER, lparam.0) };
             let Some(state) = (unsafe { state_of(hwnd) }) else {
                 return 0;
             };
@@ -214,33 +245,34 @@ unsafe extern "system" fn style_proc(
             // 下拉框：配色显示名
             for (_, name) in &state.schemes {
                 let text = wide(name);
-                unsafe { SendDlgItemMessageW(hwnd, IDC_COLOR_SCHEME, CB_ADDSTRING, 0, text.as_ptr() as LPARAM) };
+                unsafe { SendDlgItemMessageW(hwnd, IDC_COLOR_SCHEME, CB_ADDSTRING, WPARAM(0), LPARAM(text.as_ptr() as isize)) };
             }
             unsafe {
-                SendDlgItemMessageW(hwnd, IDC_COLOR_SCHEME, CB_SETCURSEL, state.selected, 0);
+                SendDlgItemMessageW(hwnd, IDC_COLOR_SCHEME, CB_SETCURSEL, WPARAM(state.selected), LPARAM(0));
                 // 左侧颜色列表：先清空再逐条加入（自绘，文字内容仅用于行数）
-                SendDlgItemMessageW(hwnd, IDC_COLOR_LIST, LB_RESETCONTENT, 0, 0);
+                SendDlgItemMessageW(hwnd, IDC_COLOR_LIST, LB_RESETCONTENT, WPARAM(0), LPARAM(0));
             }
             for (key, value) in &state.colors {
                 let text = wide(&format!("{key}   0x{value:08x}"));
-                unsafe { SendDlgItemMessageW(hwnd, IDC_COLOR_LIST, LB_ADDSTRING, 0, text.as_ptr() as LPARAM) };
+                unsafe { SendDlgItemMessageW(hwnd, IDC_COLOR_LIST, LB_ADDSTRING, WPARAM(0), LPARAM(text.as_ptr() as isize)) };
             }
             // 按官方做法：样式值的下拉框与编辑框二选一显示（这里默认显示下拉框）
             unsafe {
-                ShowWindow(GetDlgItem(hwnd, IDC_STYLE_VALUE_EDIT), SW_HIDE);
+                ShowWindow(GetDlgItem(Some(hwnd), IDC_STYLE_VALUE_EDIT), SW_HIDE);
             }
             1
         }
-        WM_COMMAND => {
-            let id = (wparam & 0xffff) as i32;
-            let notification = ((wparam >> 16) & 0xffff) as u32;
+        WM_COMMAND_ => {
+            let id = (wparam.0 & 0xffff) as i32;
+            let notification = ((wparam.0 >> 16) & 0xffff) as u32;
             if id == IDC_COLOR_SCHEME && notification == CBN_SELCHANGE {
                 let Some(state) = (unsafe { state_of(hwnd) }) else {
                     return 0;
                 };
                 let index = unsafe {
-                    SendDlgItemMessageW(hwnd, IDC_COLOR_SCHEME, CB_GETCURSEL, 0, 0)
-                } as usize;
+                    SendDlgItemMessageW(hwnd, IDC_COLOR_SCHEME, CB_GETCURSEL, WPARAM(0), LPARAM(0))
+                }
+                .0 as usize;
                 let mut state = state.borrow_mut();
                 if index < state.schemes.len() && index != state.selected {
                     state.selected = index;
@@ -252,18 +284,18 @@ unsafe extern "system" fn style_proc(
                             state.reload();
                             // 列表内容随配色变化，重建一遍
                             unsafe {
-                                SendDlgItemMessageW(hwnd, IDC_COLOR_LIST, LB_RESETCONTENT, 0, 0);
+                                SendDlgItemMessageW(hwnd, IDC_COLOR_LIST, LB_RESETCONTENT, WPARAM(0), LPARAM(0));
                             }
                             for (key, value) in &state.colors {
                                 let text = wide(&format!("{key}   0x{value:08x}"));
-                                unsafe { SendDlgItemMessageW(hwnd, IDC_COLOR_LIST, LB_ADDSTRING, 0, text.as_ptr() as LPARAM) };
+                                unsafe { SendDlgItemMessageW(hwnd, IDC_COLOR_LIST, LB_ADDSTRING, WPARAM(0), LPARAM(text.as_ptr() as isize)) };
                             }
-                            unsafe { InvalidateRect(hwnd, None, 1) };
+                            unsafe { InvalidateRect(Some(hwnd), None, true) };
                         }
                         Err(error) => {
                             let text = wide(&format!("写入补丁失败：{error}"));
                             unsafe {
-                                MessageBoxW(hwnd, PCWSTR(text.as_ptr()), PCWSTR(wide("提示").as_ptr()), MB_OK | MB_ICONWARNING);
+                                MessageBoxW(Some(hwnd), PCWSTR(text.as_ptr()), PCWSTR(wide("提示").as_ptr()), MB_OK | MB_ICONWARNING);
                             }
                         }
                     }
@@ -276,16 +308,16 @@ unsafe extern "system" fn style_proc(
             }
             0
         }
-        WM_MEASUREITEM => {
-            let item = lparam as *mut MEASUREITEMSTRUCT;
+        WM_MEASUREITEM_ => {
+            let item = lparam.0 as *mut MEASUREITEMSTRUCT;
             if !item.is_null() && unsafe { (*item).CtlID } == IDC_COLOR_LIST as u32 {
                 unsafe { (*item).itemHeight = 18 };
                 return 1;
             }
             0
         }
-        WM_DRAWITEM => {
-            let item = lparam as *mut DRAWITEMSTRUCT;
+        WM_DRAWITEM_ => {
+            let item = lparam.0 as *mut DRAWITEMSTRUCT;
             if item.is_null() || unsafe { (*item).CtlID } != IDC_COLOR_LIST as u32 {
                 return 0;
             }
@@ -311,9 +343,9 @@ unsafe extern "system" fn style_proc(
                 } else {
                     GetSysColor(COLOR_WINDOWTEXT)
                 };
-                let mut brush = CreateSolidBrush(background);
+                let mut brush = CreateSolidBrush(COLORREF(background));
                 FillRect(item.hDC, &item.rcItem, brush);
-                DeleteObject(brush);
+                DeleteObject(HGDIOBJ(brush.0));
 
                 // 色块：按颜色键的取值画一个小方块（圆整到 RGB）
                 let r = ((value >> 16) & 0xff) as u8;
@@ -324,25 +356,25 @@ unsafe extern "system" fn style_proc(
                 swatch.right = swatch.left + 24;
                 swatch.top += 2;
                 swatch.bottom -= 2;
-                let color = RGB(r, g, b);
+                let color = COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16));
                 brush = CreateSolidBrush(color);
                 FillRect(item.hDC, &swatch, brush);
-                DeleteObject(brush);
+                DeleteObject(HGDIOBJ(brush.0));
                 // 色块描边，浅色配色也能看清边界
                 let mut frame = swatch;
                 FrameRect(item.hDC, &frame, GetSysColorBrush(COLOR_WINDOWTEXT));
 
                 // 文字：颜色键名 + 取值
-                let mut text = wide(&format!("{key}   0x{value:08x}"));
+                let text = wide(&format!("{key}   0x{value:08x}"));
                 let mut text_area = item.rcItem;
                 text_area.left = swatch.right + 6;
-                SetBkMode(item.hDC, TRANSPARENT as i32);
-                SetTextColor(item.hDC, foreground);
-                DrawTextW(item.hDC, &mut text, -1, &mut text_area, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                SetBkMode(item.hDC, TRANSPARENT_);
+                SetTextColor(item.hDC, COLORREF(foreground));
+                DrawTextW(item.hDC, PCWSTR(text.as_ptr()), -1, &mut text_area, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             }
             1
         }
-        WM_CLOSE => {
+        WM_CLOSE_ => {
             unsafe { EndDialog(hwnd, IDCANCEL as isize) };
             1
         }
@@ -384,15 +416,15 @@ pub fn run_from_args(args: &[String], shared: &Path, user: &Path) -> bool {
 fn show_placeholder(dialog: u16) -> Result<(), String> {
     unsafe extern "system" fn proc(hwnd: HWND, message: u32, wparam: WPARAM, _: LPARAM) -> isize {
         match message {
-            WM_COMMAND => {
-                let id = (wparam & 0xffff) as i32;
+            WM_COMMAND_ => {
+                let id = (wparam.0 & 0xffff) as i32;
                 if id == IDOK || id == IDCANCEL {
                     unsafe { EndDialog(hwnd, id as isize) };
                     return 1;
                 }
                 0
             }
-            WM_CLOSE => {
+            WM_CLOSE_ => {
                 unsafe { EndDialog(hwnd, IDCANCEL as isize) };
                 1
             }
@@ -401,7 +433,13 @@ fn show_placeholder(dialog: u16) -> Result<(), String> {
     }
     let instance = unsafe { GetModuleHandleW(None) };
     let result = unsafe {
-        DialogBoxParamW(instance, MAKEINTRESOURCEW(dialog), None, Some(proc), 0)
+        DialogBoxParamW(
+            Some(HINSTANCE(instance.0)),
+            PCWSTR(dialog as usize as *const u16),
+            None,
+            Some(proc),
+            LPARAM(0),
+        )
     };
     if result == -1 {
         Err(format!("对话框 {dialog} 创建失败"))

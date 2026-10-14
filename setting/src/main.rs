@@ -4,6 +4,7 @@ mod backdrop;
 mod bindings;
 mod broker;
 mod colors;
+mod dialogs;
 mod skins;
 mod frame;
 mod updater;
@@ -201,7 +202,21 @@ impl State {
 /// 所有 UI 状态和回调均留在事件循环线程，后台任务通过容量为 1 的通道回传结果。
 /// 返回窗口初始化、线程创建或事件循环产生的错误。
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    slint::BackendSelector::new()
+    // 官方习惯：命令行参数选择要打开的对话框（/style、/switcher、/dict）。
+    // 命中时只弹对话框，不启动 Slint 主界面。
+    {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let shared = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join("Rime-Next")))
+            .unwrap_or_default();
+        let user = std::env::var_os("APPDATA")
+            .map(|appdata| std::path::PathBuf::from(appdata).join("Rime-Next"))
+            .unwrap_or_default();
+        if dialogs::run_from_args(&args, &shared, &user) {
+            return Ok(());
+        }
+    }    slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name("skia".into())
         .with_winit_window_attributes_hook(|attributes| {
