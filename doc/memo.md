@@ -75,7 +75,7 @@ asset\                     仓库里（出厂默认与程序资源）
       …（schema / dict / theme / model 的默认内容）
   icon\                    ← 程序图标（11 个 .ico，各组件共用 weasel.ico）
   sound\                   ← 键声/上屏声（typewriter-key.wav / typewriter-bell.wav）
-  rime-data\               ← 官方 Rime 数据（方案/词典/opencc，供部署时同步）
+  （历史设计，已废弃：共享数据现在是 Rime-Next\ 本身，按分类树组织）
 ```
 
 编译/安装：
@@ -95,7 +95,7 @@ asset\                         仓库里（出厂默认 + 程序资源）
       sound\                   ← 键声 / 上屏声（typewriter-key.wav / typewriter-bell.wav）
       model\                   ← 语言模型（*.gram，如 zh-hans-t-essay-bgw.gram）
       default.eassy.toml       ← 原 essay.txt（细胞词库词表，TOML 格式）
-      rime-data\               ← 官方 Rime 数据（方案 / 词典 / opencc）
+      （历史设计，已废弃：见上）
       …（schema / dict / theme 的默认内容，均为 TOML）
   icon\                        ← 程序图标（11 个 .ico，各组件共用 weasel.ico；构建脚本要用，留在 asset 根）
 ```

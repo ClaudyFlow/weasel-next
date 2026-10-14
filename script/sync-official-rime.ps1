@@ -5,8 +5,8 @@
 .DESCRIPTION
     做两件事，都只"补齐/覆盖"，**从不删除**任何文件：
 
-    A) 共享数据：<官方安装目录>\data  →  <weasel-next 程序目录>\Rime-Next\rime-data
-       weasel-next 的 librime 把共享数据目录设为 <程序目录>\Rime-Next\rime-data（见
+    A) 共享数据：<官方安装目录>\data  →  <weasel-next 程序目录>\Rime-Next
+       weasel-next 的 librime 把共享数据目录设为 <程序目录>\Rime-Next（见
        server/src/rime/mod.rs），官方那 96 个文件（方案、词典、opencc、preview）里的
        缺失项就在这里补上——例如 sancang/cangjie5 需要的 cangjie5.*.dict.yaml。
 
@@ -110,9 +110,9 @@ Write-Host "weasel-next 程序目录 : $TargetExeDir"
 Write-Host "weasel-next 用户目录 : $TargetUserData"
 Write-Host ""
 
-# A) 共享数据 -> <程序目录>\Rime-Next\rime-data
+# A) 共享数据 -> <程序目录>\Rime-Next
 Copy-Tree -Source (Join-Path $OfficialInstall 'data') `
-          -Destination (Join-Path (Join-Path $TargetExeDir 'Rime-Next') 'rime-data') `
+          -Destination (Join-Path $TargetExeDir 'Rime-Next') `
           -Label 'A) 共享数据（方案 / 词典 / opencc / preview）'
 
 # B) 用户数据 -> %APPDATA%\Weasel-Next\Rime
