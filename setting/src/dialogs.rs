@@ -403,9 +403,9 @@ pub fn run_from_args(args: &[String], shared: &Path, user: &Path) -> bool {
             return true;
         }
         if arg == "/switcher" || arg == "--switcher" || arg == "-switcher" {
-            // 模板已验证可用（标题「【小狼毫】方案选单设定」、可见、含 SysListView32）；
-            // 但往里插行的调用还没生效（跨进程查 LVM_GETITEMCOUNT 得 0），
-            // 先用模板版保证入口正常，数据填充在 switcher_dialog.rs 里继续查。
+            // 数据填充尚未成功：列能建（返回 0），但 LVM_INSERTITEMW 插不进行
+            // （LVM_GETITEMCOUNT 恒为 0）。先显示官方模板，保证入口可用；
+            // 排查线索与诊断日志都留在 switcher_dialog.rs 里。
             if let Err(error) = show_placeholder(IDD_SWITCHER_SETTING) {
                 eprintln!("weasel-settings: {error}");
             }

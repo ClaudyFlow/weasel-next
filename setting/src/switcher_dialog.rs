@@ -34,6 +34,12 @@ const LVM_SETITEMTEXTW: u32 = LVM_FIRST + 116; // 0x1074
 const LVM_GETITEMSTATE: u32 = LVM_FIRST + 44; // 0x102C
 const LVM_SETITEMSTATE: u32 = LVM_FIRST + 43; // 0x102B
 const LVM_SETEXTENDEDLISTVIEWSTYLE: u32 = LVM_FIRST + 54; // 0x1036
+/// 报表视图**必须先有列**才能插入行，否则 LVM_INSERTITEM 会失败（行数一直是 0）。
+const LVM_INSERTCOLUMNW: u32 = LVM_FIRST + 97; // 0x1061
+const LVCF_FMT: u32 = 0x0001;
+const LVCF_WIDTH: u32 = 0x0002;
+const LVCF_TEXT: u32 = 0x0004;
+const LVCFMT_LEFT: i32 = 0x0000;
 const LVS_EX_CHECKBOXES: u32 = 0x0000_0004;
 const LVIF_TEXT: u32 = 0x0001;
 const LVIF_STATE: u32 = 0x0008;
@@ -67,6 +73,19 @@ struct LvItemW {
     i_group: i32,
 }
 
+/// `LVCOLUMNW`：报表视图的列定义（布局同 Win32）。
+#[repr(C)]
+struct LvColumnW {
+    mask: u32,
+    fmt: i32,
+    cx: i32,
+    text: *mut u16,
+    text_max: i32,
+    i_sub_item: i32,
+    i_image: i32,
+    i_order: i32,
+}
+
 /// `NMLISTVIEW`：`WM_NOTIFY` 里 `LVN_ITEMCHANGED` 的载荷（`NMHDR` 之后的前几个字段）。
 #[repr(C)]
 struct NmListView {
@@ -86,6 +105,8 @@ struct SwitcherDialog {
     shared: PathBuf,
     user: PathBuf,
     rows: Vec<SchemaInfo>,
+    /// 列表是否已填充（幂等标志，见 WM_INITDIALOG 处的说明）。
+    initialized: bool,
 }
 
 thread_local! {
@@ -121,6 +142,7 @@ pub fn show(shared: &Path, user: &Path) -> Result<(), String> {
             shared: shared.to_path_buf(),
             user: user.to_path_buf(),
             rows,
+            initialized: false,
         });
     });
     // SysListView32 属于通用控件库：不先初始化，它在对话框模板里创建失败，
@@ -229,7 +251,19 @@ unsafe extern "system" fn proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
 fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
     match message {
         WM_INITDIALOG_ => {
+            // 幂等：填充时列表控件会同步发通知、通知又回到这里重入，
+            // 重入再跑一遍填充就会重复插入（实测行数从 12 涨到几千）。
+            match with_state(|state| std::mem::replace(&mut state.initialized, true)) {
+                Some(false) => {}
+                _ => return 1,
+            }
             let list = unsafe { GetDlgItem(Some(hwnd), IDC_SCHEMA_LIST) };
+            if list.0.is_null() {
+                // 控件还没创建好：还原标志，等下一次初始化再填
+                with_state(|state| state.initialized = false);
+                return 1;
+            }
+            eprintln!(  "weasel-settings: 初始化 列表句柄={:?} 行数={:?} 勾选扩展={}",  list.0,  with_state(|state| state.rows.len()),  LVS_EX_CHECKBOXES + LVM_SETEXTENDEDLISTVIEWSTYLE );
             unsafe {
                 SendMessageW(
                     list,
@@ -238,15 +272,45 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                     LPARAM(LVS_EX_CHECKBOXES as isize),
                 );
             }
+            // 报表视图**必须先有列**才能插入行，否则 LVM_INSERTITEM 会失败（行数一直是 0）。
+            unsafe {
+                let mut header = wide("方案");
+                let column = LvColumnW {
+                    mask: LVCF_FMT | LVCF_WIDTH | LVCF_TEXT,
+                    fmt: LVCFMT_LEFT,
+                    cx: 110,
+                    text: header.as_mut_ptr(),
+                    text_max: header.len() as i32,
+                    i_sub_item: 0,
+                    i_image: 0,
+                    i_order: 0,
+                };
+                let added = SendDlgItemMessageW(
+                    hwnd,
+                    IDC_SCHEMA_LIST,
+                    LVM_INSERTCOLUMNW,
+                    WPARAM(0),
+                    LPARAM(&column as *const LvColumnW as isize),
+                );
+                eprintln!("weasel-settings: 插入列 → {}", added.0);
+            }
             let mut first_selected: Option<usize> = None;
             with_state(|state| {
                 for (index, row) in state.rows.iter().enumerate() {
                     unsafe { insert_row(list, index as i32, &row.name, row.selected) };
+                    if index < 4 {
+                        eprintln!("weasel-settings: 插入第 {index} 行「{name}」", name = row.name);
+                    }
                     if row.selected && first_selected.is_none() {
                         first_selected = Some(index);
                     }
                 }
             });
+            // 插完之后直接问控件要行数，确认插入是否真的生效
+            let rows = unsafe {
+                SendDlgItemMessageW(hwnd, IDC_SCHEMA_LIST, 0x1004, WPARAM(0), LPARAM(0))
+            };
+            eprintln!("weasel-settings: 插完 LVM_GETITEMCOUNT={}", rows.0);
             if let Some(index) = first_selected {
                 let mut item = LvItemW {
                     mask: LVIF_STATE,
