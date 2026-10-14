@@ -293,7 +293,7 @@ mod tests {
     use super::*;
 
     const DEFAULT_THEME: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/theme/default.theme.toml");
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/theme/default/default.theme.toml");
 
     #[test]
     fn parses_generated_default_theme() {
@@ -334,7 +334,7 @@ mod tests {
         let shared = Path::new("C:\\share");
         let user = Path::new("C:\\user");
         let candidates = theme_candidates(shared, user, "default");
-        assert_eq!(candidates[0], PathBuf::from("C:\\user\\theme\\default.theme.toml"));
-        assert_eq!(candidates[1], PathBuf::from("C:\\share\\theme\\default.theme.toml"));
+        assert_eq!(candidates[0], PathBuf::from("C:\\user\\theme\\default\\default.theme.toml"));
+        assert_eq!(candidates[1], PathBuf::from("C:\\share\\theme\\default\\default.theme.toml"));
     }
 }

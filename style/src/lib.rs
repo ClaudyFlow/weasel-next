@@ -13,6 +13,7 @@
 //! 因此这里实现一个只覆盖 `weasel.yaml` 形状的极简 YAML 子集解析器：
 //! 缩进映射、标量、`#` 注释、单双引号、空行。够用且可测。
 
+pub mod settings;
 pub mod theme;
 
 use std::collections::BTreeMap;

@@ -1,0 +1,325 @@
+//! 官方设置界面的**数据层**：读 `weasel.yaml` / `weasel.custom.yaml`，改配置只写补丁。
+//!
+//! 对应官方 `WeaselDeployer\UIStyleSettings.cpp` 的三个动作：
+//!
+//! 1. [`list_schemes`] —— 枚举 `preset_color_schemes` 里的每一套配色（id、显示名、作者）。
+//!    官方在这里跳过没有 `name` 的方案，界面上下拉框显示的就是 `name`。
+//! 2. [`set_active_scheme`] —— 切换当前配色。官方写的是
+//!    `customize_string("style/color_scheme", 名字)`，落到用户补丁里就是
+//!    `patch: style/color_scheme: 名字`。
+//! 3. [`set_scheme_color`] —— 改某套配色里的单个颜色，官方写的是
+//!    `customize_string("preset_color_schemes/<id>/<键>", 值)`。
+//!
+//! **关键设计（照官方）**：出厂文件 `weasel.yaml` 永不修改，用户的每一次改动都写进
+//! `weasel.custom.yaml` 的 `patch:` 段。这样升级出厂配色不会与用户改动冲突，卸载时
+//! 只删用户文件即可还原。
+//!
+//! 写补丁用的是路径式键（`style/color_scheme`、`preset_color_schemes/aqua/back_color`），
+//! 与 librime 的 `Config::SetString` 语义一致 —— 补丁按路径逐层覆盖。
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+/// 一套配色的展示信息（界面用）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemeInfo {
+    /// 配置里的 id（`preset_color_schemes/<id>`）。
+    pub id: String,
+    /// 显示名（官方 `name`，例如「碧水／Aqua」）。
+    pub name: String,
+    /// 作者（官方 `author`，可能为空）。
+    pub author: String,
+    /// 是否被用户改动过（补丁里出现过这套配色的覆盖项）。
+    pub modified: bool,
+}
+
+/// 枚举全部配色。顺序按 id 排序，保证界面稳定。
+///
+/// 没有任何 `name` 的方案会被跳过 —— 与官方 `GetPresetColorSchemes` 一致：
+/// 那种方案在界面上没法显示，官方直接 `continue`。
+pub fn list_schemes(config: &crate::WeaselConfig, custom: Option<&crate::WeaselConfig>) -> Vec<SchemeInfo> {
+    let modified: Vec<&String> = custom
+        .map(|c| c.schemes.keys().collect())
+        .unwrap_or_default();
+    let mut result: Vec<SchemeInfo> = config
+        .schemes
+        .iter()
+        .filter(|(_, scheme)| !scheme.name.trim().is_empty())
+        .map(|(id, scheme)| SchemeInfo {
+            id: id.clone(),
+            name: scheme.name.clone(),
+            author: scheme.author.clone(),
+            modified: modified.iter().any(|m| *m == id),
+        })
+        .collect();
+    result.sort_by(|a, b| a.id.cmp(&b.id));
+    result
+}
+
+/// 当前生效的配色名：用户补丁优先，其次出厂配置。
+pub fn active_scheme(
+    base: &crate::WeaselConfig,
+    custom: Option<&crate::WeaselConfig>,
+) -> String {
+    custom
+        .map(|c| c.style.color_scheme.clone())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| base.style.color_scheme.clone())
+}
+
+/// 路径式补丁键（与 librime 的 `config_set_string` 路径一致）。
+fn patch_key(path: &str) -> &str {
+    path
+}
+
+/// 把一条改动写进 `weasel.custom.yaml` 的 `patch:` 段。
+///
+/// `path` 是路径式键，例如 `style/color_scheme` 或
+/// `preset_color_schemes/aqua/back_color`。已存在的键就地覆盖，不重复追加。
+///
+/// 文件不存在时创建，并把 `patch:` 作为顶层键；文件存在但缺 `patch:` 时补上。
+/// 同目录其它内容（用户的其它自定义）原样保留。
+pub fn write_patch(custom_path: &Path, patch_path: &str, value: &str) -> io::Result<()> {
+    let key = patch_key(patch_path);
+    let existing = match fs::read_to_string(custom_path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+
+    let lines: Vec<&str> = existing.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 4);
+    let mut replaced = false;
+    let mut has_patch = false;
+    let mut in_patch = false;
+    // 补丁段里，键按路径逐层书写：`style/color_scheme:` 一行，或
+    // `preset_color_schemes/aqua/back_color:` 一行。这里只做**扁平路径**匹配，
+    // 与官方 customize_string 的行为一致。
+    let mut patch_indent = String::from("  ");
+
+    for line in &lines {
+        let trimmed = line.trim_end();
+        if trimmed == "patch:" {
+            has_patch = true;
+            in_patch = true;
+            out.push(trimmed.to_string());
+            continue;
+        }
+        if in_patch {
+            if !trimmed.is_empty() && !trimmed.starts_with(' ') && !trimmed.starts_with('\t') {
+                // patch 段结束（遇到新的顶层键）
+                if !replaced {
+                    out.push(format!("{patch_indent}{key}: {value}"));
+                    replaced = true;
+                }
+                in_patch = false;
+                out.push(trimmed.to_string());
+                continue;
+            }
+            let stripped = trimmed.trim_start();
+            if stripped.starts_with(&format!("{key}:")) {
+                let indent = &trimmed[..trimmed.len() - stripped.len()];
+                patch_indent = indent.to_string();
+                out.push(format!("{indent}{key}: {value}"));
+                replaced = true;
+                continue;
+            }
+        }
+        out.push(trimmed.to_string());
+    }
+
+    if in_patch && !replaced {
+        out.push(format!("{patch_indent}{key}: {value}"));
+        replaced = true;
+    }
+    if !has_patch {
+        if !out.is_empty() {
+            out.push(String::new());
+        }
+        out.push("patch:".to_string());
+        out.push(format!("  {key}: {value}"));
+    }
+
+    let text = out.join("\n") + "\n";
+    if let Some(parent) = custom_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(custom_path, text)
+}
+
+/// 切换当前配色（官方 `ApplyColorPatches` 的第一步）。
+pub fn set_active_scheme(custom_path: &Path, scheme_id: &str) -> io::Result<()> {
+    write_patch(custom_path, "style/color_scheme", scheme_id)
+}
+
+/// 改某套配色里的一个颜色（官方 `ApplyColorPatches` 的第二步）。
+///
+/// `key` 是颜色键名，例如 `back_color`；`value` 写成官方风格的颜色字面量，
+/// 例如 `0x00eceeee`。传空串表示删除该覆盖项（回到出厂值）。
+pub fn set_scheme_color(
+    custom_path: &Path,
+    scheme_id: &str,
+    key: &str,
+    value: &str,
+) -> io::Result<()> {
+    let path = format!("preset_color_schemes/{scheme_id}/{key}");
+    if value.is_empty() {
+        remove_patch(custom_path, &path)
+    } else {
+        write_patch(custom_path, &path, value)
+    }
+}
+
+/// 从补丁里删掉一条改动（回到出厂值）。
+pub fn remove_patch(custom_path: &Path, patch_path: &str) -> io::Result<()> {
+    let key = patch_key(patch_path);
+    let Ok(existing) = fs::read_to_string(custom_path) else {
+        return Ok(());
+    };
+    let mut out: Vec<String> = Vec::new();
+    let mut in_patch = false;
+    for line in existing.lines() {
+        let trimmed = line.trim_end();
+        if trimmed == "patch:" {
+            in_patch = true;
+            out.push(trimmed.to_string());
+            continue;
+        }
+        if in_patch && !trimmed.is_empty() && !trimmed.starts_with(' ') && !trimmed.starts_with('\t') {
+            in_patch = false;
+        }
+        if in_patch && trimmed.trim_start().starts_with(&format!("{key}:")) {
+            continue;
+        }
+        out.push(trimmed.to_string());
+    }
+    let text = out.join("\n") + "\n";
+    fs::write(custom_path, text)
+}
+
+/// 列出补丁里针对某套配色已经改过的颜色键（界面用来标记"已修改"）。
+pub fn modified_colors(custom_path: &Path, scheme_id: &str) -> io::Result<BTreeMap<String, String>> {
+    let mut result = BTreeMap::new();
+    let Ok(text) = fs::read_to_string(custom_path) else {
+        return Ok(result);
+    };
+    let prefix = format!("preset_color_schemes/{scheme_id}/");
+    let mut in_patch = false;
+    for line in text.lines() {
+        let trimmed = line.trim_end();
+        if trimmed == "patch:" {
+            in_patch = true;
+            continue;
+        }
+        if in_patch && !trimmed.is_empty() && !trimmed.starts_with(' ') && !trimmed.starts_with('\t') {
+            in_patch = false;
+        }
+        if !in_patch {
+            continue;
+        }
+        let stripped = trimmed.trim_start();
+        if let Some(rest) = stripped.strip_prefix(&prefix) {
+            if let Some((k, v)) = rest.split_once(':') {
+                result.insert(k.trim().to_string(), v.trim().to_string());
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// 用户补丁文件的位置（`%APPDATA%\Rime-Next\weasel.custom.yaml`）。
+///
+/// 与 librime 的用户目录一致：程序文件夹放出厂文件，用户目录放改动。
+pub fn user_custom_path() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|appdata| {
+        PathBuf::from(appdata)
+            .join("Rime-Next")
+            .join("weasel.custom.yaml")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn temp_path(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("weasel-style-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
+    }
+
+    #[test]
+    fn writes_patch_into_new_file() {
+        let path = temp_path("new-custom.yaml");
+        let _ = std::fs::remove_file(&path);
+        set_active_scheme(&path, "aqua").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("patch:"), "应创建 patch 段：{text}");
+        assert!(text.contains("style/color_scheme: aqua"), "应写入配色名：{text}");
+    }
+
+    #[test]
+    fn replaces_existing_key_in_place() {
+        let path = temp_path("replace-custom.yaml");
+        std::fs::write(&path, "patch:\n  style/color_scheme: aqua\n  other/key: keep\n").unwrap();
+        set_active_scheme(&path, "luna").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("style/color_scheme: luna"), "应就地替换：{text}");
+        assert!(text.contains("other/key: keep"), "其它改动必须保留：{text}");
+        assert_eq!(text.matches("style/color_scheme").count(), 1, "不应重复追加：{text}");
+    }
+
+    #[test]
+    fn appends_color_override_with_path_key() {
+        let path = temp_path("color-custom.yaml");
+        let _ = std::fs::remove_file(&path);
+        set_scheme_color(&path, "aqua", "back_color", "0x00eceeee").unwrap();
+        set_scheme_color(&path, "aqua", "text_color", "0x00000000").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("preset_color_schemes/aqua/back_color: 0x00eceeee"),
+            "颜色应写成路径式键：{text}"
+        );
+        assert!(
+            text.contains("preset_color_schemes/aqua/text_color: 0x00000000"),
+            "第二条也应写入：{text}"
+        );
+        let modified = modified_colors(&path, "aqua").unwrap();
+        assert_eq!(modified.get("back_color").map(String::as_str), Some("0x00eceeee"));
+        assert_eq!(modified.len(), 2);
+    }
+
+    #[test]
+    fn remove_patch_restores_factory_value() {
+        let path = temp_path("remove-custom.yaml");
+        let _ = std::fs::remove_file(&path);
+        set_scheme_color(&path, "aqua", "back_color", "0x00eceeee").unwrap();
+        set_scheme_color(&path, "aqua", "text_color", "0x00111111").unwrap();
+        remove_patch(&path, "preset_color_schemes/aqua/back_color").unwrap();
+        let modified = modified_colors(&path, "aqua").unwrap();
+        assert_eq!(modified.len(), 1, "只应删掉指定的那条");
+        assert!(modified.contains_key("text_color"));
+    }
+
+    #[test]
+    fn lists_official_schemes_from_factory_file() {
+        let base = crate::parse_file(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../Rime-Next/weasel.yaml"
+        ))
+        .expect("出厂 weasel.yaml 必须可解析");
+        let schemes = list_schemes(&base, None);
+        println!("列出 {} 套配色，前五：", schemes.len());
+        for info in schemes.iter().take(5) {
+            println!("  {} → {}（{}）", info.id, info.name, info.author);
+        }
+        assert_eq!(schemes.len(), 36, "官方 36 套配色应全部列出");
+        assert!(schemes.iter().all(|s| !s.name.is_empty()), "每套都要有显示名");
+        assert!(schemes.iter().any(|s| s.id == "aqua"), "应含 aqua");
+        let active = active_scheme(&base, None);
+        assert_eq!(active, "aqua", "出厂默认配色是 aqua");
+    }
+}
