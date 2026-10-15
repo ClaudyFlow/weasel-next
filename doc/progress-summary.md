@@ -420,3 +420,44 @@ WARN Weasel-Next-Engine::librime: eassy: 写出 C:\Program Files\Weasel-Next\Rim
 - 「中」按钮位置：已挪到右下角（实测相对左=527、右距=23，对话框 650 宽）✓
 - 设置快捷方式：开始菜单「小狼毫Next」下 5 条 + 算法服务 + 卸载 ✓
 - `/legacy` 进旧 Slint 界面（备用）✓
+### 1b. 修正：根因不在写端（2026-10-15 深夜读码后）
+
+读了 `set_schema_list`（`style\src\switcher.rs:206`）——**写端是正确的**：
+它遍历 `ids` 逐条写出（L239-241），没有任何截断。
+
+问题在 `switcher_dialog.rs` 的 IDOK 分支（L473-483）：
+
+```rust
+let selected: Vec<String> = state
+    .rows
+    .iter()
+    .zip(checked.iter())        // ← zip 以短的一侧为准
+    .filter(|(_, on)| **on)
+    .map(|(row, _)| row.id.clone())
+    .collect();
+```
+
+`checked` 由 `for index in 0..state.rows.len()` 逐行读 `LVM_GETITEMSTATE` 得到。
+文件里恰好只有 `luna_pinyin` 一项，**反推出那一刻 `checked` 只有 1 个元素**，
+再反推出 **`state.rows.len()` 在当时是 1**（尽管控件里确有 12 行，实测 `LVM_GETITEMCOUNT=12`）。
+
+`zip` 以短侧为准，于是 12 行被静默截断成 1 项 —— 数据就是这样丢的。
+
+**三层修法（缺一不可）**：
+
+1. IDOK 时按**控件的行数**读，不依赖 `state.rows`：
+   `let count = SendMessageW(list, LVM_GETITEMCOUNT, 0, 0).0 as usize;` 再 `for index in 0..count`。
+2. 别用 `zip` 配对：`state.rows.iter().enumerate().filter(|(i, _)| checked.get(*i).copied().unwrap_or(false))`，
+   越界当未勾选 —— 一侧短了也不会静默丢数据。
+3. **根治**：勾选状态在**插入时**就记进内存（`state.rows` 每行加 `selected: bool`，
+   `LVN_ITEMCHANGED` 里同步更新），IDOK 直接写内存那份，**完全不问控件**。
+   控件的勾选状态不该在最后一刻去读。
+
+### 1c. 下一步的顺序（建议）
+
+1. 修 `state.rows` 为什么只有 1 行（这是 1b 反推出的结论，值得单独确认：
+   查插入循环是否真的把 12 行都 push 进 `state.rows`，以及填充是否只跑了一轮、
+   `initialized` 标志与 `WM_APP_FILL` 的交互是否让第二轮跳过了 push）。
+2. 按 1b 的三层修法改勾选保存。
+3. `/style` 右侧样式键列表（照官方 `UIStyleSettings` 的样式键表搬）。
+4. 渲染器通道生命周期（打字与候选窗的共同根因）。
