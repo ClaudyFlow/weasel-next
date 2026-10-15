@@ -26,6 +26,8 @@ const IDC_SCHEMA_LIST: i32 = 1000;
 const IDC_SCHEMA_DESCRIPTION: i32 = 1209;
 const IDC_HOTKEYS: i32 = 1003;
 const IDC_GET_SCHEMATA: i32 = 1211;
+/// 「选择皮肤...」按钮：选完方案接着进界面风格设定。
+const IDC_PICK_SKIN: i32 = 1212;
 
 // ---- ListView 的消息与常量（commctrl.h，值固定）--------------------------
 const LVM_FIRST: u32 = 0x1000;

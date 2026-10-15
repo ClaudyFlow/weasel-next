@@ -41,6 +41,7 @@
 #define IDC_SCHEMA_DESCRIPTION          1209
 #define IDC_HOTKEYS                     1003
 #define IDC_GET_SCHEMATA                1211
+#define IDC_PICK_SKIN                   1212
 
 #define IDC_STYLE_LABEL_SCHEME          1201
 #define IDC_STYLE_LABEL_STYLE           1202
@@ -84,6 +85,7 @@ BEGIN
     EDITTEXT        IDC_HOTKEYS,7,147,126,14,ES_AUTOHSCROLL
     PUSHBUTTON      "获取更多输入方案...",IDC_GET_SCHEMATA,7,169,90,14
     DEFPUSHBUTTON   "中",IDOK,133,169,50,14
+    PUSHBUTTON      "选择皮肤...",IDC_PICK_SKIN,190,169,64,14
 END
 
 // ---- 用户词典管理（官方 IDD_DICT_MANAGEMENT）-----------------------------
