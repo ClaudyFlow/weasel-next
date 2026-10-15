@@ -78,12 +78,25 @@ const IDC_SET_STYLE: i32 = 1009;
 /// `weasel.custom.yaml` 用的是**斜杠键**（`style/color_scheme: aqua`），
 /// 与 `weasel.yaml` 的嵌套写法不同，所以这里按单层 map 直接查 —— 官方在
 /// `UIStyleSettingsDialog` 里也是这么取的（`settings_->GetStyleValue(info, &current)`）。
-fn patched_style_value(key: &str) -> Option<String> {
-    let path = style_settings::user_custom_path()?;
-    let text = std::fs::read_to_string(path).ok()?;
-    let yaml = weasel_style::parse_yaml(&text).ok()?;
-    let patch = yaml.get("patch")?;
-    patch.get(key)?.as_str().map(|value| value.to_string())
+fn style_value(shared: &std::path::Path, user: &std::path::Path, key: &str) -> Option<String> {
+    // 1) 用户补丁：weasel.custom.yaml 里是**斜杠键**（style/color_scheme: aqua），单层 map 直接查。
+    if let Ok(text) = std::fs::read_to_string(user.join("weasel.custom.yaml")) {
+        if let Ok(yaml) = weasel_style::parse_yaml(&text) {
+            if let Some(found) = yaml.get("patch").and_then(|patch| patch.get(key)) {
+                if let Some(value) = found.as_str() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+    }
+    // 2) 出厂 weasel.yaml：**嵌套**结构（style: → layout: → type:），按 / 逐层走。
+    let base = std::fs::read_to_string(shared.join("weasel.yaml")).ok()?;
+    let yaml = weasel_style::parse_yaml(&base).ok()?;
+    let mut node = &yaml;
+    for part in key.split('/') {
+        node = node.get(part)?;
+    }
+    node.as_str().map(|value| value.to_string())
 }
 
 
@@ -274,9 +287,16 @@ unsafe extern "system" fn style_proc(
                 // 官方是自绘（OnMeasureItem/OnDrawItem，左标签右「key: 值」、改动加 +），
                 // 这里先把「标签 + 键路径」填进去，保证列表有内容、可见可选中。
                 unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_LIST, LB_RESETCONTENT, WPARAM(0), LPARAM(0)) };
+                // 先取一次路径，避免在循环里反复借用 RefCell。
+                let (shared_dir, user_dir) = unsafe { state_of(hwnd) }
+                    .map(|state| {
+                        let state = state.borrow();
+                        (state.shared.clone(), state.user.clone())
+                    })
+                    .unwrap_or_default();
                 for key in crate::style_keys::KEYS {
                     // 官方每条显示「标签 + key: 当前值」，用户改过的值来自补丁文件。
-                    let text = match patched_style_value(key.key) {
+                    let text = match style_value(&shared_dir, &user_dir, key.key) {
                         Some(value) => wide(&format!("{}   {}: {}", key.zh_hans, key.key, value)),
                         None => wide(&format!("{}   {}", key.zh_hans, key.key)),
                     };
@@ -376,7 +396,7 @@ unsafe extern "system" fn style_proc(
                         // 把下拉框选中到**当前值**（官方即如此：显示「居中」这类中文标签）。
                         // 值来自用户补丁；布尔键的 true/false 对应「开 / 关」两项。
                         if let Some(key_ref) = crate::style_keys::KEYS.get(index as usize) {
-                            let current = patched_style_value(key_ref.key);
+                            let current = unsafe { state_of(hwnd) }.map(|state| { let state = state.borrow(); style_value(&state.shared, &state.user, key_ref.key) }).flatten();
                             let target = match current.as_deref() {
                                 Some("true") => Some(0),
                                 Some("false") => Some(1),
