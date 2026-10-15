@@ -234,11 +234,11 @@ Get-ChildItem build_support,broker -Recurse -File -Filter *.rs |
 ```
 
 把**所有**发出点找齐（不是只看 manifest.rs），确认每个点传的 bin 名 —— 只要有一处传了
-`weasel-broker` 而实际 bin 叫 `Weasel-Next-Server`，cargo 就会拒绝整个构建脚本的输出。
+`weasel-broker` 而实际 bin 叫 `weasel-server`，cargo 就会拒绝整个构建脚本的输出。
 
 **另外两个本次踩到的坑**：
 
-1. 全局替换 `"weasel-broker` → `"Weasel-Next-Server` **会误伤 `Cargo.toml` 的
+1. 全局替换 `"weasel-broker` → `"weasel-server` **会误伤 `Cargo.toml` 的
    `name = "weasel-broker"`**（包名），导致 cargo 报
    `package ID specification 'weasel-broker' did not match any packages`。
    包名必须保持不动，替换时要把 `[package] name` 排除在外。
@@ -273,7 +273,7 @@ TIP 改名（`weasel_tip.dll` → `Weasel-Next.dll`）用的就是这个办法�
 1. **不动任何 `Cargo.toml`**（包名、bin 名全保持）——`embed-resource` 与
    `setting\build.rs` 的硬编码名字都继续有效，坑不存在。
 2. `script\build-installer.ps1` 里加复制步骤（照 TIP 那句 `Copy-Item` 的写法）：
-   `target\release\weasel-broker.exe` → `Weasel-Next-Server.exe`，其余同理。
+   `target\release\weasel-broker.exe` → `weasel-server.exe`，其余同理。
 3. 必需文件清单改用新名字。
 4. `.nsi` 里所有 `ManagedFile` / 快捷方式 / `Delete` / `DisplayIcon` 改用新名字。
 5. **运行时按名字找进程与拉子进程的地方**（这是最容易漏的）：
@@ -285,10 +285,10 @@ TIP 改名（`weasel_tip.dll` → `Weasel-Next.dll`）用的就是这个办法�
 
 | 现在 | 改成 |
 | --- | --- |
-| `weasel-broker.exe` | `Weasel-Next-Server.exe`（用户已选） |
-| `weasel-server.exe` | `Weasel-Next-Engine.exe`（待确认；它是 librime 引擎宿主） |
-| `weasel-renderer.exe` | `Weasel-Next-Renderer.exe` |
-| `weasel-settings.exe` | `Weasel-Next-Settings.exe` |
+| `weasel-broker.exe` | `weasel-server.exe`（用户已选） |
+| `weasel-server.exe` | `weasel-server.exe`（待确认；它是 librime 引擎宿主） |
+| `weasel-renderer.exe` | `weasel-renderer.exe` |
+| `weasel-settings.exe` | `weasel-settingss.exe` |
 | `weasel_tip.dll` | `Weasel-Next.dll` ✓ 已完成 |
 
 注意官方 `WeaselServer.exe` 是**服务宿主**，职责上对应我们的 broker；名字怎么分由用户定，
@@ -298,3 +298,58 @@ TIP 改名（`weasel_tip.dll` → `Weasel-Next.dll`）用的就是这个办法�
 
 编译（必须过）→ 打包（确认包内是新名字、旧名字 0 条）→ 提权静默安装 → 检查程序文件夹
 与注册表 → 三个对话框各开一次 → 打字确认候选窗与上屏。
+---
+
+## 十、改名失败的根因（探针实验，已定性）
+
+用探针实验一次问出了答案：给 `server\Cargo.toml` 临时加一段
+
+```toml
+[[bin]]
+name = "Probe"
+path = "src/main.rs"
+```
+
+编译后 cargo 给出**完整**错误（之前一直只看到第一行）：
+
+```
+error: invalid instruction `cargo:rustc-link-arg-bin` from build script of `weasel-server`
+The package weasel-server v0.18.0 does not have a bin target with the name `weasel-server`.
+```
+
+**结论**：某个构建期模块按**包名**拼 `cargo:rustc-link-arg-bin=<名>=...`。
+而**一旦写了显式 `[[bin]]`，cargo 就不再按包名自动生成隐式 bin 目标**——
+于是指令指向一个不存在的目标，cargo 拒绝整个构建脚本的输出。
+
+这解释了三次失败的全部现象：只改 bin 名（包名不动）→ 不匹配；
+加 `[[bin]]` 改名（包名不动）→ 包名那个隐式目标消失 → 不匹配；
+而 `setting` 一直没事，因为它的包名与 bin 名相同、且它自己在 `build.rs` 里
+硬编码的 `rustc-link-arg-bin=weasel-settings` 也是对的。
+
+**正确解法（二选一，都不需要"打包时复制"）**：
+
+1. **只改包名、不写 `[[bin]]` 段**——cargo 的隐式 bin 自动跟着包名，
+   指令自然匹配，产物直接叫新名字。最干净（代价：包名若含大写会有命名警告）。
+2. **包名与 `[[bin]] name` 写成同一个新名字**——等效，多写一段。
+
+配套必须一起改（漏一处就编译不过或运行不起来）：
+
+- `build_support\version.rs` 的**键**＝包名（值放新文件名）
+- 各 `build.rs` 里 `manifest::embed("<包名>", ...)` 的参数
+- `setting\build.rs` 里硬编码的 `rustc-link-arg-bin=weasel-settings`
+- `.nsi` 的 `ManagedFile` 源与目标、快捷方式、`DisplayIcon`
+- 按进程名杀进程处：`installer\processes.nsh`、`script\deploy-*.ps1` 的 `Get-Process -Name`
+- 运行时拉子进程/找进程的名字：`broker\src\service_supervisor.rs`、`operations.rs`、`installer.rs`
+
+**命名已定**（用户确认，含职责纠正）：
+
+| 现在 | 改成 | 说明 |
+| --- | --- | --- |
+| `weasel-broker` | `Weasel-Next-Server` | 名副其实的服务端：托盘、监管子进程、设置下发、自启动、优雅退出 |
+| `weasel-server` | `Weasel-Next-Engine` | librime 引擎宿主（叫 server 是误导） |
+| `weasel-renderer` | `Weasel-Next-Renderer` | 候选窗渲染 |
+| `weasel-settings` | `Weasel-Next-Setting` | 设置界面（去复数） |
+| `weasel_tip` | `Weasel-Next.dll` | ✓ 已完成 |
+
+**下一步执行顺序**：改包名（方案 1）→ 同步上面六类引用 → 编译（必须过）→
+打包 → 确认包内是新名字且旧名字 0 条 → 提权静默安装 → 三个对话框各开一次 → 打字验证。
