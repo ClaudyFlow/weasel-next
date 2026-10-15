@@ -1,6 +1,6 @@
 [package]
 name = "weasel-theme-official"
-version = "0.1.8"
+version = "0.18.0"
 edition = "2024"
 license.workspace = true
 
