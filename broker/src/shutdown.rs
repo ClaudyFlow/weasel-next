@@ -28,7 +28,7 @@ pub fn run(directory: &std::path::Path) -> Result<(), Box<dyn std::error::Error>
             let mut len = path.len() as u32;
             QueryFullProcessImageNameW(handle, 0, PWSTR(path.as_mut_ptr()), &mut len).ok()?;
             let actual = std::path::PathBuf::from(String::from_utf16(&path[..len as usize])?);
-            if actual.canonicalize()? != directory.join("weasel-broker.exe").canonicalize()? {
+            if actual.canonicalize()? != directory.join("Weasel-Next-Server.exe").canonicalize()? {
                 return Err("running broker belongs to another installation".into());
             }
             PostMessageW(

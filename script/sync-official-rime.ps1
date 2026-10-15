@@ -16,7 +16,7 @@
        weasel-next 自己的文件（weasel.custom.json、.weasel.lock、build\）不会被改动。
 
     合并完成后需要重新部署才会生效：
-        <weasel-next 程序目录>\weasel-server.exe --deploy --silent
+        <weasel-next 程序目录>\Weasel-Next-Engine.exe --deploy --silent
 
 .PARAMETER OfficialInstall
     官方小狼毫安装目录，默认 C:\Program Files\Rime\weasel-0.17.4。
@@ -25,7 +25,7 @@
     官方用户数据目录，默认 %APPDATA%\Rime。
 
 .PARAMETER TargetExeDir
-    weasel-next 程序目录（含 rime.dll / weasel-server.exe），默认 artifact\smoke。
+    weasel-next 程序目录（含 rime.dll / Weasel-Next-Engine.exe），默认 artifact\smoke。
 
 .PARAMETER IncludeUserDb
     连同 *.userdb 用户词典一起复制。官方 WeaselServer 正在运行时会持有 leveldb 文件锁，
@@ -36,8 +36,8 @@
 
 .PARAMETER Deploy
     合并后自动重新部署方案。注意：server 常驻时会持有单实例锁，此时直接运行
-    `weasel-server.exe --deploy` 会失败（这是 server/src/main.rs 的设计）。本开关按
-    应用自己的顺序执行：先 `weasel-broker.exe --shutdown` 停服务，再 `--deploy --silent`，
+    `Weasel-Next-Engine.exe --deploy` 会失败（这是 server/src/main.rs 的设计）。本开关按
+    应用自己的顺序执行：先 `Weasel-Next-Server.exe --shutdown` 停服务，再 `--deploy --silent`，
     最后重新启动 broker（它会拉起 server 与 renderer）。
 
 .EXAMPLE
@@ -191,8 +191,8 @@ if ($DryRun) { return }
 
 if ($Deploy) {
     # 应用自己的部署顺序：停服务（释放单实例锁）→ 静默部署 → 重新拉起 broker。
-    $broker = Join-Path $TargetExeDir 'weasel-broker.exe'
-    $server = Join-Path $TargetExeDir 'weasel-server.exe'
+    $broker = Join-Path $TargetExeDir 'Weasel-Next-Server.exe'
+    $server = Join-Path $TargetExeDir 'Weasel-Next-Engine.exe'
     Write-Host ''
     Write-Host '== C) 重新部署方案 ==' -ForegroundColor Cyan
     if (Test-Path -LiteralPath $broker) {
@@ -207,7 +207,7 @@ if ($Deploy) {
     }
 } else {
     Write-Host "下一步：加 -Deploy 自动重新部署，或手动执行 ——"
-    Write-Host "    1) & '$TargetExeDir\weasel-broker.exe' --shutdown      # server 在跑时必须先停，否则 --deploy 会因单实例锁失败"
-    Write-Host "    2) & '$TargetExeDir\weasel-server.exe' --deploy --silent"
-    Write-Host "    3) & '$TargetExeDir\weasel-broker.exe'                # 重新拉起 server/renderer"
+    Write-Host "    1) & '$TargetExeDir\Weasel-Next-Server.exe' --shutdown      # server 在跑时必须先停，否则 --deploy 会因单实例锁失败"
+    Write-Host "    2) & '$TargetExeDir\Weasel-Next-Engine.exe' --deploy --silent"
+    Write-Host "    3) & '$TargetExeDir\Weasel-Next-Server.exe'                # 重新拉起 server/renderer"
 }

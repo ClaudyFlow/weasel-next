@@ -29,12 +29,12 @@ pub fn apply(ui: &SettingsWindow) {
             Ok(()) => ui.set_mica_enabled(true),
             Err(error) => {
                 ui.set_mica_enabled(false);
-                eprintln!("weasel-settings: Mica unavailable: {error}");
+                eprintln!("Weasel-Next-Setting: Mica unavailable: {error}");
             }
         }
     }) {
         ui.set_mica_enabled(false);
-        eprintln!("weasel-settings: Mica initialization scheduling failed: {error}");
+        eprintln!("Weasel-Next-Setting: Mica initialization scheduling failed: {error}");
     }
 }
 
@@ -72,7 +72,7 @@ fn configure(window: &slint::winit_030::winit::window::Window) -> Result<(), Str
     }
     // 扩展帧和材质就绪后再触发 SWP_FRAMECHANGED，让 DWM 重算按钮布局。
     if let Err(error) = crate::frame::install(hwnd) {
-        eprintln!("weasel-settings: custom frame unavailable: {error}");
+        eprintln!("Weasel-Next-Setting: custom frame unavailable: {error}");
     }
     Ok(())
 }

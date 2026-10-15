@@ -4,7 +4,7 @@
 重启后由系统在启动早期替换。重启后按顺序确认：
 
 1. 替换是否生效
-   - `C:\Program Files\Weasel-Next\weasel-broker.exe` 时间戳应为 10-13 14:16 之后；
+   - `C:\Program Files\Weasel-Next\Weasel-Next-Server.exe` 时间戳应为 10-13 14:16 之后；
    - `rime.dll` 应为新构建（若已重建 librime 则是当天时间，否则仍是 10-10 22:42）；
    - `weasel_tip.dll` 应为 10-13。
 

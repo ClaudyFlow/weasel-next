@@ -77,14 +77,14 @@ fn main() {
         let manifest =
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("settings.manifest");
         // MSVC 用 /MANIFEST*，GNU 工具链改走 RT_MANIFEST 资源（见 build_support/manifest.rs）。
-        manifest::embed("weasel-settings", &manifest, false);
+        manifest::embed("Weasel-Next-Setting", &manifest, false);
         // Slint 在 Windows 的调试构建需要较大的主线程栈，仅作用于设置程序。
         // MSVC: /STACK:<n>；GNU: 交给 clang/gcc 驱动 -Wl,--stack,<n>。
         let msvc = std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
         if msvc {
-            println!("cargo:rustc-link-arg-bin=weasel-settings=/STACK:8000000");
+            println!("cargo:rustc-link-arg-bin=Weasel-Next-Setting=/STACK:8000000");
         } else {
-            println!("cargo:rustc-link-arg-bin=weasel-settings=-Wl,--stack,8000000");
+            println!("cargo:rustc-link-arg-bin=Weasel-Next-Setting=-Wl,--stack,8000000");
         }
     }
 

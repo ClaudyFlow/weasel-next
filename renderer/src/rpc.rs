@@ -287,7 +287,7 @@ mod tests {
     async fn renderer_role_answers_readiness_without_ui() {
         tokio::time::timeout(Duration::from_secs(5), async {
             let pipe = format!(
-                r"\\.\pipe\weasel-renderer-readiness-{}-{}",
+                r"\\.\pipe\Weasel-Next-Renderer-readiness-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

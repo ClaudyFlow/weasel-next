@@ -222,7 +222,7 @@ public static class Unelevated
 '@
     # Build-time validation only: compile the launcher but never launch a program.
     if ($ValidateOnly) { exit 0 }
-    $broker = Join-Path $InstallDirectory 'weasel-broker.exe'
+    $broker = Join-Path $InstallDirectory 'Weasel-Next-Server.exe'
     if (-not (Test-Path -LiteralPath $broker -PathType Leaf)) { throw "Missing $broker" }
     # Launch with a token duplicated from Explorer so the broker runs in the
     # user's unelevated session even when the installer itself is elevated.

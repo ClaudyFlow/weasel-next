@@ -109,7 +109,7 @@ impl SettingsService {
                                     });
                                 }
                                 Err(error) => {
-                                    eprintln!("weasel-broker: settings listener failed: {error}");
+                                    eprintln!("Weasel-Next-Server: settings listener failed: {error}");
                                     break;
                                 }
                             }

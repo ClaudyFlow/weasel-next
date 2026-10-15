@@ -62,7 +62,7 @@ $elevated = @(
     ('for %F in ("{1}\Rime-Next\*.schema.yaml" "{1}\Rime-Next\*.dict.yaml") do if exist "%F" del /f /q "%F"' -f $root, $InstallDir),
     # 清掉早先留下的旧文件（安装目录里不该有它们）
     ('del /f /q "{0}\weasel_tip.previous.dll" 2>nul' -f $InstallDir),
-    ('del /f /q "{0}\weasel-server.previous.exe" 2>nul' -f $InstallDir),
+    ('del /f /q "{0}\Weasel-Next-Engine.previous.exe" 2>nul' -f $InstallDir),
     ('del /f /q "{0}\weasel_tip.previous-*.dll" 2>nul' -f $InstallDir),
     ('reg add "{0}" /ve /t REG_SZ /d "{1}\Weasel-Next.dll" /f' -f $clsid, $InstallDir)
 )
@@ -77,22 +77,22 @@ Write-Ok '文件已同步'
 # 3) 重启栈（从安装目录启动）
 if (-not $NoRestart) {
     Write-Step '重启栈（从安装目录启动）'
-    Get-Process -Name 'weasel-broker', 'weasel-server', 'weasel-renderer' -ErrorAction SilentlyContinue |
+    Get-Process -Name 'Weasel-Next-Server', 'Weasel-Next-Engine', 'Weasel-Next-Renderer' -ErrorAction SilentlyContinue |
         ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
-    Get-Process -Name 'weasel-broker', 'weasel-server', 'weasel-renderer' -ErrorAction SilentlyContinue |
+    Get-Process -Name 'Weasel-Next-Server', 'Weasel-Next-Engine', 'Weasel-Next-Renderer' -ErrorAction SilentlyContinue |
         ForEach-Object { try { $_.WaitForExit(3000) } catch { } }
     Start-Sleep -Seconds 3
     $env:WEASEL_TRACE_COMMIT = '1'
     # 用 WMI 启动：父进程是 WmiPrvSE，脱离调用方进程树。
     # 用 Start-Process / cmd start 会被调用方的会话回收，服务端随即消失（2026-10-10 故障总根源）。
-    $broker = Join-Path $InstallDir 'weasel-broker.exe'
+    $broker = Join-Path $InstallDir 'Weasel-Next-Server.exe'
     $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "`"$broker`"" }
     if ($created.ReturnValue -ne 0) { Write-Warn2 ('WMI 启动失败，返回码 {0}' -f $created.ReturnValue) }
     else { Write-Ok ('已用 WMI 启动 broker（PID {0}）' -f $created.ProcessId) }
     Start-Sleep -Seconds 15
     # 三关校验：进程 / 命名管道 / 管道可连
     $missing = @()
-    foreach ($name in 'weasel-broker', 'weasel-server', 'weasel-renderer') {
+    foreach ($name in 'Weasel-Next-Server', 'Weasel-Next-Engine', 'Weasel-Next-Renderer') {
         if (-not (Get-Process -Name $name -ErrorAction SilentlyContinue)) { $missing += $name }
     }
     if ($missing.Count -gt 0) { Write-Warn2 ('未起来的组件: ' + ($missing -join ', ')) } else { Write-Ok '三个组件都在 ✓' }
@@ -107,7 +107,7 @@ if (-not $NoRestart) {
         } catch { Write-Warn2 ('服务端管道连不上: ' + $_.Exception.Message) }
     }
     Start-Sleep -Seconds 12
-    Get-Process -Name 'weasel-broker', 'weasel-server', 'weasel-renderer' -ErrorAction SilentlyContinue |
+    Get-Process -Name 'Weasel-Next-Server', 'Weasel-Next-Engine', 'Weasel-Next-Renderer' -ErrorAction SilentlyContinue |
         ForEach-Object { Write-Ok ("{0} PID {1}  {2}" -f $_.ProcessName, $_.Id, $_.Path) }
 }
 
@@ -120,7 +120,7 @@ else { Write-Warn2 "仍是: $value" ; Write-Warn2 "期望: $expect（请重跑�
 
 # 5) 清单
 Write-Step '安装目录关键文件'
-foreach ($f in 'weasel-broker.exe', 'weasel-server.exe', 'weasel-renderer.exe', 'Weasel-Next.dll', 'rime.dll',
+foreach ($f in 'Weasel-Next-Server.exe', 'Weasel-Next-Engine.exe', 'Weasel-Next-Renderer.exe', 'Weasel-Next.dll', 'rime.dll',
     'Rime-Next\sound\typewriter-key.wav', 'Rime-Next\sound\typewriter-bell.wav', 'theme\weasel_theme_ten.dll') {
     $p = Join-Path $InstallDir $f
     $mark = if (Test-Path $p) { '✓' } else { '✗' }

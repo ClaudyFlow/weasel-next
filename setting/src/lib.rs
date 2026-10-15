@@ -1,7 +1,7 @@
 //! 框架无关的设置核心。
 //!
 //! 该库被两个前端共用：
-//! * `weasel-settings`（Slint 界面，本包的 bin，需 `gui` 特性）；
+//! * `Weasel-Next-Setting`（Slint 界面，本包的 bin，需 `gui` 特性）；
 
 //!
 //! 因此这里只放与界面框架无关的逻辑——配置文档读写与冲突检测、主题目录发现、schema

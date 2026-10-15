@@ -28,10 +28,10 @@
    应能出候选窗并能上屏。候选窗的配色应跟随皮肤设置。
 4. **设置程序**：在 `C:\Program Files\Weasel-Next\` 下执行
 
-       weasel-settings.exe /style      界面风格设定
-       weasel-settings.exe /switcher   方案选单设定
-       weasel-settings.exe /dict       用户词典管理
-       weasel-settings.exe             不带参数进主设置界面
+       Weasel-Next-Setting.exe /style      界面风格设定
+       Weasel-Next-Setting.exe /switcher   方案选单设定
+       Weasel-Next-Setting.exe /dict       用户词典管理
+       Weasel-Next-Setting.exe             不带参数进主设置界面
 
    `/style` 里下拉框应列出 36 套配色（碧水／Aqua、安卓／Android、青天／Azure…），
    选一套后立刻生效，改动写入 `%APPDATA%\Rime-Next\weasel.custom.yaml`。

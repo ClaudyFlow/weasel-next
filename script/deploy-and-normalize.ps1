@@ -1,7 +1,7 @@
 # deploy-and-normalize.ps1 —— 编译 server、装机、跑部署、归类并清理扁平残留、重启并验证
 #
 # 做三件事：
-#   1. 编译 weasel-server 并复制进程序文件夹；
+#   1. 编译 Weasel-Next-Engine 并复制进程序文件夹；
 #   2. 跑一次部署（新 server 会在初始化/部署前调用 rime_layout::normalize，
 #      自动把根目录扁平的 *.schema.yaml / *.dict.yaml / *.eassy.toml / *.gram 归类）；
 #   3. 安全删除残留的扁平 yaml：**仅当嵌套位置已存在同名文件时**才删（绝不误删）。
@@ -26,8 +26,8 @@ function Warn($text) { Write-Host ('   ' + $text) -ForegroundColor Yellow }
 
 # 1) 编译 + 装机
 if (-not $SkipBuild) {
-    Step '编译 weasel-server'
-    & cargo build --release -p weasel-server --manifest-path (Join-Path $root 'Cargo.toml')
+    Step '编译 Weasel-Next-Engine'
+    & cargo build --release -p Weasel-Next-Engine --manifest-path (Join-Path $root 'Cargo.toml')
     if ($LASTEXITCODE -ne 0) { throw '编译失败' }
     Ok '编译通过'
 }
@@ -47,19 +47,19 @@ if (Test-Path $luaSrc) {
     Ok ('已安装 lua 插件 → ' + $luaDst)
 } else { Warn '找不到 plugin\lua（跳过）' }
 Step '停栈并安装新 server'
-Get-Process -Name 'weasel-broker', 'weasel-server', 'weasel-renderer' -ErrorAction SilentlyContinue |
+Get-Process -Name 'Weasel-Next-Server', 'Weasel-Next-Engine', 'Weasel-Next-Renderer' -ErrorAction SilentlyContinue |
     ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 4
-Copy-Item (Join-Path $root 'target\release\weasel-server.exe') (Join-Path $InstallDir 'weasel-server.exe') -Force
-Ok ('已安装 weasel-server.exe ' + (Get-Item (Join-Path $InstallDir 'weasel-server.exe')).Length + ' 字节')
+Copy-Item (Join-Path $root 'target\release\Weasel-Next-Engine.exe') (Join-Path $InstallDir 'Weasel-Next-Engine.exe') -Force
+Ok ('已安装 Weasel-Next-Engine.exe ' + (Get-Item (Join-Path $InstallDir 'Weasel-Next-Engine.exe')).Length + ' 字节')
 
 # 重建后的 broker 必须先跑一次 --post-install 注册服务（否则它不监听 RPC 管道 ✗
 # → 渲染器 readiness 失败 → "renderer failed before readiness" ✗ → 候选窗不显示 ✓）
 Step '注册 broker 服务（--post-install）'
-& cmd /c ('"' + (Join-Path $InstallDir 'weasel-broker.exe') + '" --post-install') | Out-Null
+& cmd /c ('"' + (Join-Path $InstallDir 'Weasel-Next-Server.exe') + '" --post-install') | Out-Null
 Ok ('post-install 退出码 ' + $LASTEXITCODE)
 Step '跑一次部署（触发 normalize 归类）'
-$server = Join-Path $InstallDir 'weasel-server.exe'
+$server = Join-Path $InstallDir 'Weasel-Next-Engine.exe'
 & cmd /c ('"' + $server + '" --deploy --silent')
 Ok ('部署退出码 ' + $LASTEXITCODE)
 Start-Sleep -Seconds 3
@@ -102,11 +102,11 @@ Ok ('删除 ' + $deleted + ' 个 · 保留 ' + $kept + ' 个')
 
 # 4) 重启（WMI：脱离本会话，避免被回收）
 Step '重启栈（WMI）'
-$broker = Join-Path $InstallDir 'weasel-broker.exe'
+$broker = Join-Path $InstallDir 'Weasel-Next-Server.exe'
 $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ('"' + $broker + '"') }
 if ($created.ReturnValue -ne 0) { Warn ('WMI 启动失败，返回码 ' + $created.ReturnValue) } else { Ok ('已启动 broker（PID ' + $created.ProcessId + '）') }
 Start-Sleep -Seconds 16
-foreach ($name in 'weasel-broker', 'weasel-server', 'weasel-renderer') {
+foreach ($name in 'Weasel-Next-Server', 'Weasel-Next-Engine', 'Weasel-Next-Renderer') {
     if (Get-Process -Name $name -ErrorAction SilentlyContinue) { Ok ($name + ' ✓') } else { Warn ($name + ' 未起来 ✗') }
 }
 $pipes = @(Get-ChildItem '\\.\pipe\' -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'weasel-next' })

@@ -10,7 +10,7 @@
 //! * `WM_MEASUREITEM` / `WM_DRAWITEM`：列表是 `LBS_OWNERDRAWFIXED`，自绘每一行：
 //!   左边一个小色块，右边是颜色键名与当前值。
 //!
-//! 入口与官方一致：`weasel-settings.exe /style` 打开界面风格设定，
+//! 入口与官方一致：`Weasel-Next-Setting.exe /style` 打开界面风格设定，
 //! `/switcher` 与 `/dict` 分别对应方案选单设定与用户词典管理。
 
 use std::cell::RefCell;
@@ -398,7 +398,7 @@ pub fn run_from_args(args: &[String], shared: &Path, user: &Path) -> bool {
         let arg = arg.to_ascii_lowercase();
         if arg == "/style" || arg == "--style" || arg == "-style" {
             if let Err(error) = show_style(shared, user) {
-                eprintln!("weasel-settings: {error}");
+                eprintln!("Weasel-Next-Setting: {error}");
             }
             return true;
         }
@@ -407,13 +407,13 @@ pub fn run_from_args(args: &[String], shared: &Path, user: &Path) -> bool {
             // （LVM_GETITEMCOUNT 恒为 0）。先显示官方模板，保证入口可用；
             // 排查线索与诊断日志都留在 switcher_dialog.rs 里。
             if let Err(error) = crate::switcher_dialog::show(shared, user) {
-                eprintln!("weasel-settings: {error}");
+                eprintln!("Weasel-Next-Setting: {error}");
             }
             return true;
         }
         if arg == "/dict" || arg == "--dict" || arg == "-dict" {
             if let Err(error) = show_placeholder(IDD_DICT_MANAGEMENT) {
-                eprintln!("weasel-settings: {error}");
+                eprintln!("Weasel-Next-Setting: {error}");
             }
             return true;
         }

@@ -199,7 +199,7 @@ Function StopApplicationProcesses
   ; --shutdown. This command does not start a tray or managed children.
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
-  File /oname=shutdown-broker.exe "${RELEASE_DIR}\weasel-broker.exe"
+  File /oname=shutdown-broker.exe "${RELEASE_DIR}\Weasel-Next-Server.exe"
   DetailPrint "正在请求算法服务正常退出……"
   nsExec::ExecToLog /TIMEOUT=40000 '"$PLUGINSDIR\shutdown-broker.exe" --shutdown "$INSTDIR"'
   Pop $0
@@ -297,10 +297,10 @@ FunctionEnd
 !macro RemoveProgramFiles
   !insertmacro RemoveRimePayload
   !insertmacro RemoveWasmPayload
-  Delete /REBOOTOK "$INSTDIR\weasel-broker.exe"
-  Delete /REBOOTOK "$INSTDIR\weasel-server.exe"
-  Delete /REBOOTOK "$INSTDIR\weasel-renderer.exe"
-  Delete /REBOOTOK "$INSTDIR\weasel-settings.exe"
+  Delete /REBOOTOK "$INSTDIR\Weasel-Next-Server.exe"
+  Delete /REBOOTOK "$INSTDIR\Weasel-Next-Engine.exe"
+  Delete /REBOOTOK "$INSTDIR\Weasel-Next-Renderer.exe"
+  Delete /REBOOTOK "$INSTDIR\Weasel-Next-Setting.exe"
   Delete /REBOOTOK "$INSTDIR\rime.dll"
   ; weasel_tip.dll 是旧名字，升级时退休掉（新名字是 Weasel-Next.dll）
   Delete /REBOOTOK "$INSTDIR\weasel_tip.dll"
@@ -327,9 +327,9 @@ Section "Weasel-Next" SEC_MAIN
   SetOverwrite on
   SetOutPath "$INSTDIR"
   ClearErrors
-  !insertmacro ManagedFile "${RELEASE_DIR}\weasel-broker.exe" "weasel-broker.exe"
-  !insertmacro ManagedFile "${RELEASE_DIR}\weasel-server.exe" "weasel-server.exe"
-  !insertmacro ManagedFile "${RELEASE_DIR}\weasel-renderer.exe" "weasel-renderer.exe"
+  !insertmacro ManagedFile "${RELEASE_DIR}\Weasel-Next-Server.exe" "Weasel-Next-Server.exe"
+  !insertmacro ManagedFile "${RELEASE_DIR}\Weasel-Next-Engine.exe" "Weasel-Next-Engine.exe"
+  !insertmacro ManagedFile "${RELEASE_DIR}\Weasel-Next-Renderer.exe" "Weasel-Next-Renderer.exe"
   !insertmacro ManagedFile "${PROJECT_ROOT}\server\src\styles-LICENSE.txt" "styles-LICENSE.txt"
   !insertmacro ManagedFile "${PROJECT_ROOT}\LICENSE" "LICENSE"
   !insertmacro ManagedFile "${PROJECT_ROOT}\weasel.json" "weasel.json"
@@ -365,7 +365,7 @@ SectionEnd
 Section "设置应用" SEC_SETTINGS
   ClearErrors
   SetOutPath "$INSTDIR"
-  !insertmacro ManagedFile "${RELEASE_DIR}\weasel-settings.exe" "weasel-settings.exe"
+  !insertmacro ManagedFile "${RELEASE_DIR}\Weasel-Next-Setting.exe" "Weasel-Next-Setting.exe"
   !insertmacro ManagedFile "${PROJECT_ROOT}\setting\LICENSE-NOTICE.txt" "SETTINGS-LICENSE.txt"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装设置应用，请检查磁盘空间和文件权限。" /SD IDOK
@@ -446,7 +446,7 @@ Section "-注册与安装信息" SEC_REGISTER
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayName" "${PRODUCT_NAME}"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\weasel-broker.exe,0"
+  WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\Weasel-Next-Server.exe,0"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
   WriteRegDWORD HKLM "${UNINSTALL_KEY}" "NoModify" 1
   WriteRegDWORD HKLM "${UNINSTALL_KEY}" "NoRepair" 1
@@ -460,7 +460,7 @@ Section "-注册与安装信息" SEC_REGISTER
   ${If} ${Errors}
     !insertmacro InstallLog "WARN: 无法创建卸载快捷方式"
   ${EndIf}
-  nsExec::ExecToLog '"$INSTDIR\weasel-broker.exe" --install-shortcut "$SMPROGRAMS\小狼毫Next\小狼毫Next算法服务.lnk"'
+  nsExec::ExecToLog '"$INSTDIR\Weasel-Next-Server.exe" --install-shortcut "$SMPROGRAMS\小狼毫Next\小狼毫Next算法服务.lnk"'
   Pop $0
   ${If} $0 != 0
     !insertmacro InstallLog "WARN: 创建算法服务快捷方式失败：$0"
@@ -560,9 +560,9 @@ Function un.StopApplicationProcesses
 
   ; The installed broker understands --shutdown and asks its children to exit.
   ; A missing or damaged broker falls through to the path-checked force stop.
-  IfFileExists "$INSTDIR\weasel-broker.exe" 0 uninstall_force_stop
+  IfFileExists "$INSTDIR\Weasel-Next-Server.exe" 0 uninstall_force_stop
   DetailPrint "正在请求算法服务正常退出……"
-  nsExec::ExecToLog /TIMEOUT=40000 '"$INSTDIR\weasel-broker.exe" --shutdown "$INSTDIR"'
+  nsExec::ExecToLog /TIMEOUT=40000 '"$INSTDIR\Weasel-Next-Server.exe" --shutdown "$INSTDIR"'
   Pop $0
   DetailPrint "退出命令返回：$0"
   StrCpy $ScanMode 0

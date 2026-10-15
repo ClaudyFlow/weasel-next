@@ -98,5 +98,5 @@ fn main() {
         .flat()
         .write();
     println!("cargo:rerun-if-changed=build.rs");
-    manifest::embed("weasel-broker", &manifest, false);
+    manifest::embed("Weasel-Next-Server", &manifest, false);
 }

@@ -78,7 +78,7 @@ async fn load_broker_settings() -> Result<weasel_common::settings::ConfigSnapsho
                 details: warnings.join("\n"),
             };
             if let Err(error) = client.request(Payload::UserNotification(notice)).await {
-                eprintln!("weasel-server: could not report invalid settings: {error}");
+                eprintln!("Weasel-Next-Engine: could not report invalid settings: {error}");
             }
         }
         Ok(weasel_common::settings::ConfigSnapshot::new(value))
@@ -471,7 +471,7 @@ async fn serve(paths: RuntimePaths) -> Result<(), String> {
     let settings = match load_broker_settings().await {
         Ok(settings) => Some(settings),
         Err(error) => {
-            eprintln!("weasel-server: broker settings unavailable: {error}; using Rime defaults");
+            eprintln!("Weasel-Next-Engine: broker settings unavailable: {error}; using Rime defaults");
             None
         }
     };
@@ -606,7 +606,7 @@ mod control_tests {
                 .is_err()
         );
         let name = format!(
-            r"\\.\pipe\weasel-server-control-test-{}",
+            r"\\.\pipe\Weasel-Next-Engine-control-test-{}",
             std::process::id()
         );
         let server = RpcServer::new(&name);

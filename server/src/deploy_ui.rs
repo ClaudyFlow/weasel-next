@@ -750,7 +750,7 @@ fn apply_theme(
         use std::io::Write;
         let _ = writeln!(
             std::io::stderr(),
-            "weasel-server: acrylic unavailable: {error}"
+            "Weasel-Next-Engine: acrylic unavailable: {error}"
         );
         if let Ok(brush) = SolidColorBrush::CreateInstanceWithColor(tint) {
             let _ = root.SetBackground(&brush);

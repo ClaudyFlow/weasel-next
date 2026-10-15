@@ -287,7 +287,7 @@ impl UiHandle {
         let (finished_sender, finished) = tokio::sync::oneshot::channel();
         let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
         let worker = thread::Builder::new()
-            .name(format!("weasel-renderer-{}", registration.name()))
+            .name(format!("Weasel-Next-Renderer-{}", registration.name()))
             .spawn(move || {
                 // Cleanup/unwind finishes on this apartment BEFORE failure is
                 // reported to the selector. No failed XAML state reaches ten.

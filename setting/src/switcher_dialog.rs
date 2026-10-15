@@ -293,10 +293,10 @@ unsafe extern "system" fn proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
     });
     if depth > 0 {
         // 只在重入时记录，正常消息不刷日志
-        eprintln!("weasel-settings: 对话框消息重入 depth={depth} message=0x{message:04X}");
+        eprintln!("Weasel-Next-Setting: 对话框消息重入 depth={depth} message=0x{message:04X}");
     }
     if depth > 6 {
-        eprintln!("weasel-settings: 重入过深，忽略 message=0x{message:04X}（防止栈溢出）");
+        eprintln!("Weasel-Next-Setting: 重入过深，忽略 message=0x{message:04X}（防止栈溢出）");
         DEPTH.with(|cell| cell.set(cell.get() - 1));
         return 0;
     }
@@ -324,7 +324,7 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
             unsafe {
                 let style = GetWindowLongPtrW(list, -16) as u32;   // GWL_STYLE
                 let exstyle = GetWindowLongPtrW(list, -20) as u32; // GWL_EXSTYLE
-                eprintln!("weasel-settings: 列表样式 style=0x{style:08X} (OWNERDATA={}) exstyle=0x{exstyle:08X}",
+                eprintln!("Weasel-Next-Setting: 列表样式 style=0x{style:08X} (OWNERDATA={}) exstyle=0x{exstyle:08X}",
                     if style & 0x1000 != 0 { "是" } else { "否" });
             }
             if !DEFERRED.with(|c| c.replace(true)) {
@@ -333,7 +333,7 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                 unsafe { PostMessageW(Some(hwnd), WM_APP_FILL, WPARAM(0), LPARAM(0)) };
                 return 1;
             }
-            eprintln!(  "weasel-settings: 初始化 列表句柄={:?} 行数={:?} 勾选扩展={}",  list.0,  with_state(|state| state.rows.len()),  LVS_EX_CHECKBOXES + LVM_SETEXTENDEDLISTVIEWSTYLE );
+            eprintln!(  "Weasel-Next-Setting: 初始化 列表句柄={:?} 行数={:?} 勾选扩展={}",  list.0,  with_state(|state| state.rows.len()),  LVS_EX_CHECKBOXES + LVM_SETEXTENDEDLISTVIEWSTYLE );
             // 报表视图**必须先有列**才能插入行，否则 LVM_INSERTITEM 会失败（行数一直是 0）。
             unsafe {
                 let mut header = wide("方案");
@@ -354,15 +354,15 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                     WPARAM(0),
                     LPARAM(&column as *const LvColumnW as isize),
                 );
-                eprintln!("weasel-settings: 插入列 → {}", added.0);
+                eprintln!("Weasel-Next-Setting: 插入列 → {}", added.0);
             }
             let mut first_selected: Option<usize> = None;
             with_state(|state| {
                 for (index, row) in state.rows.iter().enumerate() {
                     let (ins, txt, st) = unsafe { insert_row(hwnd, index as i32, &row.name, row.selected) };
-                    if index < 3 { eprintln!("weasel-settings: 插行 {index} → 插入={ins} 文本={txt} 状态={st}"); }
+                    if index < 3 { eprintln!("Weasel-Next-Setting: 插行 {index} → 插入={ins} 文本={txt} 状态={st}"); }
                     if index < 4 {
-                        eprintln!("weasel-settings: 插入第 {index} 行「{name}」", name = row.name);
+                        eprintln!("Weasel-Next-Setting: 插入第 {index} 行「{name}」", name = row.name);
                     }
                     if row.selected && first_selected.is_none() {
                         first_selected = Some(index);
@@ -373,7 +373,7 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
             let rows = unsafe {
                 SendDlgItemMessageW(hwnd, IDC_SCHEMA_LIST, 0x1004, WPARAM(0), LPARAM(0))
             };
-            eprintln!("weasel-settings: 插完 LVM_GETITEMCOUNT={}", rows.0);
+            eprintln!("Weasel-Next-Setting: 插完 LVM_GETITEMCOUNT={}", rows.0);
             // 勾选框样式放在插入之后设置：实测先设它会导致 LVM_INSERTITEM 返回 -1。
             unsafe {
                 SendMessageW(list, LVM_SETEXTENDEDLISTVIEWSTYLE, WPARAM(0), LPARAM(LVS_EX_CHECKBOXES as isize));

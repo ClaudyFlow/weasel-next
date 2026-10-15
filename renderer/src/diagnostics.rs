@@ -20,7 +20,7 @@ pub fn initialize() {
     if let Some(error) = error {
         LOGGER.get_or_init(ComponentLogger::stderr).record(
             Level::WARN,
-            "weasel-renderer",
+            "Weasel-Next-Renderer",
             format_args!("file logging unavailable; using stderr: {error}"),
         );
     }
@@ -33,5 +33,5 @@ pub fn record(message: fmt::Arguments<'_>) {
 pub fn record_at(level: Level, message: fmt::Arguments<'_>) {
     LOGGER
         .get_or_init(ComponentLogger::stderr)
-        .record(level, "weasel-renderer", message);
+        .record(level, "Weasel-Next-Renderer", message);
 }

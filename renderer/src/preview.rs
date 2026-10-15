@@ -1,6 +1,6 @@
 //! 独立的外观预览入口与示例渲染数据。
 //!
-//! 使用 `weasel-renderer.exe --preview` 时，程序从合成的候选快照渲染当前配置的主题，
+//! 使用 `Weasel-Next-Renderer.exe --preview` 时，程序从合成的候选快照渲染当前配置的主题，
 //! 并在任务栏显示可手动关闭的预览窗口。主题设置仍从 broker 读取，但此模式不连接
 //! server，也不监听实时 renderer 管道；候选项仅用于展示，不会触发真实输入交互。
 use crate::theme_api::UiMode;
@@ -24,7 +24,7 @@ pub fn parse_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<
     match args.as_slice() {
         [] => Ok(UiMode::Live),
         [arg] if arg == "--preview" => Ok(UiMode::Preview),
-        _ => Err("usage: weasel-renderer.exe [--preview]".into()),
+        _ => Err("usage: Weasel-Next-Renderer.exe [--preview]".into()),
     }
 }
 

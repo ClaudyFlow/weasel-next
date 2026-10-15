@@ -3,6 +3,78 @@
 version = 4
 
 [[package]]
+name = "Weasel-Next-Engine"
+version = "0.18.0"
+dependencies = [
+ "bindgen",
+ "embed-resource",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "weasel-common",
+ "windows-bindgen",
+ "windows-collections 0.100.0",
+ "windows-core 0.100.0",
+ "windows-rdl",
+ "windows-reference",
+ "windows-strings 0.100.0",
+ "windows-time",
+]
+
+[[package]]
+name = "Weasel-Next-Renderer"
+version = "0.18.0"
+dependencies = [
+ "embed-resource",
+ "serde",
+ "serde_json",
+ "tokio",
+ "weasel-common",
+ "weasel-theme-api",
+ "weasel-theme-support",
+ "windows-core 0.100.0",
+ "windows-strings 0.100.0",
+]
+
+[[package]]
+name = "Weasel-Next-Server"
+version = "0.18.0"
+dependencies = [
+ "embed-resource",
+ "libloading",
+ "serde_json",
+ "tokio",
+ "weasel-common",
+ "windows-bindgen",
+ "windows-collections 0.100.0",
+ "windows-core 0.100.0",
+ "windows-registry",
+ "windows-strings 0.100.0",
+]
+
+[[package]]
+name = "Weasel-Next-Setting"
+version = "0.18.0"
+dependencies = [
+ "embed-resource",
+ "libloading",
+ "raw-window-handle",
+ "regex",
+ "serde",
+ "serde_json",
+ "slint",
+ "slint-build",
+ "tempfile",
+ "weasel-common",
+ "weasel-style",
+ "windows-bindgen",
+ "windows-core 0.100.0",
+ "windows-strings 0.100.0",
+ "windows-version",
+]
+
+[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5790,22 +5862,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "weasel-broker"
-version = "0.18.0"
-dependencies = [
- "embed-resource",
- "libloading",
- "serde_json",
- "tokio",
- "weasel-common",
- "windows-bindgen",
- "windows-collections 0.100.0",
- "windows-core 0.100.0",
- "windows-registry",
- "windows-strings 0.100.0",
-]
-
-[[package]]
 name = "weasel-common"
 version = "0.18.0"
 dependencies = [
@@ -5822,62 +5878,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "wasmparser",
- "windows-bindgen",
- "windows-core 0.100.0",
- "windows-strings 0.100.0",
- "windows-version",
-]
-
-[[package]]
-name = "weasel-renderer"
-version = "0.18.0"
-dependencies = [
- "embed-resource",
- "serde",
- "serde_json",
- "tokio",
- "weasel-common",
- "weasel-theme-api",
- "weasel-theme-support",
- "windows-core 0.100.0",
- "windows-strings 0.100.0",
-]
-
-[[package]]
-name = "weasel-server"
-version = "0.18.0"
-dependencies = [
- "bindgen",
- "embed-resource",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "weasel-common",
- "windows-bindgen",
- "windows-collections 0.100.0",
- "windows-core 0.100.0",
- "windows-rdl",
- "windows-reference",
- "windows-strings 0.100.0",
- "windows-time",
-]
-
-[[package]]
-name = "weasel-settings"
-version = "0.18.0"
-dependencies = [
- "embed-resource",
- "libloading",
- "raw-window-handle",
- "regex",
- "serde",
- "serde_json",
- "slint",
- "slint-build",
- "tempfile",
- "weasel-common",
- "weasel-style",
  "windows-bindgen",
  "windows-core 0.100.0",
  "windows-strings 0.100.0",

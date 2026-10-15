@@ -29,7 +29,7 @@ SHA256：`0ae29a29c8722f8d8dfa36f734d74850b5385f23204da0abb46c00e2a2902ee4`
 - 卸载项：小狼毫Next · 0.18.0
 - 三个设置对话框都能稳定打开
 
-**注意**：改了 broker 可执行文件名的尝试**已回退**（原因见第五节），所以包和源码都还是 `weasel-broker.exe`。
+**注意**：改了 broker 可执行文件名的尝试**已回退**（原因见第五节），所以包和源码都还是 `Weasel-Next-Server.exe`。
 
 ---
 
@@ -98,7 +98,7 @@ match message {
 打开的是官方 WeaselDeployer，与我们代码无关。用户的"右键还是旧的黑色界面"就是这个原因。
 
 区分办法：看进程路径，或从程序文件夹直接跑
-`weasel-settings.exe /style`（`/switcher`、`/dict` 同理）。
+`Weasel-Next-Setting.exe /style`（`/switcher`、`/dict` 同理）。
 
 ### 6. DPI 不感知的进程截图会抓错区域
 
@@ -111,7 +111,7 @@ match message {
 
 ### 1. 候选窗看不见（最影响使用）
 
-`weasel-renderer.exe` 启动后约 0.3 秒打印 `UI event channel closed` 然后**退出码 1** 退出，
+`Weasel-Next-Renderer.exe` 启动后约 0.3 秒打印 `UI event channel closed` 然后**退出码 1** 退出，
 broker 的监控每 16～30 秒重新拉起一次，一直循环。所以窗口没机会画出来。
 
 日志在 `%LOCALAPPDATA%\Rime-Next\Logs\renderer.*.log` 与 `broker.*.log`。
@@ -119,24 +119,24 @@ broker 的监控每 16～30 秒重新拉起一次，一直循环。所以窗口�
 下一步：查通道是谁先关的。那句话是"给 TIP 传 UI 事件的通道被关闭了"，**多半是 TIP 在一次
 按键结束后就把通道收了**，不是渲染器自己挂。要读 `renderer\src\ui_runtime.rs` 和 TIP 侧的通道管理。
 
-### 2. broker 改名成 `weasel-broker.exe`（用户要求，未完成，已回退）
+### 2. broker 改名成 `Weasel-Next-Server.exe`（用户要求，未完成，已回退）
 
 为了和官方 `WeaselServer.exe` 区分。做到一半卡在编译：
 
 ```
-error: invalid instruction `cargo:rustc-link-arg-bin` from build script of `weasel-broker`
+error: invalid instruction `cargo:rustc-link-arg-bin` from build script of `Weasel-Next-Server`
 ```
 
 该指令由 `build_support\manifest.rs` 发出（`cargo:rustc-link-arg-bin={binary}=/MANIFEST:EMBED`
 等三行），`{binary}` 由 `broker\build.rs` 传入。已经把传入名改成新名字仍被拒绝；
-`cargo clean -p weasel-broker` 报 `Removed 0 files`（bin 目标换了名，包名匹配不到）。
+`cargo clean -p Weasel-Next-Server` 报 `Removed 0 files`（bin 目标换了名，包名匹配不到）。
 
-下一步：先 `cargo metadata` 确认 `[[bin]] name = "weasel-broker"` 之后 cargo 认的
+下一步：先 `cargo metadata` 确认 `[[bin]] name = "Weasel-Next-Server"` 之后 cargo 认的
 target 名到底是什么（连字符可能被规范化），再改 `manifest.rs` 的调用。
 
 改动清单（回退前的做法，参考）：`broker\Cargo.toml` 加 `[[bin]]`（**包名保持
-`weasel-broker` 不动**，免得破坏 `build_support\version.rs` 里按包名查版本信息的映射）；
-全局替换 `weasel-broker.exe` 27 处；按进程名杀进程的 6 处；日志标签 14 处。
+`Weasel-Next-Server` 不动**，免得破坏 `build_support\version.rs` 里按包名查版本信息的映射）；
+全局替换 `Weasel-Next-Server.exe` 27 处；按进程名杀进程的 6 处；日志标签 14 处。
 
 ### 3. `/dict` 的四个功能
 
@@ -186,7 +186,7 @@ SHA256 `b2f2f7a9d6f120a1dccd2d632df60e4d2d54b3c67ac822bd3fbfeb98d2be9465`）。
 cd C:\code\Weasel-Next; $env:LIBCLANG_PATH='C:\Program Files\llvm-mingw\bin'; cargo build --release
 
 # 只编设置程序（约 2.5 分钟）
-cargo build --release -p weasel-settings
+cargo build --release -p Weasel-Next-Setting
 
 # 打包
 $env:Path = "C:\Program Files (x86)\NSIS;" + $env:Path
@@ -196,9 +196,9 @@ powershell -File script\build-installer.ps1
 Start-Process 'C:\WINDOWS\system32\sudo.exe' -ArgumentList '"C:\path\to\script.cmd"' -Wait
 
 # 三个官方对话框
-& 'C:\Program Files\Weasel-Next\weasel-settings.exe' /style     # 界面风格设定
-& 'C:\Program Files\Weasel-Next\weasel-settings.exe' /switcher  # 方案选单设定
-& 'C:\Program Files\Weasel-Next\weasel-settings.exe' /dict      # 用户词典管理
+& 'C:\Program Files\Weasel-Next\Weasel-Next-Setting.exe' /style     # 界面风格设定
+& 'C:\Program Files\Weasel-Next\Weasel-Next-Setting.exe' /switcher  # 方案选单设定
+& 'C:\Program Files\Weasel-Next\Weasel-Next-Setting.exe' /dict      # 用户词典管理
 
 # librime 增量重编（约 1 分钟）
 powershell -File librime\build-librime-mingw.ps1
@@ -215,7 +215,7 @@ powershell -File librime\build-librime-mingw.ps1
 第二次尝试从「清空 broker 构建脚本缓存」入手，仍然失败：
 
 ```
-error: invalid instruction `cargo:rustc-link-arg-bin` from build script of `weasel-broker`
+error: invalid instruction `cargo:rustc-link-arg-bin` from build script of `Weasel-Next-Server`
 ```
 
 **关键发现**：`build_support\manifest.rs` 第 21 行是 `if toolchain::is_msvc_target()`——
@@ -234,20 +234,20 @@ Get-ChildItem build_support,broker -Recurse -File -Filter *.rs |
 ```
 
 把**所有**发出点找齐（不是只看 manifest.rs），确认每个点传的 bin 名 —— 只要有一处传了
-`weasel-broker` 而实际 bin 叫 `weasel-server`，cargo 就会拒绝整个构建脚本的输出。
+`Weasel-Next-Server` 而实际 bin 叫 `Weasel-Next-Engine`，cargo 就会拒绝整个构建脚本的输出。
 
 **另外两个本次踩到的坑**：
 
-1. 全局替换 `"weasel-broker` → `"weasel-server` **会误伤 `Cargo.toml` 的
-   `name = "weasel-broker"`**（包名），导致 cargo 报
-   `package ID specification 'weasel-broker' did not match any packages`。
+1. 全局替换 `"Weasel-Next-Server` → `"Weasel-Next-Engine` **会误伤 `Cargo.toml` 的
+   `name = "Weasel-Next-Server"`**（包名），导致 cargo 报
+   `package ID specification 'Weasel-Next-Server' did not match any packages`。
    包名必须保持不动，替换时要把 `[package] name` 排除在外。
 2. 往 `broker/Cargo.toml` 插 `[[bin]]` 时若用 `Replace("[dependencies]", ...)`，
    会把后面的 `serde_json = "1"` 挤进 `[[bin]]` 段里、破坏清单结构。
    `[[bin]]` 要追加在**文件末尾**。
 
 **当前状态**：改名已再次回退，全量编译通过（`Finished release profile`），
-工作树干净，安装包仍是 `weasel-broker.exe` 那一版。
+工作树干净，安装包仍是 `Weasel-Next-Server.exe` 那一版。
 ---
 
 ## 九、改名方案定稿（第三次，正确姿势）
@@ -259,9 +259,9 @@ Get-ChildItem build_support,broker -Recurse -File -Filter *.rs |
 **`manifest.rs` 里那三条 `rustc-link-arg-bin` 在我们的构建里根本不发出**。
 
 全仓库只有两处发出点：`manifest.rs`（MSVC 专用分支）与 `setting\build.rs`
-（硬编码 `weasel-settings`，与它自己的 bin 名一致，所以它一直没事）。
+（硬编码 `Weasel-Next-Setting`，与它自己的 bin 名一致，所以它一直没事）。
 
-**结论：`weasel-broker` 报的无效指令来自 `embed-resource`**——它是唯一的外部构建依赖，
+**结论：`Weasel-Next-Server` 报的无效指令来自 `embed-resource`**——它是唯一的外部构建依赖，
 发的 `cargo:rustc-link-arg-bin=` 用**包名**而非 `[[bin]]` 的名字。所以只改 bin 名、
 保留包名就会不一致，cargo 拒绝整个构建脚本的输出。前两次失败都是这个原因。
 
@@ -273,7 +273,7 @@ TIP 改名（`weasel_tip.dll` → `Weasel-Next.dll`）用的就是这个办法�
 1. **不动任何 `Cargo.toml`**（包名、bin 名全保持）——`embed-resource` 与
    `setting\build.rs` 的硬编码名字都继续有效，坑不存在。
 2. `script\build-installer.ps1` 里加复制步骤（照 TIP 那句 `Copy-Item` 的写法）：
-   `target\release\weasel-broker.exe` → `weasel-server.exe`，其余同理。
+   `target\release\Weasel-Next-Server.exe` → `Weasel-Next-Engine.exe`，其余同理。
 3. 必需文件清单改用新名字。
 4. `.nsi` 里所有 `ManagedFile` / 快捷方式 / `Delete` / `DisplayIcon` 改用新名字。
 5. **运行时按名字找进程与拉子进程的地方**（这是最容易漏的）：
@@ -285,10 +285,10 @@ TIP 改名（`weasel_tip.dll` → `Weasel-Next.dll`）用的就是这个办法�
 
 | 现在 | 改成 |
 | --- | --- |
-| `weasel-broker.exe` | `weasel-server.exe`（用户已选） |
-| `weasel-server.exe` | `weasel-server.exe`（待确认；它是 librime 引擎宿主） |
-| `weasel-renderer.exe` | `weasel-renderer.exe` |
-| `weasel-settings.exe` | `weasel-settingss.exe` |
+| `Weasel-Next-Server.exe` | `Weasel-Next-Engine.exe`（用户已选） |
+| `Weasel-Next-Engine.exe` | `Weasel-Next-Engine.exe`（待确认；它是 librime 引擎宿主） |
+| `Weasel-Next-Renderer.exe` | `Weasel-Next-Renderer.exe` |
+| `Weasel-Next-Setting.exe` | `Weasel-Next-Settings.exe` |
 | `weasel_tip.dll` | `Weasel-Next.dll` ✓ 已完成 |
 
 注意官方 `WeaselServer.exe` 是**服务宿主**，职责上对应我们的 broker；名字怎么分由用户定，
@@ -313,8 +313,8 @@ path = "src/main.rs"
 编译后 cargo 给出**完整**错误（之前一直只看到第一行）：
 
 ```
-error: invalid instruction `cargo:rustc-link-arg-bin` from build script of `weasel-server`
-The package weasel-server v0.18.0 does not have a bin target with the name `weasel-server`.
+error: invalid instruction `cargo:rustc-link-arg-bin` from build script of `Weasel-Next-Engine`
+The package Weasel-Next-Engine v0.18.0 does not have a bin target with the name `Weasel-Next-Engine`.
 ```
 
 **结论**：某个构建期模块按**包名**拼 `cargo:rustc-link-arg-bin=<名>=...`。
@@ -324,7 +324,7 @@ The package weasel-server v0.18.0 does not have a bin target with the name `weas
 这解释了三次失败的全部现象：只改 bin 名（包名不动）→ 不匹配；
 加 `[[bin]]` 改名（包名不动）→ 包名那个隐式目标消失 → 不匹配；
 而 `setting` 一直没事，因为它的包名与 bin 名相同、且它自己在 `build.rs` 里
-硬编码的 `rustc-link-arg-bin=weasel-settings` 也是对的。
+硬编码的 `rustc-link-arg-bin=Weasel-Next-Setting` 也是对的。
 
 **正确解法（二选一，都不需要"打包时复制"）**：
 
@@ -336,7 +336,7 @@ The package weasel-server v0.18.0 does not have a bin target with the name `weas
 
 - `build_support\version.rs` 的**键**＝包名（值放新文件名）
 - 各 `build.rs` 里 `manifest::embed("<包名>", ...)` 的参数
-- `setting\build.rs` 里硬编码的 `rustc-link-arg-bin=weasel-settings`
+- `setting\build.rs` 里硬编码的 `rustc-link-arg-bin=Weasel-Next-Setting`
 - `.nsi` 的 `ManagedFile` 源与目标、快捷方式、`DisplayIcon`
 - 按进程名杀进程处：`installer\processes.nsh`、`script\deploy-*.ps1` 的 `Get-Process -Name`
 - 运行时拉子进程/找进程的名字：`broker\src\service_supervisor.rs`、`operations.rs`、`installer.rs`
@@ -345,10 +345,10 @@ The package weasel-server v0.18.0 does not have a bin target with the name `weas
 
 | 现在 | 改成 | 说明 |
 | --- | --- | --- |
-| `weasel-broker` | `Weasel-Next-Server` | 名副其实的服务端：托盘、监管子进程、设置下发、自启动、优雅退出 |
-| `weasel-server` | `Weasel-Next-Engine` | librime 引擎宿主（叫 server 是误导） |
-| `weasel-renderer` | `Weasel-Next-Renderer` | 候选窗渲染 |
-| `weasel-settings` | `Weasel-Next-Setting` | 设置界面（去复数） |
+| `Weasel-Next-Server` | `Weasel-Next-Server` | 名副其实的服务端：托盘、监管子进程、设置下发、自启动、优雅退出 |
+| `Weasel-Next-Engine` | `Weasel-Next-Engine` | librime 引擎宿主（叫 server 是误导） |
+| `Weasel-Next-Renderer` | `Weasel-Next-Renderer` | 候选窗渲染 |
+| `Weasel-Next-Setting` | `Weasel-Next-Setting` | 设置界面（去复数） |
 | `weasel_tip` | `Weasel-Next.dll` | ✓ 已完成 |
 
 **下一步执行顺序**：改包名（方案 1）→ 同步上面六类引用 → 编译（必须过）→

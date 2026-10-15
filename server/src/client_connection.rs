@@ -47,7 +47,7 @@ struct InputState {
     composing: bool,
 }
 
-/// `weasel-server` 拥有的输入连接；通用收发由内部 [`RpcConnection`] 完成。
+/// `Weasel-Next-Engine` 拥有的输入连接；通用收发由内部 [`RpcConnection`] 完成。
 ///
 /// 同一连接可维护多个上下文的布局更新。布局缓存有固定容量，并按上下文合并更新，
 /// 因而高频光标移动不会无限积压，也不会让同一上下文的旧位置覆盖最新位置。

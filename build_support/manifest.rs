@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 #[path = "toolchain.rs"]
 mod toolchain;
 
-/// Embeds `manifest` into the `binary` target (an example: `weasel-broker`).
+/// Embeds `manifest` into the `binary` target (an example: `Weasel-Next-Server`).
 ///
 /// `disable_msvc_default_uac` suppresses the MSVC linker's default UAC fragment
 /// (`/MANIFESTUAC:NO`) for manifests that own `requestedExecutionLevel`

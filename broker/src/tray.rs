@@ -103,7 +103,7 @@ pub(crate) fn start_updater(directory: &Path, tray: &TrayIcon, logger: &Componen
         Ok(updater) => UPDATER.with(|cell| *cell.borrow_mut() = Some(updater)),
         Err(error) => logger.record(
             weasel_common::logging::Level::WARN,
-            "weasel-broker",
+            "Weasel-Next-Server",
             format_args!("update checks unavailable: {error}"),
         ),
     }
@@ -123,7 +123,7 @@ pub(crate) fn message_loop() {
             if result <= 0 {
                 if result < 0 {
                     eprintln!(
-                        "weasel-broker: GetMessageW failed: {}",
+                        "Weasel-Next-Server: GetMessageW failed: {}",
                         std::io::Error::last_os_error()
                     );
                 }
@@ -166,7 +166,7 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     if message != 0 && message == TASKBAR_CREATED.load(Ordering::Acquire) {
         if let Err(error) = add_icon(window) {
-            eprintln!("weasel-broker: could not restore tray after Explorer restart: {error}");
+            eprintln!("Weasel-Next-Server: could not restore tray after Explorer restart: {error}");
         }
         return LRESULT(0);
     }
@@ -268,7 +268,7 @@ fn begin_operation(window: HWND, operation: Operation) {
 fn post_operation_complete(window: HWND) {
     if !unsafe { PostMessageW(Some(window), OPERATION_COMPLETE, WPARAM(0), LPARAM(0)) }.as_bool() {
         eprintln!(
-            "weasel-broker: could not post operation completion: {}",
+            "Weasel-Next-Server: could not post operation completion: {}",
             std::io::Error::last_os_error()
         );
     }
@@ -322,13 +322,13 @@ fn show_dialog(window: HWND, instruction: &str, content: &str, icon: TaskDialogI
         .content(content)
         .show()
     {
-        eprintln!("weasel-broker: could not show Task Dialog: {error}");
+        eprintln!("Weasel-Next-Server: could not show Task Dialog: {error}");
     }
 }
 
 /// 使用公共“关于”Task Dialog，同时保留 TIP 的 MessageBox 实现。
 fn show_about(window: HWND, text: &str) {
     if let Err(error) = weasel_common::about::show_task_dialog(window.0 as usize, text) {
-        eprintln!("weasel-broker: could not show about dialog: {error}");
+        eprintln!("Weasel-Next-Server: could not show about dialog: {error}");
     }
 }

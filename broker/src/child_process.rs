@@ -138,8 +138,8 @@ pub fn initialize() -> io::Result<()> {
 /// 将受支持的可执行文件名映射为服务身份中的组件名。
 fn component(executable: &str) -> io::Result<&'static str> {
     match executable {
-        "weasel-server.exe" => Ok("server"),
-        "weasel-renderer.exe" => Ok("renderer"),
+        "Weasel-Next-Engine.exe" => Ok("server"),
+        "Weasel-Next-Renderer.exe" => Ok("renderer"),
         _ => Err(io::Error::other("not a managed service")),
     }
 }

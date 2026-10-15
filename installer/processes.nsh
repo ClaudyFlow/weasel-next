@@ -20,13 +20,13 @@ Function ${PREFIX}ScanApplicationProcesses
   StrCpy $ScanResult 0
   StrCpy $ProcessPass 0
   scan_pass:
-    StrCpy $ProcessName "weasel-broker.exe"
+    StrCpy $ProcessName "Weasel-Next-Server.exe"
     ${If} $ProcessPass == 1
-      StrCpy $ProcessName "weasel-server.exe"
+      StrCpy $ProcessName "Weasel-Next-Engine.exe"
     ${ElseIf} $ProcessPass == 2
-      StrCpy $ProcessName "weasel-renderer.exe"
+      StrCpy $ProcessName "Weasel-Next-Renderer.exe"
     ${ElseIf} $ProcessPass == 3
-      StrCpy $ProcessName "weasel-settings.exe"
+      StrCpy $ProcessName "Weasel-Next-Setting.exe"
     ${EndIf}
     ; The settings executable cannot participate in the broker's graceful
     ; shutdown. Always stop the path-verified installed instance immediately;

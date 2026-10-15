@@ -278,7 +278,7 @@ async fn run_process(
     publish: &mut impl FnMut(&str, String),
 ) -> Result<std::process::ExitStatus, String> {
     let paths = weasel_common::process::RuntimePaths::discover().map_err(|e| e.to_string())?;
-    let exe = paths.executable_directory.join("weasel-server.exe");
+    let exe = paths.executable_directory.join("Weasel-Next-Engine.exe");
     let mut child = tokio::process::Command::new(&exe)
         .arg("--deploy")
         .current_dir(&paths.executable_directory)

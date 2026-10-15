@@ -2,10 +2,10 @@
 pub fn embed() {
     let package = std::env::var("CARGO_PKG_NAME").expect("Cargo package name");
     let (description, filename, dll) = match package.as_str() {
-        "weasel-broker" => ("Weasel-Next Broker", "weasel-broker.exe", false),
-        "weasel-server" => ("Weasel-Next Rime Server", "weasel-server.exe", false),
-        "weasel-renderer" => ("Weasel-Next Candidate Renderer", "weasel-renderer.exe", false),
-        "weasel-settings" => ("Weasel-Next Settings", "weasel-settings.exe", false),
+        "Weasel-Next-Server" => ("Weasel-Next Broker", "Weasel-Next-Server.exe", false),
+        "Weasel-Next-Engine" => ("Weasel-Next Rime Server", "Weasel-Next-Engine.exe", false),
+        "Weasel-Next-Renderer" => ("Weasel-Next Candidate Renderer", "Weasel-Next-Renderer.exe", false),
+        "Weasel-Next-Setting" => ("Weasel-Next Settings", "Weasel-Next-Setting.exe", false),
         "weasel-tip" => ("Weasel-Next Text Input Processor", "Weasel-Next.dll", true),
         "weasel-theme-official" => ("Weasel-Next official Theme", "weasel_theme_official.dll", true),
         _ => panic!("missing Windows file description for {package}"),

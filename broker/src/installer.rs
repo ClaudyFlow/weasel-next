@@ -22,7 +22,7 @@ fn executable_directory() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
 /// 构造带引号的 broker 自启动命令，确保含空格的安装路径作为单一路径解析。
 fn startup_command(directory: &std::path::Path) -> String {
-    format!("\"{}\"", directory.join("weasel-broker.exe").display())
+    format!("\"{}\"", directory.join("Weasel-Next-Server.exe").display())
 }
 
 /// 执行安装后部署，并在当前用户 Run 项尚未设置时登记 broker 自启动。
@@ -31,7 +31,7 @@ fn startup_command(directory: &std::path::Path) -> String {
 /// 注册表访问或写入失败同样会返回错误。
 pub(crate) fn post_install() -> Result<(), Box<dyn std::error::Error>> {
     let directory = executable_directory()?;
-    let status = Command::new(directory.join("weasel-server.exe"))
+    let status = Command::new(directory.join("Weasel-Next-Engine.exe"))
         .args(["--deploy", "--silent"])
         .current_dir(&directory)
         .status()?;

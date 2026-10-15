@@ -74,7 +74,7 @@ try {
             '--target-dir', $targetDirectory
         )
         if ($buildTarget -eq 'x86_64-pc-windows-msvc') {
-            # 包含独立设置应用 weasel-settings；x86 仍只构建 TIP。
+            # 包含独立设置应用 Weasel-Next-Setting；x86 仍只构建 TIP。
             $buildArguments += '--workspace'
             if ($SkipThemeWasm) {
                 $buildArguments += @('--exclude', 'weasel-theme-wasm')
@@ -99,14 +99,14 @@ try {
     $null = New-Item -ItemType Directory -Path $uiAccessDirectory -Force
     try {
         $env:WEASEL_RENDERER_UIACCESS = '1'
-        & $cargoCommand build --release --locked -p weasel-renderer --target x86_64-pc-windows-msvc --target-dir $targetDirectory
+        & $cargoCommand build --release --locked -p Weasel-Next-Renderer --target x86_64-pc-windows-msvc --target-dir $targetDirectory
         if ($LASTEXITCODE -ne 0) { throw 'UIAccess renderer build failed.' }
-        foreach ($file in @('weasel-renderer.exe', 'weasel_renderer.pdb')) {
+        foreach ($file in @('Weasel-Next-Renderer.exe', 'weasel_renderer.pdb')) {
             Copy-Item -LiteralPath (Join-Path $releaseDirectory $file) -Destination $uiAccessDirectory -Force
         }
     } finally {
         $env:WEASEL_RENDERER_UIACCESS = '0'
-        & $cargoCommand build --release --locked -p weasel-renderer --target x86_64-pc-windows-msvc --target-dir $targetDirectory
+        & $cargoCommand build --release --locked -p Weasel-Next-Renderer --target x86_64-pc-windows-msvc --target-dir $targetDirectory
         if ($LASTEXITCODE -ne 0) { throw 'Ordinary renderer rebuild failed; do not package these outputs.' }
     }
     $themeDirectory = Join-Path $releaseDirectory 'themes'

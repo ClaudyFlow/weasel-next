@@ -389,7 +389,7 @@ impl RimeSession {
                 Some(RendererEventAction::OpenEmojiPanel) => {
                     let Some(clear) = (*self.api.api).clear_composition else {
                         eprintln!(
-                            "weasel-server: cannot open emoji panel: clear_composition unavailable"
+                            "Weasel-Next-Engine: cannot open emoji panel: clear_composition unavailable"
                         );
                         return KeyEventResponse::default();
                     };

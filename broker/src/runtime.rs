@@ -23,7 +23,7 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _instance = match SingleInstance::acquire("broker") {
         Ok(instance) => instance,
         Err(error) => {
-            eprintln!("weasel-broker: {error}");
+            eprintln!("Weasel-Next-Server: {error}");
             return Ok(());
         }
     };
@@ -46,12 +46,12 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let directory = paths.executable_directory.clone();
     crate::child_process::initialize()?;
-    crate::child_process::clear_stale(&directory, "weasel-server.exe")?;
-    crate::child_process::clear_stale(&directory, "weasel-renderer.exe")?;
+    crate::child_process::clear_stale(&directory, "Weasel-Next-Engine.exe")?;
+    crate::child_process::clear_stale(&directory, "Weasel-Next-Renderer.exe")?;
 
     // renderer 先启动，确保 server 发布第一份候选快照时已有接收端。
-    let renderer = service_supervisor::start_child(&directory, "weasel-renderer.exe", &[])?;
-    let server = match service_supervisor::start_child(&directory, "weasel-server.exe", &[]) {
+    let renderer = service_supervisor::start_child(&directory, "Weasel-Next-Renderer.exe", &[])?;
+    let server = match service_supervisor::start_child(&directory, "Weasel-Next-Engine.exe", &[]) {
         Ok(server) => server,
         Err(error) => {
             let mut renderer = Some(renderer);

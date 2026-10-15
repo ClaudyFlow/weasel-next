@@ -18,7 +18,7 @@ fn target(command: u32) -> Result<HSTRING, String> {
     match command {
         SETTINGS => {
             let paths = RuntimePaths::discover().map_err(|e| e.to_string())?;
-            let executable = paths.executable_directory.join("weasel-settings.exe");
+            let executable = paths.executable_directory.join("Weasel-Next-Setting.exe");
             if !executable.is_file() {
                 return target(USER_DIRECTORY);
             }
@@ -92,6 +92,6 @@ fn show_error(error: &str) {
         .content(error)
         .show()
     {
-        eprintln!("weasel-broker: could not show menu error dialog: {dialog_error}");
+        eprintln!("Weasel-Next-Server: could not show menu error dialog: {dialog_error}");
     }
 }

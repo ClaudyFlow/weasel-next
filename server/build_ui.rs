@@ -286,5 +286,5 @@ pub fn generate() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=metadata/xaml_transparency.rdl");
     println!("cargo:rerun-if-changed={}", native_rdl.display());
-    manifest::embed("weasel-server", &manifest, false);
+    manifest::embed("Weasel-Next-Engine", &manifest, false);
 }

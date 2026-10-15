@@ -222,10 +222,10 @@ function Build-Librime {
         Write-Host ("产物：{0}（{1:N1} MB）" -f $dll.FullName, ($dll.Length / 1MB)) -ForegroundColor Green
         $stage = Join-Path (Split-Path -Parent $root) 'weasel-next\artifacts\smoke'
         Write-Host '部署（注意：必须先把 weasel-next 的栈停掉，否则 rime.dll 被占用无法替换）：'
-        Write-Host ("  1) & '{0}' --shutdown" -f (Join-Path $stage 'weasel-broker.exe'))
+        Write-Host ("  1) & '{0}' --shutdown" -f (Join-Path $stage 'Weasel-Next-Server.exe'))
         Write-Host ("  2) Copy-Item '{0}' '{1}' -Force   # 改名成 rime.dll" -f $dll.FullName, (Join-Path $stage 'rime.dll'))
         Write-Host '  3) 同时需要把 libc++.dll / libunwind.dll / libglog.dll / libopencc.dll 放在同目录（见 README）'
-        Write-Host ("  4) 启动 '{0}'（它会拉起 server 与 renderer）" -f (Join-Path $stage 'weasel-broker.exe'))
+        Write-Host ("  4) 启动 '{0}'（它会拉起 server 与 renderer）" -f (Join-Path $stage 'Weasel-Next-Server.exe'))
         Write-Host '  5) 方案补丁（<方案>.custom.yaml）：'
         Write-Host '       patch:'
         Write-Host '         engine/translators/+: [input_stat_translator]'

@@ -64,7 +64,7 @@ impl NotificationCenter {
             let (logger, error) =
                 ComponentLogger::file_or_stderr(&paths.logs, "broker-notifications");
             if let Some(error) = error {
-                eprintln!("weasel-broker: notification log unavailable: {error}");
+                eprintln!("Weasel-Next-Server: notification log unavailable: {error}");
             }
             logger
         };
@@ -220,6 +220,6 @@ impl NotificationCenter {
     /// 若互斥锁曾发生中毒，则取回其内部记录器继续记录，避免日志故障阻断通知流程。
     fn log_at(&self, level: weasel_common::logging::Level, text: &str) {
         let logger = self.0.logger.lock().unwrap_or_else(|p| p.into_inner());
-        logger.record(level, "weasel-broker", format_args!("{text}"));
+        logger.record(level, "Weasel-Next-Server", format_args!("{text}"));
     }
 }

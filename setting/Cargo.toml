@@ -1,5 +1,5 @@
 [package]
-name = "weasel-settings"
+name = "Weasel-Next-Setting"
 version = "0.18.0"
 edition = "2024"
 # 原创源码继续采用 BSD；链接 Slint 后的组合产物遵循 GPLv3，见 README。
@@ -13,7 +13,7 @@ path = "src/lib.rs"
 
 # Slint 界面本体；只有打开 `gui` 特性时才构建。
 [[bin]]
-name = "weasel-settings"
+name = "Weasel-Next-Setting"
 path = "src/main.rs"
 required-features = ["gui"]
 

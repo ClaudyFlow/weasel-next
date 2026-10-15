@@ -41,8 +41,8 @@ impl ManagedComponent {
     /// 返回组件可执行文件名。
     fn executable(self) -> &'static str {
         match self {
-            Self::Server => "weasel-server.exe",
-            Self::Renderer => "weasel-renderer.exe",
+            Self::Server => "Weasel-Next-Engine.exe",
+            Self::Renderer => "Weasel-Next-Renderer.exe",
         }
     }
 
@@ -130,7 +130,7 @@ pub(crate) fn start_child(
 /// 将一条服务生命周期诊断写入 broker 日志。
 pub(crate) fn diagnostic(text: &str) {
     if let Some(logger) = LOGGER.get() {
-        logger.record(Level::INFO, "weasel-broker", format_args!("{text}"));
+        logger.record(Level::INFO, "Weasel-Next-Server", format_args!("{text}"));
     }
 }
 

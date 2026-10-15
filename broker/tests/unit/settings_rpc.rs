@@ -98,7 +98,7 @@ fn slow_disk_does_not_block_runtime_and_cancel_keeps_permit() {
 static TEST_DIR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 fn test_paths() -> RuntimePaths {
     let id = TEST_DIR.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let base = format!("weasel-settings-test-{}-{}", std::process::id(), id);
+    let base = format!("Weasel-Next-Setting-test-{}-{}", std::process::id(), id);
     let root = std::env::temp_dir().join(&base);
     RuntimePaths {
         executable_directory: root.clone(),

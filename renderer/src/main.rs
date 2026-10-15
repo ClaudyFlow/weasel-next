@@ -24,7 +24,7 @@ fn main() {
     {
         Ok(preview) => preview,
         Err(error) => {
-            eprintln!("weasel-renderer: {error}");
+            eprintln!("Weasel-Next-Renderer: {error}");
             std::process::exit(1);
         }
     };
@@ -36,7 +36,7 @@ fn main() {
     let _instance = match weasel_common::process::SingleInstance::acquire(component) {
         Ok(instance) => instance,
         Err(error) => {
-            eprintln!("weasel-renderer: {error}");
+            eprintln!("Weasel-Next-Renderer: {error}");
             return;
         }
     };

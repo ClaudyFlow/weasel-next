@@ -226,7 +226,7 @@ fn deploy(services: &mut OperationServices) -> OperationOutcome {
                 services
                     .paths
                     .executable_directory
-                    .join("weasel-server.exe"),
+                    .join("Weasel-Next-Engine.exe"),
             )
             .arg("--deploy-ui")
             .current_dir(&services.paths.executable_directory)
@@ -325,7 +325,7 @@ fn deploy(services: &mut OperationServices) -> OperationOutcome {
         }
         match service_supervisor::start_child(
             &services.paths.executable_directory,
-            "weasel-server.exe",
+            "Weasel-Next-Engine.exe",
             &[],
         ) {
             Ok(mut child) => {
@@ -389,7 +389,7 @@ fn restart_components(services: &mut OperationServices) -> OperationOutcome {
     if services.renderer.is_none() && !service_supervisor::is_stopping() {
         match service_supervisor::start_child(
             &services.paths.executable_directory,
-            "weasel-renderer.exe",
+            "Weasel-Next-Renderer.exe",
             &[],
         ) {
             Ok(child) => services.renderer = Some(child),
@@ -399,7 +399,7 @@ fn restart_components(services: &mut OperationServices) -> OperationOutcome {
     if errors.is_empty() && services.server.is_none() && !service_supervisor::is_stopping() {
         match service_supervisor::start_child(
             &services.paths.executable_directory,
-            "weasel-server.exe",
+            "Weasel-Next-Engine.exe",
             &[],
         ) {
             Ok(mut child) => {

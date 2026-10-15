@@ -10,7 +10,7 @@ $ErrorActionPreference = 'Stop'
 
 $target = 'C:\Program Files\Weasel-Next'
 $pairs = @()
-foreach ($name in 'Weasel-Next.dll', 'weasel-renderer.exe', 'rime.dll') {
+foreach ($name in 'Weasel-Next.dll', 'Weasel-Next-Renderer.exe', 'rime.dll') {
     $staged = Join-Path $target "$name.pending.new"
     $final = Join-Path $target $name
     if (Test-Path -LiteralPath $staged) {

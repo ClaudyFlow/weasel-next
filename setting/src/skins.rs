@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn rows_come_from_official_skin() {
-        let user = std::env::temp_dir().join("weasel-settings-skins-test");
+        let user = std::env::temp_dir().join("Weasel-Next-Setting-skins-test");
         let _ = std::fs::create_dir_all(&user);
         let _ = std::fs::remove_file(user.join("weasel.custom.yaml"));
         let skins = Skins::load(&repo_shared(), &user);
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn selecting_writes_patch_and_marks_active() {
-        let user = std::env::temp_dir().join("weasel-settings-skins-select");
+        let user = std::env::temp_dir().join("Weasel-Next-Setting-skins-select");
         let _ = std::fs::create_dir_all(&user);
         let _ = std::fs::remove_file(user.join("weasel.custom.yaml"));
         let mut skins = Skins::load(&repo_shared(), &user);

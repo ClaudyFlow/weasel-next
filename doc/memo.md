@@ -104,7 +104,7 @@ asset\                         仓库里（出厂默认 + 程序资源）
 
 ```
 C:\Program Files\Weasel-Next\
-  weasel-broker.exe · weasel-server.exe · weasel-renderer.exe · weasel-settings.exe
+  Weasel-Next-Server.exe · Weasel-Next-Engine.exe · Weasel-Next-Renderer.exe · Weasel-Next-Setting.exe
   weasel_tip.dll · rime.dll · libc++.dll · libglog.dll · libopencc.dll · libunwind.dll · WebView2Loader.dll
   themes\                      ← 主题 DLL
   Rime-Next\                   ← ★ 唯一的配置文件夹（= Rime-Next 整棵搬过来）
@@ -123,7 +123,7 @@ C:\Program Files\Weasel-Next\
    - `nsExec::Exec` / `Exec` 启动 `launch-broker.ps1 -Mode PostInstall`，立刻返回；
    - 助手做两件事：
      a) 若 `%APPDATA%\Rime-Next` 不存在 → 从 `<INSTDIR>\Rime-Next` 整棵复制（初始化配置）；
-     b) 调 `weasel-broker.exe --deploy --silent`（现成入口：`broker\src\installer.rs:35`）。
+     b) 调 `Weasel-Next-Server.exe --deploy --silent`（现成入口：`broker\src\installer.rs:35`）。
    - 助手是独立进程（broker 本身也是独立受监督进程），因此**向导继续显示"完成/快捷方式/注册"等步骤时不卡**；
 3. 完成页显示"正在后台部署…可以开始打字"；
 4. 兜底：broker 首次启动再检查一次（`build\` 产物 + `installation.yaml` 是否存在），未部署则补部署；
@@ -151,7 +151,7 @@ C:\Program Files\Weasel-Next\
 落地约束（必须知道的事实）：
 1. librime 在 Windows 上**不加载外部 DLL 插件**（plugins\ 目录里的 DLL 不会被加载）→ 需要进入
    librime 翻译器链的插件（如统计插件）**只能静态编进 rime.dll**；rime.dll 就是它的二进制载体。
-2. 因此"插件接口 plugin.dll"只能是我们**自己的宿主**：由 weasel-server 加载 plugin.dll（Rust cdylib，
+2. 因此"插件接口 plugin.dll"只能是我们**自己的宿主**：由 Weasel-Next-Engine 加载 plugin.dll（Rust cdylib，
    导出 C ABI），plugin.dll 再去加载/托管各插件。librime 那条链上的插件不受它影响。
 3. "用户文件夹放 Rust 源码"要能**被程序编译**，需要用户机上有 Rust 工具链（重，不可行）→ 实际做法二选一：
    (a) 用户文件夹放**编译好的插件 DLL**（plugin\<名字>\<名字>.dll + plugin.toml 元数据）；
@@ -162,7 +162,7 @@ C:\Program Files\Weasel-Next\
   T1 在 plugin\ 下新增 core 的稳定 C ABI 面（版本号、注册表、生命周期回调）。
   T2 新增宿主 crate（输出 plugin.dll 到程序文件夹），实现：扫描 用户目录\plugin\*\plugin.toml、
      加载其中的 DLL、按 ABI 调用、做版本校验与隔离（崩溃不影响宿主）。
-  T3 weasel-server 启动时加载 plugin.dll（可选，缺失则静默跳过）。
+  T3 Weasel-Next-Engine 启动时加载 plugin.dll（可选，缺失则静默跳过）。
   T4 统计插件保持静态编进 rime.dll（librime 链约束），只在文档里说明它为何不是独立 DLL。
   T5 安装器把 plugin.dll 放进程序文件夹；用户目录建立 plugin\ 空目录 + README（已有）。
 
@@ -191,7 +191,7 @@ rime.dll  (静态, C++)  ← librime 强制要求静态的薄适配层
      weasel_plugin_entry(const host_api*) 入口约定；C 头文件放 plugin\core\include。
   S2 新建 weasel-plugin 宿主 crate/工程，输出 weasel-plugin.dll；实现扫描、加载、版本校验、隔离。
   S3 rime.dll 的 C++ 适配层改为调用 weasel-plugin.dll（找不到宿主时退化为内置实现，保证不崩）。
-  S4 weasel-server 启动时确保宿主已加载（可选）。
+  S4 Weasel-Next-Engine 启动时确保宿主已加载（可选）。
   S5 安装器把 weasel-plugin.dll 放进程序文件夹；用户目录 plugin\<名>\ 放插件 DLL。
 
 ## 插件宿主改名 + "代码不编译直接运行"的结论（已定）
@@ -222,7 +222,7 @@ rime.dll  (静态, C++)  ← librime 强制要求静态的薄适配层
   S1 定 ABI: rime_plugin_host_api（版本/日志/Rime 查询/事件订阅/定时器）+ rime_plugin_entry。
   S2 新建宿主工程 → rime-plugin.dll（含 Lua 绑定；wasm 复用现有运行时）。
   S3 rime.dll 的 C++ 胶水层 LoadLibraryW("rime-plugin.dll")；找不到则退化为内置实现。
-  S4 weasel-server 启动时确保宿主已加载。
+  S4 Weasel-Next-Engine 启动时确保宿主已加载。
   S5 安装器放 rime-plugin.dll；用户目录 plugin\<名>\ 放插件代码；示例 Lua 插件随包提供。
 
 ## 统计插件做回 Lua（用户要求，待实现）
@@ -290,7 +290,7 @@ Lua 插件的落位（按官方约定 ✓）：
   统一由 Rust + Direct2D 实现，不引入 WebView、不使用 XAML、不再新建 Slint 界面。
 - 原因：只有 Direct2D 这条路能做到真·液态玻璃（透明 + DWM 背景模糊 + 圆角高光 + 折射位移 + 厚度色散）。
   Slint 与 Tauri/WebView2 都拿不到窗口背后的像素，也没有 D2D 效果链，做不出折射。
-- 现状：候选窗已是 D2D（themes\ten ✓）；设置界面目前是 Slint（weasel-settings）→ 计划改为 D2D 自绘。
+- 现状：候选窗已是 D2D（themes\ten ✓）；设置界面目前是 Slint（Weasel-Next-Setting）→ 计划改为 D2D 自绘。
 - 设置界面改造要复用现有非 UI 核心：settings 库里的字段模型、校验、会话读写与框架无关，
   可直接被 D2D 前端调用；只需替换 UI 层。
 - 迁移顺序：先做主题化外壳（窗口/圆角/玻璃）→ 再逐页迁移（常规/外观/按键/词典/关于）→ 最后删除 Slint 依赖。
@@ -298,7 +298,7 @@ Lua 插件的落位（按官方约定 ✓）：
   与候选窗共用一份 D2D 绑定（themes\support\build_d2d.rs 生成的绑定）。
 ## 安装期两件独立任务（已定：并行、互不牵制）
 
-1. **部署**：`weasel-server.exe --deploy --silent`（由 broker 的 post-install 发起）。
+1. **部署**：`Weasel-Next-Engine.exe --deploy --silent`（由 broker 的 post-install 发起）。
 2. **解压语言模型**：用 `7z\7z.exe` 把 `Rime-Next\model\*.gram.7z`（含分卷 .001/.002）解到 `Rime-Next\model\`。
 
 约定：

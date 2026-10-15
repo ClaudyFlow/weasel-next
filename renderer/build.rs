@@ -29,5 +29,5 @@ fn main() {
     };
     // renderer.manifest owns requestedExecutionLevel, including uiAccess, so the
     // MSVC linker must not merge its own default UAC fragment into it.
-    manifest::embed("weasel-renderer", &manifest, true);
+    manifest::embed("Weasel-Next-Renderer", &manifest, true);
 }
