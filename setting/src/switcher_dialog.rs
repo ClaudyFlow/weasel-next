@@ -36,6 +36,7 @@ const LVM_SETITEMSTATE: u32 = LVM_FIRST + 43; // 0x102B
 const LVM_SETEXTENDEDLISTVIEWSTYLE: u32 = LVM_FIRST + 54; // 0x1036
 /// 报表视图**必须先有列**才能插入行，否则 LVM_INSERTITEM 会失败（行数一直是 0）。
 const LVM_GETITEMCOUNT: u32 = LVM_FIRST + 4; // 0x1004
+const LVM_SETCOLUMNWIDTH: u32 = LVM_FIRST + 30; // 0x101E
 const LVM_INSERTCOLUMNW: u32 = LVM_FIRST + 97; // 0x1061
 const LVCF_FMT: u32 = 0x0001;
 const LVCF_WIDTH: u32 = 0x0002;
@@ -360,6 +361,9 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                     WPARAM(0),
                     LPARAM(&column as *const LvColumnW as isize),
                 );
+                    // 方案名有长有短（朙月拼音·簡化字 等），官方用 SetColumnWidth(0, 客户区宽-20)；
+                    // 这里直接给足 320 像素，避免名字被截断。
+                    unsafe { SendDlgItemMessageW(hwnd, IDC_SCHEMA_LIST, LVM_SETCOLUMNWIDTH, WPARAM(0), LPARAM(320)) };
                 eprintln!("Weasel-Next-Setting: 插入列 → {}", added.0);
             }
             let mut first_selected: Option<usize> = None;
