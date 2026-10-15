@@ -9,6 +9,7 @@ RequestExecutionLevel admin
 
 !include MUI2.nsh
 !include LogicLib.nsh
+; x64.nsh 提供 ${RunningX64}${IsNativeARM64} 等平台判断宏。
 !include x64.nsh
 !include FileFunc.nsh
 !include TextFunc.nsh
@@ -21,6 +22,9 @@ ManifestSupportedOS all
 !ifndef PROJECT_ROOT
   !error "Use script\build-installer.ps1 to supply PROJECT_ROOT."
 !endif
+; 构建输出目录：llvm-mingw 的 64 位产物，只有这一种。
+!define RELEASE_DIR "${PROJECT_ROOT}\target\release"
+
 !ifndef PRODUCT_VERSION
   !error "Missing PRODUCT_VERSION."
 !endif
@@ -32,8 +36,6 @@ ManifestSupportedOS all
 
 !define PRODUCT_KEY "Software\Weasel-Next"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Weasel-Next"
-!define X64_RELEASE "${PROJECT_ROOT}\target\release"   ; ★ GNU 输出目录
-; ★ 只允许 GNU：!define X86_RELEASE "${PROJECT_ROOT}\target\i686-pc-windows-msvc\release"
 
 Name "${PRODUCT_NAME}"
 OutFile "${OUTPUT_FILE}"
@@ -74,15 +76,12 @@ Var BackupDll
 Var BackupList
 Var RetireResult
 Var TransactionCommitted
-Var PreviousTip32
-Var PreviousTip64
+Var PreviousTip
 
 !include "${PROJECT_ROOT}\installer\records.nsh"
 !include "${PROJECT_ROOT}\installer\cleanup-backups.nsh"
-; ★ 只允许 GNU：!include "${PROJECT_ROOT}\installer\vcredist.nsh"
 !include "${PROJECT_ROOT}\installer\processes.nsh"
 !include "${PROJECT_ROOT}\installer\launch-broker.nsh"
-; ★ 只允许 GNU：!include "${PROJECT_ROOT}\installer\uiaccess.nsh"
 !include "${PAYLOAD_INCLUDE}"
 
 Function .onInstSuccess
@@ -106,7 +105,7 @@ FunctionEnd
 
 !macro CheckPlatform
   ${IfNot} ${IsNativeAMD64}
-    MessageBox MB_OK|MB_ICONSTOP "仅支持 x64 Windows，不支持 x86 或 ARM64 系统。" /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "小狼毫Next 仅支持 64 位 Windows（x64），不支持 32 位或 ARM64 系统。" /SD IDOK
     SetErrorLevel 1
     Quit
   ${EndIf}
@@ -125,9 +124,8 @@ Function .onInit
   Call SelectAllDevComponents
 !endif
   StrCpy $TransactionCommitted 0
-  StrCpy $PreviousTip32 ""
-  StrCpy $PreviousTip64 ""
-  StrCpy $IsUpgrade 0
+  StrCpy $PreviousTip ""
+    StrCpy $IsUpgrade 0
   StrCpy $ForceStopUnregisteredInstall 0
   StrCpy $INSTDIR "$PROGRAMFILES64\Weasel-Next"
   ; makensis emits an x86 installer, while product metadata is intentionally
@@ -160,33 +158,24 @@ Function .onInit
       version_ready:
     ${EndIf}
   ${EndIf}
-  ; Remember both views before registration so a failed replacement can restore
-  ; the previously active TIP. A non-owned registration requires explicit user
-  ; approval but is no longer an unconditional installation blocker.
-  SetRegView 32
-  ReadRegStr $0 HKCR "CLSID\{16A7AEA9-9EE6-4540-8020-E384C0489BB1}\InprocServer32" ""
-  StrCpy $PreviousTip32 "$0"
+  ; Remember the previously registered TIP so a failed replacement can restore it.
+  ; A non-owned registration needs explicit approval but is not an install blocker.
+  ; 本产品只有 64 位一种形态，注册表也只查 64 位视图。
   SetRegView 64
   ReadRegStr $1 HKCR "CLSID\{16A7AEA9-9EE6-4540-8020-E384C0489BB1}\InprocServer32" ""
-  StrCpy $PreviousTip64 "$1"
-  ${If} $0 != ""
-  ${AndIf} $0 != "$INSTDIR\x86\weasel_tip.dll"
-    Goto foreign_registration
-  ${EndIf}
+  StrCpy $PreviousTip "$1"
   ${If} $1 != ""
-  ${AndIf} $1 != "$INSTDIR\x64\weasel_tip.dll"
   ${AndIf} $1 != "$INSTDIR\weasel_tip.dll"
     Goto foreign_registration
   ${EndIf}
   ${If} $IsUpgrade == 0
-    ${If} $0 != ""
-    ${OrIf} $1 != ""
+    ${If} $1 != ""
       Goto foreign_registration
     ${EndIf}
   ${EndIf}
   Goto registration_checked
   foreign_registration:
-    MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "检测到不属于当前安装记录的 TIP 注册：$\r$\n$\r$\nx86：$PreviousTip32$\r$\nx64：$PreviousTip64$\r$\n$\r$\n继续安装将用当前版本替换这些注册。是否继续？" /SD IDYES IDYES registration_checked
+    MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "检测到不属于当前安装记录的 TIP 注册：$\r$\n$\r$\n$PreviousTip$\r$\n$\r$\n继续安装将用当前版本替换这个注册。是否继续？" /SD IDYES IDYES registration_checked
     SetErrorLevel 1
     Quit
   registration_checked:
@@ -210,7 +199,7 @@ Function StopApplicationProcesses
   ; --shutdown. This command does not start a tray or managed children.
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
-  File /oname=shutdown-broker.exe "${X64_RELEASE}\weasel-broker.exe"
+  File /oname=shutdown-broker.exe "${RELEASE_DIR}\weasel-broker.exe"
   DetailPrint "正在请求算法服务正常退出……"
   nsExec::ExecToLog /TIMEOUT=40000 '"$PLUGINSDIR\shutdown-broker.exe" --shutdown "$INSTDIR"'
   Pop $0
@@ -308,25 +297,12 @@ FunctionEnd
 !macro RemoveProgramFiles
   !insertmacro RemoveRimePayload
   !insertmacro RemoveWasmPayload
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  RMDir /REBOOTOK "$INSTDIR\themes"
   Delete /REBOOTOK "$INSTDIR\weasel-broker.exe"
   Delete /REBOOTOK "$INSTDIR\weasel-server.exe"
   Delete /REBOOTOK "$INSTDIR\weasel-renderer.exe"
   Delete /REBOOTOK "$INSTDIR\weasel-settings.exe"
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  Delete /REBOOTOK "$INSTDIR\x64\rime.dll"
   Delete /REBOOTOK "$INSTDIR\rime.dll"
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  Delete /REBOOTOK "$INSTDIR\x64\weasel_tip.dll"
   Delete /REBOOTOK "$INSTDIR\weasel_tip.dll"
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  Delete /REBOOTOK "$INSTDIR\x86\weasel_tip.dll"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\weasel_broker.pdb"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\weasel_server.pdb"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\weasel_renderer.pdb"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\weasel_settings.pdb"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\weasel_tip.pdb"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\x64\weasel_tip.pdb"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\rime.pdb"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\x86\weasel_tip.pdb"
-; ★ 只允许 GNU：  Delete /REBOOTOK "$INSTDIR\x64\rime.pdb"
   Delete /REBOOTOK "$INSTDIR\styles-LICENSE.txt"
   Delete /REBOOTOK "$INSTDIR\LICENSE"
   Delete /REBOOTOK "$INSTDIR\weasel.json"
@@ -338,9 +314,6 @@ FunctionEnd
   Delete "$INSTDIR\files.lst"
   Delete "$INSTDIR\files.pending.lst"
   Delete /REBOOTOK "$INSTDIR\weasel-installer-helper.exe"
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  RMDir /REBOOTOK "$INSTDIR\x86"
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  RMDir /REBOOTOK "$INSTDIR\x64"
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  RMDir /REBOOTOK "$INSTDIR\Rime-Next\rime-data"
   RMDir /REBOOTOK "$INSTDIR\theme-wasm"
   RMDir /REBOOTOK "$INSTDIR"
 !macroend
@@ -353,23 +326,15 @@ Section "Weasel-Next" SEC_MAIN
   SetOverwrite on
   SetOutPath "$INSTDIR"
   ClearErrors
-  !insertmacro ManagedFile "${X64_RELEASE}\weasel-broker.exe" "weasel-broker.exe"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\winsparkle\WinSparkle.dll" "WinSparkle.dll"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\winsparkle\WinSparkle-LICENSE.txt" "WinSparkle-LICENSE.txt"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\winsparkle\WinSparkle-Expat-LICENSE.txt" "WinSparkle-Expat-LICENSE.txt"
-  !insertmacro ManagedFile "${X64_RELEASE}\weasel-server.exe" "weasel-server.exe"
-  !insertmacro ManagedFile "${X64_RELEASE}\weasel-renderer.exe" "weasel-renderer.exe"
-; ★ 只允许 GNU：  Call PrepareUiAccessRenderer
+  !insertmacro ManagedFile "${RELEASE_DIR}\weasel-broker.exe" "weasel-broker.exe"
+  !insertmacro ManagedFile "${RELEASE_DIR}\weasel-server.exe" "weasel-server.exe"
+  !insertmacro ManagedFile "${RELEASE_DIR}\weasel-renderer.exe" "weasel-renderer.exe"
   !insertmacro ManagedFile "${PROJECT_ROOT}\server\src\styles-LICENSE.txt" "styles-LICENSE.txt"
   !insertmacro ManagedFile "${PROJECT_ROOT}\LICENSE" "LICENSE"
   !insertmacro ManagedFile "${PROJECT_ROOT}\weasel.json" "weasel.json"
   !insertmacro ManagedFile "${PROJECT_ROOT}\THIRD-PARTY-LICENSES.txt" "THIRD-PARTY-LICENSES.txt"
   !insertmacro ManagedFile "${PROJECT_ROOT}\THIRD-PARTY-GPL-3.0.txt" "THIRD-PARTY-GPL-3.0.txt"
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  SetOutPath "$INSTDIR\x64"
-  !insertmacro ManagedFile "${X64_RELEASE}\weasel_tip.dll" "weasel_tip.dll"
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  SetOutPath "$INSTDIR\x86"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${X86_RELEASE}\weasel_tip.dll" "weasel_tip.dll"
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  CreateDirectory "$INSTDIR\Rime-Next\rime-data"
+  !insertmacro ManagedFile "${RELEASE_DIR}\weasel_tip.dll" "weasel_tip.dll"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 Weasel-Next 文件，请检查磁盘空间和文件权限。" /SD IDOK
     SetErrorLevel 1
@@ -388,7 +353,6 @@ Section "librime" SEC_LIBRIME
   !insertmacro ManagedFile "${PROJECT_ROOT}\runtime\libgcc_s_seh-1.dll" "libgcc_s_seh-1.dll"
   !insertmacro ManagedFile "${PROJECT_ROOT}\runtime\libglog.dll" "libglog.dll"
   !insertmacro ManagedFile "${PROJECT_ROOT}\runtime\libopencc.dll" "libopencc.dll"
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  SetOutPath "$INSTDIR\Rime-Next\rime-data"
   !insertmacro RimePayload
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 librime，请检查磁盘空间和文件权限。" /SD IDOK
@@ -400,7 +364,7 @@ SectionEnd
 Section "设置应用" SEC_SETTINGS
   ClearErrors
   SetOutPath "$INSTDIR"
-  !insertmacro ManagedFile "${X64_RELEASE}\weasel-settings.exe" "weasel-settings.exe"
+  !insertmacro ManagedFile "${RELEASE_DIR}\weasel-settings.exe" "weasel-settings.exe"
   !insertmacro ManagedFile "${PROJECT_ROOT}\setting\LICENSE-NOTICE.txt" "SETTINGS-LICENSE.txt"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装设置应用，请检查磁盘空间和文件权限。" /SD IDOK
@@ -412,7 +376,7 @@ SectionEnd
 SectionGroup /e "候选主题" SEC_THEMES
   Section "official（官方皮肤）" SEC_THEME_OFFICIAL
     SetOutPath "$INSTDIR"
-    !insertmacro ManagedFile "${X64_RELEASE}\weasel_theme_official.dll" "weasel_theme_official.dll"
+    !insertmacro ManagedFile "${RELEASE_DIR}\weasel_theme_official.dll" "weasel_theme_official.dll"
   SectionEnd
 SectionGroupEnd
 
@@ -420,22 +384,11 @@ SectionGroupEnd
 Section /o "调试符号" SEC_SYMBOLS
   ClearErrors
   SetOutPath "$INSTDIR"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_broker.pdb" "weasel_broker.pdb"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_server.pdb" "weasel_server.pdb"
   ${If} $UseUiAccess == 1
-; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\uiaccess\weasel_renderer.pdb" "weasel_renderer.pdb"
   ${Else}
-; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_renderer.pdb" "weasel_renderer.pdb"
   ${EndIf}
   ${If} ${SectionIsSelected} ${SEC_SETTINGS}
-; ★ 只允许 GNU：    !insertmacro ManagedFile "${X64_RELEASE}\weasel_settings.pdb" "weasel_settings.pdb"
   ${EndIf}
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${PROJECT_ROOT}\artifact\librime\dist\lib\rime.pdb" "rime.pdb"
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  SetOutPath "$INSTDIR\x64"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${X64_RELEASE}\weasel_tip.pdb" "weasel_tip.pdb"
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  SetOutPath "$INSTDIR\x86"
-; ★ 只允许 GNU：  !insertmacro ManagedFile "${X86_RELEASE}\weasel_tip.pdb" "weasel_tip.pdb"
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  SetOutPath "$INSTDIR\themes"
 !ifdef HAVE_WASM_THEME
 !endif
   ${If} ${Errors}
@@ -459,8 +412,6 @@ Section "-注册与安装信息" SEC_REGISTER
   Call CloseRecords
 
   ; Prerequisite failure must leave the existing application untouched.
-; ★ 只允许 GNU：  Call InstallRuntime_x86
-; ★ 只允许 GNU：  Call InstallRuntime_x64
   Call StopApplicationProcesses
   Call RemoveOldPayload
   Delete "$INSTDIR\files.lst"
@@ -474,26 +425,20 @@ Section "-注册与安装信息" SEC_REGISTER
   Call CommitStagedPayload
 
   !insertmacro InstallLog "INFO: 开始注册 TIP"
-  ; RegDLL is 32-bit in this installer; use native regsvr32 for the x64 DLL.
+  ; 只有一个 64 位 TIP，直接放在 $INSTDIR 下（没有架构子目录）。
+  ; RegDLL 是 32 位的，这里用系统原生的 regsvr32 注册这个 64 位 DLL。
   SetOutPath "$INSTDIR"
   ClearErrors
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\x86\weasel_tip.dll"' $0
+  ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\weasel_tip.dll"' $0
   ${If} ${Errors}
-    !insertmacro InstallLog "ERROR: 无法启动 x86 TIP 注册程序"
+    !insertmacro InstallLog "ERROR: 无法启动 TIP 注册程序"
     Goto install_failed
   ${EndIf}
-  !insertmacro InstallLog "INFO: x86 TIP 注册退出码=$0"
-  StrCmp $0 0 0 install_failed
-  ${DisableX64FSRedirection}
-  ClearErrors
-  ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\x64\weasel_tip.dll"' $0
-  ${EnableX64FSRedirection}
-  ${If} ${Errors}
-    !insertmacro InstallLog "ERROR: 无法启动 x64 TIP 注册程序"
+  !insertmacro InstallLog "INFO: TIP 注册退出码=$0"
+  ${If} $0 != 0
+    !insertmacro InstallLog "ERROR: regsvr32 返回 $0，TIP 未能注册"
     Goto install_failed
   ${EndIf}
-  !insertmacro InstallLog "INFO: x64 TIP 注册退出码=$0"
-  StrCmp $0 0 0 install_failed
 
   ClearErrors
   WriteRegStr HKLM "${PRODUCT_KEY}" "InstallDir" "$INSTDIR"
@@ -528,7 +473,7 @@ Section "-注册与安装信息" SEC_REGISTER
   Call FinishInstallLog
   Goto install_done
   install_failed:
-    MessageBox MB_OK|MB_ICONSTOP "安装或 TIP 注册失败。请检查文件权限和 x86/x64 VC++ 运行库。" /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "安装失败：TIP 注册未完成或文件写入失败。$\r$\n$\r$\n请确认以管理员身份运行，并检查 $INSTDIR 的写入权限；详情见安装日志（%TEMP%\Weasel-Next-install.log）。" /SD IDOK
     SetErrorLevel 1
     Abort
   install_done:
@@ -571,7 +516,6 @@ FunctionEnd
 Function .onInstFailed
   ${If} $TransactionCommitted != 1
     ${If} ${FileExists} "$PLUGINSDIR\new-uiaccess.cer"
-; ★ 只允许 GNU：      !insertmacro CleanupUiAccessCertificate "$PLUGINSDIR\new-uiaccess.cer"
     ${EndIf}
   ${EndIf}
   !insertmacro InstallLog "ERROR: 安装未完成；保留当前文件，不执行回滚；日志：$InstallLog"
@@ -598,8 +542,6 @@ Function un.onInit
     Quit
   ${EndIf}
   !insertmacro AssertSafeUninstallDirectory "$INSTDIR"
-  !insertmacro AssertSafeUninstallDirectory "$INSTDIR\x86"
-  !insertmacro AssertSafeUninstallDirectory "$INSTDIR\x64"
   !insertmacro AssertSafeUninstallDirectory "$INSTDIR\themes"
   !insertmacro ValidateRimePayloadRemoval
   !insertmacro ValidateWasmPayloadRemoval
@@ -643,18 +585,15 @@ Section "Uninstall"
   SetOutPath "$TEMP"
   Call un.StopApplicationProcesses
   ClearErrors
-; ★ 清理遗留空壳目录（GNU 版不再有 x64/x86/themes/rime-data 布局）：  ExecWait '"$SYSDIR\regsvr32.exe" /s /u "$INSTDIR\x86\weasel_tip.dll"' $0
-  IfErrors uninstall_failed
-  StrCmp $0 0 0 uninstall_failed
-  ; Run in the interactive shell's context; the elevated HKCU may belong to
-  ; credentials supplied only for UAC.
-  Call un.RemoveCurrentUserProvisioning
-  ${DisableX64FSRedirection}
+  ; 只有一个 64 位 TIP，路径就是 $INSTDIR\weasel_tip.dll。
   ClearErrors
-  ExecWait '"$SYSDIR\regsvr32.exe" /s /u "$INSTDIR\x64\weasel_tip.dll"' $0
-  ${EnableX64FSRedirection}
-  IfErrors uninstall_failed
-  StrCmp $0 0 0 uninstall_failed
+  ExecWait '"$SYSDIR\regsvr32.exe" /s /u "$INSTDIR\weasel_tip.dll"' $0
+  ${If} ${Errors}
+    DetailPrint "提示：无法启动 TIP 注销程序，将继续卸载。"
+  ${ElseIf} $0 != 0
+    ; DLL 被输入法框架占用时注销会失败；不阻断卸载，文件删除与重启后清理照常进行。
+    DetailPrint "提示：TIP 注销返回 $0，将继续卸载。"
+  ${EndIf}
   Delete "$SMPROGRAMS\小狼毫Next\小狼毫Next.lnk"
   Delete "$SMPROGRAMS\小狼毫Next\小狼毫Next算法服务.lnk"
   Delete "$SMPROGRAMS\小狼毫Next\卸载.lnk"

@@ -47,7 +47,6 @@ FunctionEnd
 Function CleanupOldDllBackups
   !insertmacro CleanupDllBackups "$INSTDIR" "weasel_tip.dll"
   !insertmacro CleanupDllBackups "$INSTDIR" "rime.dll"
-  !insertmacro CleanupDllBackups "$INSTDIR\x64" "weasel_tip.dll"
-  !insertmacro CleanupDllBackups "$INSTDIR\x64" "rime.dll"
-  !insertmacro CleanupDllBackups "$INSTDIR\x86" "weasel_tip.dll"
-FunctionEnd
+  !insertmacro CleanupDllBackups "$INSTDIR" "weasel_tip.dll"
+  !insertmacro CleanupDllBackups "$INSTDIR" "rime.dll"
+  FunctionEnd
