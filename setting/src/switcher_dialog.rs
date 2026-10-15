@@ -35,6 +35,26 @@ const LVM_GETITEMSTATE: u32 = LVM_FIRST + 44; // 0x102C
 const LVM_SETITEMSTATE: u32 = LVM_FIRST + 43; // 0x102B
 const LVM_SETEXTENDEDLISTVIEWSTYLE: u32 = LVM_FIRST + 54; // 0x1036
 /// 报表视图**必须先有列**才能插入行，否则 LVM_INSERTITEM 会失败（行数一直是 0）。
+/// 报表模式的 ListView 不能用 SETITEMDATA/GETITEMDATA 那两个宏（MSDN 明确禁止，
+/// 它们只对图标/列表模式有效）。存项数据必须走 LVM_SETITEM/LVM_GETITEM 配
+/// LVIF_PARAM；官方的 WTL 控件内部也是把 RimeSchemaInfo* 放进 lParam。
+/// 字段顺序照 Win32 LVITEMW 排到 lParam 为止，只用到 mask / iItem / lParam。
+#[repr(C)]
+struct LvItemParam {
+    mask: u32,
+    i_item: i32,
+    i_sub_item: i32,
+    state: u32,
+    state_mask: u32,
+    text: *mut u16,
+    text_max: i32,
+    image: i32,
+    param: isize,
+}
+const LVIF_PARAM_: u32 = 0x0004;
+const LVM_GETITEM: u32 = LVM_FIRST + 5; // 0x1005
+const LVM_SETITEM: u32 = LVM_FIRST + 6; // 0x1006
+
 const LVM_GETITEMCOUNT: u32 = LVM_FIRST + 4; // 0x1004
 const LVM_SETCOLUMNWIDTH: u32 = LVM_FIRST + 30; // 0x101E
 const LVM_GETITEMDATA: u32 = LVM_FIRST + 41; // 0x1029
@@ -378,15 +398,25 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                     let id_wide = wide(&row.id);
                     let id_ptr = id_wide.as_ptr() as isize;
                     std::mem::forget(id_wide);
-                    unsafe {
-                        SendDlgItemMessageW(
-                            hwnd,
-                            IDC_SCHEMA_LIST,
-                            LVM_SETITEMDATA,
-                            WPARAM(index),
-                            LPARAM(id_ptr),
-                        )
+                    let mut param_item = LvItemParam {
+                        mask: LVIF_PARAM_,
+                        i_item: index as i32,
+                        i_sub_item: 0,
+                        state: 0,
+                        state_mask: 0,
+                        text: std::ptr::null_mut(),
+                        text_max: 0,
+                        image: 0,
+                        param: id_ptr,
                     };
+                    unsafe {
+                    SendDlgItemMessageW(
+                        hwnd,
+                        IDC_SCHEMA_LIST,
+                        LVM_SETITEM,
+                        WPARAM(0),
+                        LPARAM(&mut param_item as *mut LvItemParam as isize),
+                    ) };
                     if index < 3 { eprintln!("Weasel-Next-Setting: 插行 {index} → 插入={ins} 文本={txt} 状态={st}"); }
                     if index < 4 {
                         eprintln!("Weasel-Next-Setting: 插入第 {index} 行「{name}」", name = row.name);
