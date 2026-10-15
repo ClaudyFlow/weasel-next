@@ -435,6 +435,34 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
             unsafe {
                 SendMessageW(list, LVM_SETEXTENDEDLISTVIEWSTYLE, WPARAM(0), LPARAM(LVS_EX_CHECKBOXES as isize));
             }
+            // 复选框扩展是插行之后才开的（先开会让 LVM_INSERTITEM 失败，实测），
+            // 插入时设的 state image 因此已被丢弃 —— 给每一行重新设一遍勾选状态。
+            // 否则界面上一个勾都没有，读回来是空、写出去也是空（"记不住方案"的根因）。
+            with_state(|state| {
+                for (index, row) in state.rows.iter().enumerate() {
+                    let mut item = LvItemW {
+                        mask: LVIF_STATE,
+                        i_item: index as i32,
+                        i_sub_item: 0,
+                        state: state_image(row.selected),
+                        state_mask: LVIS_STATEIMAGEMASK,
+                        text: std::ptr::null_mut(),
+                        text_max: 0,
+                        i_image: 0,
+                        l_param: 0,
+                        i_indent: 0,
+                        i_group_id: 0,
+                        columns: 0,
+                        pu_columns: std::ptr::null_mut(),
+                        pi_col_fmt: std::ptr::null_mut(),
+                        i_group: 0,
+                    };
+                    unsafe {
+                        SendMessageW(list, LVM_SETITEMSTATE, WPARAM(index), LPARAM(&mut item as *mut LvItemW as isize));
+                    }
+                }
+            });
+
             if let Some(index) = first_selected {
                 let mut item = LvItemW {
                     mask: LVIF_STATE,
