@@ -555,6 +555,12 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
             0
         }
         WM_COMMAND_ => {
+            // 诊断：打印命令来源，确认是谁触发了 IDOK（"自动确认覆盖补丁"的排查）。
+            eprintln!(
+                "weasel-settings: COMMAND id={} code={}",
+                wparam.0 & 0xffff,
+                (wparam.0 >> 16) & 0xffff
+            );
             let id = (wparam.0 & 0xffff) as i32;
             if id == IDOK {
                 let list = unsafe { GetDlgItem(Some(hwnd), IDC_SCHEMA_LIST) };
