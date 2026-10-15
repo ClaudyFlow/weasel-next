@@ -37,6 +37,8 @@ const LVM_SETEXTENDEDLISTVIEWSTYLE: u32 = LVM_FIRST + 54; // 0x1036
 /// 报表视图**必须先有列**才能插入行，否则 LVM_INSERTITEM 会失败（行数一直是 0）。
 const LVM_GETITEMCOUNT: u32 = LVM_FIRST + 4; // 0x1004
 const LVM_SETCOLUMNWIDTH: u32 = LVM_FIRST + 30; // 0x101E
+const LVM_GETITEMDATA: u32 = LVM_FIRST + 41; // 0x1029
+const LVM_SETITEMDATA: u32 = LVM_FIRST + 42; // 0x102A
 const LVM_INSERTCOLUMNW: u32 = LVM_FIRST + 97; // 0x1061
 const LVCF_FMT: u32 = 0x0001;
 const LVCF_WIDTH: u32 = 0x0002;
@@ -370,6 +372,21 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
             with_state(|state| {
                 for (index, row) in state.rows.iter().enumerate() {
                     let (ins, txt, st) = unsafe { insert_row(hwnd, index as i32, &row.name, row.selected) };
+                    // 照官方 SwitcherSettingsDialog：把方案 id 的指针存进该项的 ItemData，
+                    // 保存时用 LVM_GETITEMDATA 从控件取回 —— 不再依赖 state.rows 的长度。
+                    // 泄漏一份宽字符串换取指针稳定（对话框生命周期内有效，官方同样持有指针）。
+                    let id_wide = wide(&row.id);
+                    let id_ptr = id_wide.as_ptr() as isize;
+                    std::mem::forget(id_wide);
+                    unsafe {
+                        SendDlgItemMessageW(
+                            hwnd,
+                            IDC_SCHEMA_LIST,
+                            LVM_SETITEMDATA,
+                            WPARAM(index),
+                            LPARAM(id_ptr),
+                        )
+                    };
                     if index < 3 { eprintln!("Weasel-Next-Setting: 插行 {index} → 插入={ins} 文本={txt} 状态={st}"); }
                     if index < 4 {
                         eprintln!("Weasel-Next-Setting: 插入第 {index} 行「{name}」", name = row.name);
@@ -492,13 +509,23 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                     return 1;
                 }
                 let outcome = with_state(|state| {
-                    let selected: Vec<String> = state
-                        .rows
-                        .iter()
-                        .enumerate()
-                        .filter(|(index, _)| checked.get(*index).copied().unwrap_or(false))
-                        .map(|(_, row)| row.id.clone())
-                        .collect();
+                    // 照官方 OnOK：从控件取回每项 ItemData 里的方案 id。
+                    let mut selected: Vec<String> = Vec::new();
+                    for index in 0..count {
+                        if !checked.get(index).copied().unwrap_or(false) {
+                            continue;
+                        }
+                        let raw = unsafe { SendMessageW(list, LVM_GETITEMDATA, WPARAM(index), LPARAM(0)).0 } as *const u16;
+                        if raw.is_null() {
+                            continue;
+                        }
+                        let mut len = 0usize;
+                        while unsafe { *raw.add(len) } != 0 {
+                            len += 1;
+                        }
+                        let slice = unsafe { std::slice::from_raw_parts(raw, len) };
+                        selected.push(String::from_utf16_lossy(slice));
+                    }
                     let path = switcher::user_default_custom_path(&state.user);
                     switcher::set_schema_list(&path, &selected)
                 });
