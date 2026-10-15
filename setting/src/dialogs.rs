@@ -42,6 +42,7 @@ const LBN_SELCHANGE_: u32 = 1;
 const CBN_SELCHANGE_: u32 = 1;
 const CB_SETCURSEL: u32 = 0x014E;
 const CB_GETCURSEL: u32 = 0x0147;
+const CB_SHOWDROPDOWN: u32 = 0x014F;
 const CBN_SELCHANGE: u32 = 1;
 const LB_ADDSTRING: u32 = 0x0180;
 const LB_RESETCONTENT: u32 = 0x0184;
@@ -341,6 +342,16 @@ unsafe extern "system" fn style_proc(
                                 unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_VALUE_COMBO, CB_ADDSTRING, WPARAM(0), LPARAM(text.as_ptr() as isize)) };
                             }
                         }
+                        // 候选已填好，立即展开 —— 否则用户看到的是一片空白，得再点一次箭头。
+                        unsafe {
+                            SendDlgItemMessageW(
+                                hwnd,
+                                IDC_STYLE_VALUE_COMBO,
+                                CB_SHOWDROPDOWN,
+                                WPARAM(1),
+                                LPARAM(0),
+                            )
+                        };
                     }
                 }
                 return 1;
