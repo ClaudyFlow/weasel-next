@@ -206,13 +206,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 官方习惯：命令行参数选择要打开的对话框（/style、/switcher、/dict）。
     // 命中时只弹对话框，不启动 Slint 主界面。
     {
-        // 不带参数时默认打开官方的「界面风格设定」。
+        // 不带参数时默认打开官方的「方案选单设定」：先选方案，再选皮肤。
     // 旧的 Slint 界面容易被误认为"设置还是旧版"，退居二线：需要它时传 /legacy。
     let args: Vec<String> = {
         // （/legacy 由下面的分支识别：命中时跳过对话框，直接进 Slint 界面）
         let raw: Vec<String> = std::env::args().skip(1).collect();
         if raw.is_empty() {
-            vec!["/style".to_string()]
+            vec!["/switcher".to_string()]
         } else {
             raw
         }
