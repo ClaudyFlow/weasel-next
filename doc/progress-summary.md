@@ -1,0 +1,209 @@
+# Weasel-Next 进度总结（2026-10-15）
+
+给下一次接续用。凡是标了「实测」的都是跑出来的结果，标了「未验证」的不要当成已完成。
+
+---
+
+## 一、约束（必须遵守）
+
+1. **只允许 GNU 工具链**。llvm-mingw，宿主 `x86_64-pc-windows-gnu`，不用 MSVC、不带 vcredist、不产出 pdb。
+2. **只在程序文件夹运行**。代码在 `C:\code\Weasel-Next` 编译，NSIS 打包，装到 `C:\Program Files\Weasel-Next\` 后只从那里运行。
+3. **只保留 64 位**，不生成 x86/x64 子目录。
+4. **禁止链接**（junction / hardlink）——用户目录里只能有真实文件。
+5. 排版与文案照官方（fxliang/weasel 在 `C:\Code\weasel`）。
+
+---
+
+## 二、当前可分发状态
+
+安装包：`artifact\installer\Weasel-Next-0.18.0-x64-setup.exe`，23.17 MB，10-15 11:39
+SHA256：`0ae29a29c8722f8d8dfa36f734d74850b5385f23204da0abb46c00e2a2902ee4`
+
+装完实测（退出码 3010 = 成功、需重启）：
+
+- 程序文件夹 104 个文件：四个 exe、`Weasel-Next.dll` 5.08 MB、`rime.dll` 9.62 MB、
+  `weasel_theme_official.dll`、六个 MinGW 运行时、`Uninstall.exe`
+- 数据目录 `Rime-Next\`：eassy / icon / opencc / plugin / schema / sound / theme 七个分类，75 个文件
+- TIP 注册：`HKLM\SOFTWARE\Classes\CLSID\{16A7AEA9-9EE6-4540-8020-E384C0489BB1}\InprocServer32`
+  → `C:\Program Files\Weasel-Next\Weasel-Next.dll`，CTF TIP 项也在
+- 卸载项：小狼毫Next · 0.18.0
+- 三个设置对话框都能稳定打开
+
+**注意**：改了 broker 可执行文件名的尝试**已回退**（原因见第五节），所以包和源码都还是 `weasel-broker.exe`。
+
+---
+
+## 三、已经能用的
+
+**打字链路通了**（用户实测）。TIP 已从 `weasel_tip.dll` 改名为 `Weasel-Next.dll` 并生效。
+
+**`/style` 界面风格设定**——唯一数据完整的功能。36 套配色（碧水／Aqua、安卓／Android、
+青天／Azure…）、自绘颜色列表（带色块）、切换即写
+`%APPDATA%\Rime-Next\weasel.custom.yaml` 的 `patch: style/color_scheme`。
+数据层在 `style\src\settings.rs`，22 个单元测试全过。
+
+**`/switcher` 方案选单设定**——**本轮修好**（提交 `8f7fb30`）。12 个方案能进列表、
+前 8 个带勾。根因见第四节第 1 条。
+
+**`/dict` 用户词典管理**——只有官方模板，四个按钮（输出/合入词典快照、导出/导入文本码表）都没接逻辑。
+
+**部署与分类**——`--deploy` 跑通（9 success 0 failure），产物按方案归入
+`build\<方案>\`，读取端与写入端规则一致。librime 有两处补丁，导出在
+`librime\weasel-next.patch`。
+
+---
+
+## 四、关键教训（这几条最值钱，别再重新踩）
+
+### 1. Rust 的 `match` 分支里，未定义的常量会被当成绑定变量
+
+`switcher_dialog.rs` 里 `WM_INITDIALOG_` 这个常量**没定义**，于是
+
+```rust
+match message {
+    WM_INITDIALOG_ => { /* 填充列表 */ }
+    WM_NOTIFY_ => { ... }
+}
+```
+
+第一个分支变成**匹配一切的模式**，填充代码在**任意消息**下都会执行——包括 ListView 正在处理
+`WM_NOTIFY` 的时候，控件于是拒绝插行，`LVM_INSERTITEMW` 恒返回 -1。
+
+**线索一直在编译警告里**：`variable 'WM_CLOSE_' should have a snake case name`——Rust 在说
+"这是变量不是常量"。当时把它当无关警告忽略了，白查了很久。
+
+修法：补齐常量 + 用 `PostMessageW` 把填充推迟到对话框就绪之后（补了 `PostMessageW` 绑定）。
+
+### 2. `embed_resource` 的返回值不能丢
+
+之前写 `let _ = embed_resource::compile(...)`，把 `.rc` 编译错误**吞掉了**：构建显示成功，
+运行时三个对话框全部创建失败（`DialogBoxParamW` 返回 -1）。改成 `expect` 后立刻暴露
+`windres failed to compile`（`.rc` 里缺 `#define IDC_SCHEMA_LIST` 等）。
+
+### 3. 批量注释代码会留下悬空判断
+
+把 x86 的 `regsvr32` 那行注释掉后，**紧跟的判断没删**：`StrCmp $0 0 0 install_failed`
+检查的 `$0` 是上一条命令的残留值，于是必然跳进失败分支，弹出"安装或 TIP 注册失败"
+（`weasel-rs.nsi:531`）。卸载段有同样的 bug，会导致卸载也失败。
+
+### 4. 本机自测通不代表外网通
+
+起 HTTP 服务分享文件时，本机 curl 拿环回地址一律 200，但外部（Linux 机器）连不上：
+0 字节、0 速度、**curl 不报错**——典型的被上游静默丢包。校园网很可能封了入站。
+
+### 5. 两个输入法并存
+
+机器上同时装着官方小狼毫 0.17.4（`C:\Program Files\Rime\weasel-0.17.4\WeaselServer.exe`，
+托盘图标一直在）和我们的。**右键很容易点成官方的**——官方菜单也有设置/重新部署/重启/退出，
+打开的是官方 WeaselDeployer，与我们代码无关。用户的"右键还是旧的黑色界面"就是这个原因。
+
+区分办法：看进程路径，或从程序文件夹直接跑
+`weasel-settings.exe /style`（`/switcher`、`/dict` 同理）。
+
+### 6. DPI 不感知的进程截图会抓错区域
+
+`GetWindowRect` 返回逻辑坐标、`CopyFromScreen` 用物理像素，两者对不上，抓到的是桌面。
+要在捕获进程里先设置 DPI 感知。
+
+---
+
+## 五、没做完的（按优先级）
+
+### 1. 候选窗看不见（最影响使用）
+
+`weasel-renderer.exe` 启动后约 0.3 秒打印 `UI event channel closed` 然后**退出码 1** 退出，
+broker 的监控每 16～30 秒重新拉起一次，一直循环。所以窗口没机会画出来。
+
+日志在 `%LOCALAPPDATA%\Rime-Next\Logs\renderer.*.log` 与 `broker.*.log`。
+
+下一步：查通道是谁先关的。那句话是"给 TIP 传 UI 事件的通道被关闭了"，**多半是 TIP 在一次
+按键结束后就把通道收了**，不是渲染器自己挂。要读 `renderer\src\ui_runtime.rs` 和 TIP 侧的通道管理。
+
+### 2. broker 改名成 `Weasel-Next-Server.exe`（用户要求，未完成，已回退）
+
+为了和官方 `WeaselServer.exe` 区分。做到一半卡在编译：
+
+```
+error: invalid instruction `cargo:rustc-link-arg-bin` from build script of `weasel-broker`
+```
+
+该指令由 `build_support\manifest.rs` 发出（`cargo:rustc-link-arg-bin={binary}=/MANIFEST:EMBED`
+等三行），`{binary}` 由 `broker\build.rs` 传入。已经把传入名改成新名字仍被拒绝；
+`cargo clean -p weasel-broker` 报 `Removed 0 files`（bin 目标换了名，包名匹配不到）。
+
+下一步：先 `cargo metadata` 确认 `[[bin]] name = "Weasel-Next-Server"` 之后 cargo 认的
+target 名到底是什么（连字符可能被规范化），再改 `manifest.rs` 的调用。
+
+改动清单（回退前的做法，参考）：`broker\Cargo.toml` 加 `[[bin]]`（**包名保持
+`weasel-broker` 不动**，免得破坏 `build_support\version.rs` 里按包名查版本信息的映射）；
+全局替换 `weasel-broker.exe` 27 处；按进程名杀进程的 6 处；日志标签 14 处。
+
+### 3. `/dict` 的四个功能
+
+官方走 levers API，我们没有。四件事：输出词典快照、合入词典快照、导出文本码表、导入文本码表。
+
+### 4. 语言栏右键菜单
+
+官方是 `LanguageBar.cpp` 432 行实现的 `ITfLangBarItemButton`（`InitMenu`/`OnMenuSelect`/
+`OnClick`）。**我们的 TIP 里这个实现是零**（`tip\src\*.rs` 搜 `LangBar`、`TF_LBI` 命中 0 处），
+所以不是菜单坏了，是根本没有语言栏按钮对象。
+
+官方菜单 12 项及命令 ID：Settings 40008、Dictionary manager 40010、User data sync 40012、
+User folder 40007、Program folder 40006、Log folder 40016、Help 40009、Forum 40004、
+Check for updates 40003、Deploy 40002、Restart 40015、Exit 40001。
+
+我们 broker 的托盘菜单（`common\src\command_menu.rs` 的 `ITEMS`）目前只有 12 项，缺词典管理与方案选单。
+**做完必须重启才能验证**（TIP 被 explorer 加载）。
+
+### 5. 一次重启
+
+`PendingFileRenameOperations` 里还有旧 TIP 的退休任务与 `.old.nsh*.tmp` 残留
+（那两个文件被 explorer 占用，删不掉）。重启后才会清理干净。
+
+---
+
+## 六、待提交
+
+工作树**干净**（最后一次提交 `afd6efd`，共 306 个提交）。本次会话的改动都已落盘：
+
+- `8f7fb30` 修 `/switcher` 列表插不进行 + 版本号 0.18.0 + TIP 改名 Weasel-Next.dll
+- `afd6efd` 托盘菜单的设置项带 `/style` 参数（打开官方界面而非旧界面）
+- `0fd6d5a` 只保留 64 位，清掉 installer 里全部 x86/x64 残留
+- `bea2655` 修资源编译静默失败（根因）
+- 其它：`32e4980` 部署产物按方案分类、`c3ff2a1` librime `relocate_target` 归位、
+  `7958d38`/`aee16c2` 发行测试说明等
+
+未跟踪：`tool\aria2-next\`（aria2-next 3.0.3 Windows x64，18,225,664 字节，
+SHA256 `b2f2f7a9d6f120a1dccd2d632df60e4d2d54b3c67ac822bd3fbfeb98d2be9465`）。
+要不要进仓库未定；按 `tool\7z\` 的先例应当作构建输入、由安装包负责分发到程序文件夹。
+
+---
+
+## 七、实用命令
+
+```powershell
+# 编译全部
+cd C:\code\Weasel-Next; $env:LIBCLANG_PATH='C:\Program Files\llvm-mingw\bin'; cargo build --release
+
+# 只编设置程序（约 2.5 分钟）
+cargo build --release -p weasel-settings
+
+# 打包
+$env:Path = "C:\Program Files (x86)\NSIS;" + $env:Path
+powershell -File script\build-installer.ps1
+
+# 提权运行（sudo 是强制新窗口模式，输出要写文件再读）
+Start-Process 'C:\WINDOWS\system32\sudo.exe' -ArgumentList '"C:\path\to\script.cmd"' -Wait
+
+# 三个官方对话框
+& 'C:\Program Files\Weasel-Next\weasel-settings.exe' /style     # 界面风格设定
+& 'C:\Program Files\Weasel-Next\weasel-settings.exe' /switcher  # 方案选单设定
+& 'C:\Program Files\Weasel-Next\weasel-settings.exe' /dict      # 用户词典管理
+
+# librime 增量重编（约 1 分钟）
+powershell -File librime\build-librime-mingw.ps1
+# 产物 C:\Code\librime\build-mingw\bin\librime.dll → 复制到程序文件夹（栈要先停）
+
+# 日志
+%LOCALAPPDATA%\Rime-Next\Logs\{broker,server,renderer,deploy}.<日期>.log
+```
