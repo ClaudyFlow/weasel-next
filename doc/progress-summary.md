@@ -248,3 +248,53 @@ Get-ChildItem build_support,broker -Recurse -File -Filter *.rs |
 
 **当前状态**：改名已再次回退，全量编译通过（`Finished release profile`），
 工作树干净，安装包仍是 `weasel-broker.exe` 那一版。
+---
+
+## 九、改名方案定稿（第三次，正确姿势）
+
+### 根因（终于查清）
+
+`build_support\toolchain.rs` 只有一行：`CARGO_CFG_TARGET_ENV == "msvc"`。
+我们的目标是 `x86_64-pc-windows-gnu`，该值为 `"gnu"`，所以
+**`manifest.rs` 里那三条 `rustc-link-arg-bin` 在我们的构建里根本不发出**。
+
+全仓库只有两处发出点：`manifest.rs`（MSVC 专用分支）与 `setting\build.rs`
+（硬编码 `weasel-settings`，与它自己的 bin 名一致，所以它一直没事）。
+
+**结论：`weasel-broker` 报的无效指令来自 `embed-resource`**——它是唯一的外部构建依赖，
+发的 `cargo:rustc-link-arg-bin=` 用**包名**而非 `[[bin]]` 的名字。所以只改 bin 名、
+保留包名就会不一致，cargo 拒绝整个构建脚本的输出。前两次失败都是这个原因。
+
+### 正确做法：**构建后改名，不碰 Cargo**
+
+TIP 改名（`weasel_tip.dll` → `Weasel-Next.dll`）用的就是这个办法，一次就成。
+四个 exe 照做：
+
+1. **不动任何 `Cargo.toml`**（包名、bin 名全保持）——`embed-resource` 与
+   `setting\build.rs` 的硬编码名字都继续有效，坑不存在。
+2. `script\build-installer.ps1` 里加复制步骤（照 TIP 那句 `Copy-Item` 的写法）：
+   `target\release\weasel-broker.exe` → `Weasel-Next-Server.exe`，其余同理。
+3. 必需文件清单改用新名字。
+4. `.nsi` 里所有 `ManagedFile` / 快捷方式 / `Delete` / `DisplayIcon` 改用新名字。
+5. **运行时按名字找进程与拉子进程的地方**（这是最容易漏的）：
+   `broker\src\service_supervisor.rs`、`operations.rs`、`installer.rs`、
+   `installer\processes.nsh`、`script\deploy-install.ps1`、`deploy-and-normalize.ps1`
+   里那些 `Get-Process -Name 'weasel-...'` 与 spwan 用的文件名。
+
+### 名字（待用户最终确认）
+
+| 现在 | 改成 |
+| --- | --- |
+| `weasel-broker.exe` | `Weasel-Next-Server.exe`（用户已选） |
+| `weasel-server.exe` | `Weasel-Next-Engine.exe`（待确认；它是 librime 引擎宿主） |
+| `weasel-renderer.exe` | `Weasel-Next-Renderer.exe` |
+| `weasel-settings.exe` | `Weasel-Next-Settings.exe` |
+| `weasel_tip.dll` | `Weasel-Next.dll` ✓ 已完成 |
+
+注意官方 `WeaselServer.exe` 是**服务宿主**，职责上对应我们的 broker；名字怎么分由用户定，
+但**不能出现两个同义的名字**（否则又和官方混淆）。
+
+### 验证顺序
+
+编译（必须过）→ 打包（确认包内是新名字、旧名字 0 条）→ 提权静默安装 → 检查程序文件夹
+与注册表 → 三个对话框各开一次 → 打字确认候选窗与上屏。
