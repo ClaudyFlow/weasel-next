@@ -353,3 +353,70 @@ The package Weasel-Next-Engine v0.18.0 does not have a bin target with the name 
 
 **下一步执行顺序**：改包名（方案 1）→ 同步上面六类引用 → 编译（必须过）→
 打包 → 确认包内是新名字且旧名字 0 条 → 提权静默安装 → 三个对话框各开一次 → 打字验证。
+---
+
+## 十一、当前三个未修缺陷（2026-10-15 晚）
+
+### 1. 方案勾选只保存一个（用户报"还是不记录方案"）
+
+`%APPDATA%\Rime-Next\default.custom.yaml` 实际内容只有一项：
+
+```yaml
+patch:
+  schema_list:
+    - schema: luna_pinyin
+```
+
+出厂 `default.yaml` 的 `schema_list` 有 8 项。**文件写成功了，是读勾选状态只读到一个。**
+
+根因：`switcher_dialog.rs` 在 `IDOK` 时才用 `LVM_GETITEMSTATE` 逐个问控件要勾选状态，
+那是**把结果编码在返回值里的跨消息读取**，12 行里只有第一行取到有效值，其余被判为"未勾选"。
+
+**修法**：不要在最后一刻去问控件，而在**列表内容变化时就维护一份内存状态**
+（插入时初始化、`LVN_ITEMCHANGED` 里更新），`IDOK` 时直接写这份内存数据。
+
+### 2. `/style` 右侧的「样式设置」列表是空的（用户报"皮肤设置不全"）
+
+官方 `IDD_STYLE_SETTING` 有**两个列表**：
+
+- 左 `IDC_COLOR_LIST`（7,43,190,160）——当前配色的颜色键，配 `IDC_COLOR_VALUE` + 「修改」
+- 右 `IDC_STYLE_LIST`（205,20,285,183）——**样式键**（字体、字号、layout/... 等），
+  配 `IDC_STYLE_VALUE_COMBO` / `IDC_STYLE_VALUE_EDIT` + 「设置」
+
+我们的 `dialogs.rs` **只填了左边**（`COLOR_KEYS`），右侧 `IDC_STYLE_LIST` 从未填过任何内容，
+所以打开是空白。官方在 `UIStyleSettings.h` 里有一张样式键表，要照着搬过来、
+按当前 `weasel.yaml` 的 `style:` 段取值，并用 `WM_MEASUREITEM`/`WM_DRAWITEM` 自绘。
+
+### 3. 候选窗/打字（最影响使用）
+
+`Weasel-Next-Renderer.exe` 启动约 1 秒后打印 `UI event channel closed`，**退出码 1** 退出，
+broker 的监控每 20 秒重新拉起一次，一直循环：
+
+```
+13:05:35.85  starting (mode=Live)
+13:05:35.85  using renderer theme official
+13:05:36.86  UI event channel closed     ← 退出
+13:05:52.92  starting (mode=Live)        ← 被重新拉起
+```
+
+"通道断了"是**另一端关的**，不是自己崩。多半是 **TIP 在一次按键结束后就把通道收了**。
+这是"打不了字"和"看不见候选窗"的共同根因。
+
+排查入口：`renderer\src\ui_runtime.rs` 与 TIP 侧的通道管理。
+
+### 4. 附带缺陷
+
+引擎往**程序文件夹**写生成物被拒（普通用户对 `Program Files` 没有写权限）：
+
+```
+WARN Weasel-Next-Engine::librime: eassy: 写出 C:\Program Files\Weasel-Next\Rime-Next\eassy\essay.txt 失败: 拒绝访问。(os error 5)
+```
+
+`essay.txt` 是部署时由 `eassy.toml` 归并生成的运行期产物，应改写到用户目录。
+
+### 状态
+
+- 设置程序默认入口：`/switcher`（先选方案），按「中」后串联打开 `/style`（已实现并安装）
+- 「中」按钮位置：已挪到右下角（实测相对左=527、右距=23，对话框 650 宽）✓
+- 设置快捷方式：开始菜单「小狼毫Next」下 5 条 + 算法服务 + 卸载 ✓
+- `/legacy` 进旧 Slint 界面（备用）✓

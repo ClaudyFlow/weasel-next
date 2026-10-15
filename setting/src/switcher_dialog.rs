@@ -26,8 +26,6 @@ const IDC_SCHEMA_LIST: i32 = 1000;
 const IDC_SCHEMA_DESCRIPTION: i32 = 1209;
 const IDC_HOTKEYS: i32 = 1003;
 const IDC_GET_SCHEMATA: i32 = 1211;
-/// 「选择皮肤...」按钮：选完方案接着进界面风格设定。
-const IDC_PICK_SKIN: i32 = 1212;
 
 // ---- ListView 的消息与常量（commctrl.h，值固定）--------------------------
 const LVM_FIRST: u32 = 0x1000;
@@ -185,6 +183,11 @@ pub fn show(shared: &Path, user: &Path) -> Result<(), String> {
     if result == -1 {
         Err("对话框创建失败".into())
     } else {
+        // 按「中」确认方案之后，接着打开官方界面风格设定 —— 先选方案，再选皮肤，
+        // 一个流程走完（同进程顺序调用）。
+        if result == IDOK as isize {
+            crate::dialogs::show_style(shared, user)?;
+        }
         Ok(())
     }
 }
