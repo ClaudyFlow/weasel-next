@@ -360,16 +360,31 @@ unsafe extern "system" fn style_proc(
                                 unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_VALUE_COMBO, CB_ADDSTRING, WPARAM(0), LPARAM(text.as_ptr() as isize)) };
                             }
                         }
-                        // 候选已填好，立即展开 —— 否则用户看到的是一片空白，得再点一次箭头。
-                        unsafe {
-                            SendDlgItemMessageW(
-                                hwnd,
-                                IDC_STYLE_VALUE_COMBO,
-                                CB_SHOWDROPDOWN,
-                                WPARAM(1),
-                                LPARAM(0),
-                            )
-                        };
+                        // 把下拉框选中到**当前值**（官方即如此：显示「居中」这类中文标签）。
+                        // 值来自用户补丁；布尔键的 true/false 对应「开 / 关」两项。
+                        if let Some(key_ref) = crate::style_keys::KEYS.get(index as usize) {
+                            let current = patched_style_value(key_ref.key);
+                            let target = match current.as_deref() {
+                                Some("true") => Some(0),
+                                Some("false") => Some(1),
+                                Some(value) => key_ref
+                                    .choices
+                                    .iter()
+                                    .position(|choice| choice.value == value),
+                                None => None,
+                            };
+                            if let Some(sel) = target {
+                                unsafe {
+                                    SendDlgItemMessageW(
+                                        hwnd,
+                                        IDC_STYLE_VALUE_COMBO,
+                                        CB_SETCURSEL,
+                                        WPARAM(sel),
+                                        LPARAM(0),
+                                    )
+                                };
+                            }
+                        }
                     }
                 }
                 return 1;
