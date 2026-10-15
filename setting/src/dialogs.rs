@@ -79,6 +79,22 @@ const IDC_SET_STYLE: i32 = 1009;
 /// `weasel.custom.yaml` 用的是**斜杠键**（`style/color_scheme: aqua`），
 /// 与 `weasel.yaml` 的嵌套写法不同，所以这里按单层 map 直接查 —— 官方在
 /// `UIStyleSettingsDialog` 里也是这么取的（`settings_->GetStyleValue(info, &current)`）。
+/// 文件里没写、但官方有内置默认值的样式键。
+///
+/// 官方 `UIStyleSettingsDialog` 读的是**内存里的设置对象**（`settings_->GetStyleValue`），
+/// 那个对象带着内置默认值，所以文件里没写的键它照样有值；我们读文件，
+/// 出厂 `weasel.yaml` 没写这几项就会空着 —— 这里按官方默认补齐。
+fn builtin_style_default(key: &str) -> Option<&'static str> {
+    match key {
+        "style/enhanced_position" => Some("false"),
+        "style/vertical_text_left_to_right" => Some("false"),
+        "style/vertical_right_to_left" => Some("false"),
+        // lib.rs 里 Layout::default 的 border_width 是 3（与 border 同义）。
+        "style/layout/border" => Some("3"),
+        _ => None,
+    }
+}
+
 fn style_value(shared: &std::path::Path, user: &std::path::Path, key: &str) -> Option<String> {
     // 1) 用户补丁：weasel.custom.yaml 里是**斜杠键**（style/color_scheme: aqua），单层 map 直接查。
     if let Ok(text) = std::fs::read_to_string(user.join("weasel.custom.yaml")) {
@@ -97,7 +113,9 @@ fn style_value(shared: &std::path::Path, user: &std::path::Path, key: &str) -> O
     for part in key.split('/') {
         node = node.get(part)?;
     }
-    node.as_str().map(|value| value.to_string())
+    node.as_str()
+        .map(|value| value.to_string())
+        .or_else(|| builtin_style_default(key).map(|value| value.to_string()))
 }
 
 
