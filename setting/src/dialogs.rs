@@ -487,7 +487,7 @@ unsafe extern "system" fn style_proc(
         WM_MEASUREITEM_ => {
             let item = lparam.0 as *mut MEASUREITEMSTRUCT;
             if !item.is_null() && unsafe { (*item).CtlID } == IDC_COLOR_LIST as u32 || unsafe { (*item).CtlID } == IDC_STYLE_LIST as u32 {
-                unsafe { (*item).itemHeight = 22 };
+                unsafe { (*item).itemHeight = 30 };
                 return 1;
             }
             0
