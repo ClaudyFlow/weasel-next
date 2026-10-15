@@ -110,12 +110,24 @@ fn style_value(shared: &std::path::Path, user: &std::path::Path, key: &str) -> O
     let base = std::fs::read_to_string(shared.join("weasel.yaml")).ok()?;
     let yaml = weasel_style::parse_yaml(&base).ok()?;
     let mut node = &yaml;
+    let mut resolved = true;
     for part in key.split('/') {
-        node = node.get(part)?;
+        // 注意不能用 ? —— 路径缺失时它会让整个函数返回 None，
+        // 后面的内置默认值兜底就永远跑不到（enhanced_position 就是这么空着的）。
+        match node.get(part) {
+            Some(next) => node = next,
+            None => {
+                resolved = false;
+                break;
+            }
+        }
     }
-    node.as_str()
-        .map(|value| value.to_string())
-        .or_else(|| builtin_style_default(key).map(|value| value.to_string()))
+    if resolved {
+        if let Some(value) = node.as_str() {
+            return Some(value.to_string());
+        }
+    }
+    builtin_style_default(key).map(|value| value.to_string())
 }
 
 
