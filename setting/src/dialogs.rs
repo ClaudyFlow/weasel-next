@@ -329,9 +329,17 @@ unsafe extern "system" fn style_proc(
                 if index >= 0 {
                     if let Some(key) = crate::style_keys::KEYS.get(index as usize) {
                         unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_VALUE_COMBO, CB_RESETCONTENT, WPARAM(0), LPARAM(0)) };
-                        for choice in key.choices {
-                            let text = wide(choice.zh_hans);
-                            unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_VALUE_COMBO, CB_ADDSTRING, WPARAM(0), LPARAM(text.as_ptr() as isize)) };
+                        if key.ty == crate::style_keys::StyleValueType::Boolean {
+                            // 布尔键：官方用勾选框，这里给「开 / 关」两项，写回 true / false。
+                            for label in ["开", "关"] {
+                                let text = wide(label);
+                                unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_VALUE_COMBO, CB_ADDSTRING, WPARAM(0), LPARAM(text.as_ptr() as isize)) };
+                            }
+                        } else {
+                            for choice in key.choices {
+                                let text = wide(choice.zh_hans);
+                                unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_VALUE_COMBO, CB_ADDSTRING, WPARAM(0), LPARAM(text.as_ptr() as isize)) };
+                            }
                         }
                     }
                 }
@@ -343,9 +351,14 @@ unsafe extern "system" fn style_proc(
                 let key_index = unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_LIST, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
                 if sel >= 0 && key_index >= 0 {
                     if let Some(key) = crate::style_keys::KEYS.get(key_index as usize) {
-                        if let Some(choice) = key.choices.get(sel as usize) {
+                        let value = if key.ty == crate::style_keys::StyleValueType::Boolean {
+                            if sel == 0 { Some("true") } else { Some("false") }
+                        } else {
+                            key.choices.get(sel as usize).map(|choice| choice.value)
+                        };
+                        if let Some(value) = value {
                             if let Some(path) = weasel_style::settings::user_custom_path() {
-                                let _ = weasel_style::settings::write_patch(&path, key.key, choice.value);
+                                let _ = weasel_style::settings::write_patch(&path, key.key, value);
                             }
                         }
                     }
