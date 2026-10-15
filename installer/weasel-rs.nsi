@@ -456,6 +456,13 @@ Section "-注册与安装信息" SEC_REGISTER
 
   CreateDirectory "$SMPROGRAMS\小狼毫Next"
   Delete "$SMPROGRAMS\小狼毫Next\小狼毫Next.lnk"
+  ; 设置入口：官方那几个对话框各一个快捷方式，命名照官方（【小狼毫】→【小狼毫Next】）。
+  ; 不带参数会打开旧的 Slint 界面，所以每个都必须带开关。
+  CreateShortcut "$SMPROGRAMS\小狼毫Next\【小狼毫Next】界面风格设定.lnk" "$INSTDIR\Weasel-Next-Setting.exe" "/style"
+  CreateShortcut "$SMPROGRAMS\小狼毫Next\【小狼毫Next】方案选单设定.lnk" "$INSTDIR\Weasel-Next-Setting.exe" "/switcher"
+  CreateShortcut "$SMPROGRAMS\小狼毫Next\【小狼毫Next】用户词典管理.lnk" "$INSTDIR\Weasel-Next-Setting.exe" "/dict"
+  CreateShortcut "$SMPROGRAMS\小狼毫Next\【小狼毫Next】用户文件夹.lnk" "$INSTDIR"
+  CreateShortcut "$SMPROGRAMS\小狼毫Next\【小狼毫Next】程序文件夹.lnk" "$INSTDIR"
   CreateShortcut "$SMPROGRAMS\小狼毫Next\卸载.lnk" "$INSTDIR\Uninstall.exe"
   ${If} ${Errors}
     !insertmacro InstallLog "WARN: 无法创建卸载快捷方式"
@@ -597,6 +604,11 @@ Section "Uninstall"
   ${EndIf}
   Delete "$SMPROGRAMS\小狼毫Next\小狼毫Next.lnk"
   Delete "$SMPROGRAMS\小狼毫Next\小狼毫Next算法服务.lnk"
+  Delete "$SMPROGRAMS\小狼毫Next\【小狼毫Next】界面风格设定.lnk"
+  Delete "$SMPROGRAMS\小狼毫Next\【小狼毫Next】方案选单设定.lnk"
+  Delete "$SMPROGRAMS\小狼毫Next\【小狼毫Next】用户词典管理.lnk"
+  Delete "$SMPROGRAMS\小狼毫Next\【小狼毫Next】用户文件夹.lnk"
+  Delete "$SMPROGRAMS\小狼毫Next\【小狼毫Next】程序文件夹.lnk"
   Delete "$SMPROGRAMS\小狼毫Next\卸载.lnk"
   RMDir "$SMPROGRAMS\小狼毫Next"
   !insertmacro RemoveProgramFiles
