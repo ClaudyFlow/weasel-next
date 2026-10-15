@@ -42,6 +42,15 @@ fn target(command: u32) -> Result<HSTRING, String> {
     }
 }
 
+/// 设置程序的命令行参数：官方那几个对话框各自需要一个开关。
+/// 不带参数会打开旧的设置界面，这正是"右键出来不是官方设置"的原因。
+fn parameters(command: u32) -> Option<HSTRING> {
+    match command {
+        SETTINGS => Some(HSTRING::from("/style")),
+        _ => None,
+    }
+}
+
 /// 在专用线程中打开菜单目标，并将启动线程或 Shell 失败显示为错误对话框。
 ///
 /// 工作线程初始化单线程 COM apartment，完成 Shell 调用后再反初始化；本函数不等待打开操作结束。
