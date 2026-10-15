@@ -6,7 +6,7 @@ pub fn embed() {
         "weasel-server" => ("Weasel-Next Rime Server", "weasel-server.exe", false),
         "weasel-renderer" => ("Weasel-Next Candidate Renderer", "weasel-renderer.exe", false),
         "weasel-settings" => ("Weasel-Next Settings", "weasel-settings.exe", false),
-        "weasel-tip" => ("Weasel-Next Text Input Processor", "weasel_tip.dll", true),
+        "weasel-tip" => ("Weasel-Next Text Input Processor", "Weasel-Next.dll", true),
         "weasel-theme-official" => ("Weasel-Next official Theme", "weasel_theme_official.dll", true),
         _ => panic!("missing Windows file description for {package}"),
     };

@@ -1,4 +1,4 @@
-# replace-tip-dll.ps1 —— 安排在下一次重启时替换被占用的 weasel_tip.dll
+# replace-tip-dll.ps1 —— 安排在下一次重启时替换被占用的 Weasel-Next.dll
 #
 # 背景：TIP 的 DLL 由 explorer.exe、SearchHost.exe 以及所有正在输入的应用加载，
 # 运行期间无法替换（共享冲突）。安装程序只能保留旧文件，所以我们用 Windows 自带的
@@ -6,17 +6,17 @@
 #
 # 用法（**必须以管理员身份运行**，因为要写 HKLM）：
 #   powershell -ExecutionPolicy Bypass -File script\replace-tip-dll.ps1
-#   powershell -ExecutionPolicy Bypass -File script\replace-tip-dll.ps1 -Source <新的 weasel_tip.dll>
+#   powershell -ExecutionPolicy Bypass -File script\replace-tip-dll.ps1 -Source <新的 Weasel-Next.dll>
 #
 # 执行后重启一次，文件即在系统启动早期被替换。
 
 [CmdletBinding()]
 param(
     # 要装进去的新 DLL。默认取编译产物里的那份。
-    [string] $Source = (Join-Path (Split-Path -Parent $PSScriptRoot) 'target\release\weasel_tip.dll'),
+    [string] $Source = (Join-Path (Split-Path -Parent $PSScriptRoot) 'target\release\Weasel-Next.dll'),
 
     # 目标位置。默认是程序文件夹（约定：只能在这里运行）。
-    [string] $Target = 'C:\Program Files\Weasel-Next\weasel_tip.dll',
+    [string] $Target = 'C:\Program Files\Weasel-Next\Weasel-Next.dll',
 
     # 只打印将要写入的内容，不实际写注册表。
     [switch] $WhatIfOnly
@@ -33,10 +33,10 @@ function Assert-Admin {
 }
 
 if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
-    throw "找不到新的 weasel_tip.dll：$Source"
+    throw "找不到新的 Weasel-Next.dll：$Source"
 }
 if (-not (Test-Path -LiteralPath $Target -PathType Leaf)) {
-    throw "找不到已安装的 weasel_tip.dll：$Target"
+    throw "找不到已安装的 Weasel-Next.dll：$Target"
 }
 
 $sourceHash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash
@@ -83,6 +83,6 @@ try {
 } finally {
     $baseKey.Dispose()
 }
-Write-Host '✓ 已登记。请重启一次，之后 weasel_tip.dll 即为新版本。'
+Write-Host '✓ 已登记。请重启一次，之后 Weasel-Next.dll 即为新版本。'
 Write-Host '  重启后可用这条命令核对哈希：'
 Write-Host "  (Get-FileHash '$Target').Hash"

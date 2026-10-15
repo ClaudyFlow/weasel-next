@@ -165,7 +165,7 @@ Function .onInit
   ReadRegStr $1 HKCR "CLSID\{16A7AEA9-9EE6-4540-8020-E384C0489BB1}\InprocServer32" ""
   StrCpy $PreviousTip "$1"
   ${If} $1 != ""
-  ${AndIf} $1 != "$INSTDIR\weasel_tip.dll"
+  ${AndIf} $1 != "$INSTDIR\Weasel-Next.dll"
     Goto foreign_registration
   ${EndIf}
   ${If} $IsUpgrade == 0
@@ -302,6 +302,7 @@ FunctionEnd
   Delete /REBOOTOK "$INSTDIR\weasel-renderer.exe"
   Delete /REBOOTOK "$INSTDIR\weasel-settings.exe"
   Delete /REBOOTOK "$INSTDIR\rime.dll"
+  ; weasel_tip.dll 是旧名字，升级时退休掉（新名字是 Weasel-Next.dll）
   Delete /REBOOTOK "$INSTDIR\weasel_tip.dll"
   Delete /REBOOTOK "$INSTDIR\styles-LICENSE.txt"
   Delete /REBOOTOK "$INSTDIR\LICENSE"
@@ -334,7 +335,7 @@ Section "Weasel-Next" SEC_MAIN
   !insertmacro ManagedFile "${PROJECT_ROOT}\weasel.json" "weasel.json"
   !insertmacro ManagedFile "${PROJECT_ROOT}\THIRD-PARTY-LICENSES.txt" "THIRD-PARTY-LICENSES.txt"
   !insertmacro ManagedFile "${PROJECT_ROOT}\THIRD-PARTY-GPL-3.0.txt" "THIRD-PARTY-GPL-3.0.txt"
-  !insertmacro ManagedFile "${RELEASE_DIR}\weasel_tip.dll" "weasel_tip.dll"
+  !insertmacro ManagedFile "${RELEASE_DIR}\Weasel-Next.dll" "Weasel-Next.dll"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装 Weasel-Next 文件，请检查磁盘空间和文件权限。" /SD IDOK
     SetErrorLevel 1
@@ -429,7 +430,7 @@ Section "-注册与安装信息" SEC_REGISTER
   ; RegDLL 是 32 位的，这里用系统原生的 regsvr32 注册这个 64 位 DLL。
   SetOutPath "$INSTDIR"
   ClearErrors
-  ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\weasel_tip.dll"' $0
+  ExecWait '"$SYSDIR\regsvr32.exe" /s "$INSTDIR\Weasel-Next.dll"' $0
   ${If} ${Errors}
     !insertmacro InstallLog "ERROR: 无法启动 TIP 注册程序"
     Goto install_failed
@@ -585,9 +586,9 @@ Section "Uninstall"
   SetOutPath "$TEMP"
   Call un.StopApplicationProcesses
   ClearErrors
-  ; 只有一个 64 位 TIP，路径就是 $INSTDIR\weasel_tip.dll。
+  ; 只有一个 64 位 TIP，路径就是 $INSTDIR\Weasel-Next.dll。
   ClearErrors
-  ExecWait '"$SYSDIR\regsvr32.exe" /s /u "$INSTDIR\weasel_tip.dll"' $0
+  ExecWait '"$SYSDIR\regsvr32.exe" /s /u "$INSTDIR\Weasel-Next.dll"' $0
   ${If} ${Errors}
     DetailPrint "提示：无法启动 TIP 注销程序，将继续卸载。"
   ${ElseIf} $0 != 0

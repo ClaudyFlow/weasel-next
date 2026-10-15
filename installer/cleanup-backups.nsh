@@ -45,8 +45,10 @@ Function CleanupDllBackupFamily
 FunctionEnd
 
 Function CleanupOldDllBackups
-  !insertmacro CleanupDllBackups "$INSTDIR" "weasel_tip.dll"
+  !insertmacro CleanupDllBackups "$INSTDIR" "Weasel-Next.dll"
+!insertmacro CleanupDllBackups "$INSTDIR" "weasel_tip.dll"
   !insertmacro CleanupDllBackups "$INSTDIR" "rime.dll"
-  !insertmacro CleanupDllBackups "$INSTDIR" "weasel_tip.dll"
+  !insertmacro CleanupDllBackups "$INSTDIR" "Weasel-Next.dll"
+!insertmacro CleanupDllBackups "$INSTDIR" "weasel_tip.dll"
   !insertmacro CleanupDllBackups "$INSTDIR" "rime.dll"
   FunctionEnd

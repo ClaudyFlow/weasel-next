@@ -20,13 +20,17 @@ try {
     }
     $version = $versionMatch.Groups[1].Value
 
+    # TIP 对外文件名是 Weasel-Next.dll；cargo 的 crate 名是 weasel-tip，产出 weasel_tip.dll，
+    # 这里复制一份成对外名字，安装程序与注册表都用这个名字。
+    Copy-Item 'target\release\weasel_tip.dll' 'target\release\Weasel-Next.dll' -Force
+
     $requiredFiles = @(
         'weasel.json',
         'target\release\weasel-broker.exe',
         'target\release\weasel-server.exe',
         'target\release\weasel-renderer.exe',
         'target\release\weasel-settings.exe',
-        'target\release\weasel_tip.dll',
+        'target\release\Weasel-Next.dll',
         'artifact\smoke\rime.dll',
         'Rime-Next\default.yaml',
                 'target\release\weasel_broker.pdb',
@@ -34,7 +38,6 @@ try {
         'target\release\weasel_renderer.pdb',
         'target\release\weasel_settings.pdb',
         'target\release\weasel_tip.pdb',
-        'target\i686-pc-windows-msvc\release\weasel_tip.pdb',
         'Rime-Next\icon\weasel.ico',
         'server\src\styles-LICENSE.txt',
         'LICENSE',
@@ -53,6 +56,10 @@ try {
         $requiredFiles += "target\release\themes\weasel_theme_$theme.settings.json"
     }
     # ★ GNU 工具链不产生 .pdb（只允许 GNU ✓），无条件剔除 pdb 依赖
+    # TIP 对外文件名是 Weasel-Next.dll；cargo 的 crate 名是 weasel-tip，产出 weasel_tip.dll，
+    # 这里复制一份成对外名字，安装程序与注册表都用这个名字。
+    Copy-Item 'target\release\weasel_tip.dll' 'target\release\Weasel-Next.dll' -Force
+
     $requiredFiles = @($requiredFiles | Where-Object { $_ -notlike '*.pdb' })
     if ($Mini) {
         $requiredFiles += 'script\download-runtime.ps1'

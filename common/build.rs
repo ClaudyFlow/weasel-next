@@ -39,6 +39,7 @@ fn main() {
             "Windows.Win32.LB_ADDSTRING",
             "Windows.Win32.LB_RESETCONTENT",
             "Windows.Win32.SetWindowTextW",
+            "Windows.Win32.PostMessageW",
             "Windows.Win32.InitCommonControlsEx",
             "Windows.Win32.INITCOMMONCONTROLSEX",
             "Windows.Win32.GetModuleHandleW",

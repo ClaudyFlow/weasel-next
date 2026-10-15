@@ -64,7 +64,7 @@ $elevated = @(
     ('del /f /q "{0}\weasel_tip.previous.dll" 2>nul' -f $InstallDir),
     ('del /f /q "{0}\weasel-server.previous.exe" 2>nul' -f $InstallDir),
     ('del /f /q "{0}\weasel_tip.previous-*.dll" 2>nul' -f $InstallDir),
-    ('reg add "{0}" /ve /t REG_SZ /d "{1}\weasel_tip.dll" /f' -f $clsid, $InstallDir)
+    ('reg add "{0}" /ve /t REG_SZ /d "{1}\Weasel-Next.dll" /f' -f $clsid, $InstallDir)
 )
 $log = Invoke-ElevatedScript -Lines $elevated
 if ($log -notmatch 'DONE') { Write-Warn2 '提权脚本未正常结束，请检查输出' ; $log | ForEach-Object { Write-Host "     $_" } }
@@ -114,13 +114,13 @@ if (-not $NoRestart) {
 # 4) 校验 TIP 注册表
 Write-Step '校验 TIP 注册表'
 $value = (reg query $clsid /ve 2>$null | Where-Object { $_ -match 'REG_SZ' }) -join ''
-$expect = Join-Path $InstallDir 'weasel_tip.dll'
+$expect = Join-Path $InstallDir 'Weasel-Next.dll'
 if ($value -match [regex]::Escape($expect)) { Write-Ok "指向安装目录 ✓ $expect" }
 else { Write-Warn2 "仍是: $value" ; Write-Warn2 "期望: $expect（请重跑本脚本，或手动 reg add）" }
 
 # 5) 清单
 Write-Step '安装目录关键文件'
-foreach ($f in 'weasel-broker.exe', 'weasel-server.exe', 'weasel-renderer.exe', 'weasel_tip.dll', 'rime.dll',
+foreach ($f in 'weasel-broker.exe', 'weasel-server.exe', 'weasel-renderer.exe', 'Weasel-Next.dll', 'rime.dll',
     'Rime-Next\sound\typewriter-key.wav', 'Rime-Next\sound\typewriter-bell.wav', 'theme\weasel_theme_ten.dll') {
     $p = Join-Path $InstallDir $f
     $mark = if (Test-Path $p) { '✓' } else { '✗' }

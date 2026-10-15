@@ -47,6 +47,12 @@ const LVIS_STATEIMAGEMASK: u32 = 0xF000;
 const LVN_FIRST: i32 = -100;
 const LVN_ITEMCHANGED: i32 = LVN_FIRST - 1; // -101
 const WM_NOTIFY_: u32 = 0x004E;
+/// 窗口消息（少了它，match 分支会被当成绑定变量、匹配所有消息）。
+const WM_CLOSE_: u32 = 0x0010;
+/// 窗口消息（少了它，match 分支会被当成绑定变量、匹配所有消息）。
+const WM_INITDIALOG_: u32 = 0x0110;
+/// 窗口消息（少了它，match 分支会被当成绑定变量、匹配所有消息）。
+const WM_COMMAND_: u32 = 0x0111;
 
 /// `INDEXTOSTATEIMAGEMASK(i)` = `i << 12`；未勾选是 1，勾选是 2。
 fn state_image(checked: bool) -> u32 {
@@ -99,6 +105,15 @@ struct NmListView {
     u_changed: u32,
     pt: [i32; 2],
     l_param: isize,
+}
+
+/// 自定义消息：把列表填充推迟到对话框完全就绪之后。
+/// 实测在 WM_INITDIALOG 里插入会被控件拒绝（返回 -1），列却能插成功。
+const WM_APP_FILL: u32 = 0x8001;
+
+thread_local! {
+    /// 是否已经把填充推迟过一次（防止无限推迟）。
+    static DEFERRED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 struct SwitcherDialog {
@@ -175,14 +190,39 @@ pub fn show(shared: &Path, user: &Path) -> Result<(), String> {
 
 
 /// 把一行插进 ListView，并按需要打勾。
-unsafe fn insert_row(list: HWND, index: i32, name: &str, checked: bool) {
-    let mut text = wide(name);
-    let item = LvItemW {
-        mask: LVIF_TEXT | LVIF_STATE,
+unsafe fn insert_row(hwnd: HWND, index: i32, name: &str, checked: bool) -> (isize, isize, isize) {
+    // 分三步，每步都记返回值，便于定位是哪一步被控件拒绝：
+    //   1) 先插一个空行（mask=0，不带文本也不带状态）
+    //   2) 再用 LVM_SETITEMTEXTW 设文本
+    //   3) 最后用 LVM_SETITEMSTATE 设勾选
+    let mut empty = LvItemW {
+        mask: 0,
         i_item: index,
         i_sub_item: 0,
-        state: state_image(checked),
-        state_mask: LVIS_STATEIMAGEMASK,
+        state: 0,
+        state_mask: 0,
+        text: std::ptr::null_mut(),
+        text_max: 0,
+        i_image: 0,
+        l_param: 0,
+        i_indent: 0,
+        i_group_id: 0,
+        columns: 0,
+        pu_columns: std::ptr::null_mut(),
+        pi_col_fmt: std::ptr::null_mut(),
+        i_group: 0,
+    };
+    let inserted = SendDlgItemMessageW(hwnd, IDC_SCHEMA_LIST, LVM_INSERTITEMW, WPARAM(0), LPARAM(&mut empty as *mut LvItemW as isize)).0;
+    if inserted < 0 {
+        return (inserted, -999, -999);
+    }
+    let mut text = wide(name);
+    let mut text_item = LvItemW {
+        mask: LVIF_TEXT,
+        i_item: index,
+        i_sub_item: 0,
+        state: 0,
+        state_mask: 0,
         text: text.as_mut_ptr(),
         text_max: text.len() as i32,
         i_image: 0,
@@ -194,14 +234,30 @@ unsafe fn insert_row(list: HWND, index: i32, name: &str, checked: bool) {
         pi_col_fmt: std::ptr::null_mut(),
         i_group: 0,
     };
-    unsafe {
-        SendMessageW(
-            list,
-            LVM_INSERTITEMW,
-            WPARAM(0),
-            LPARAM(&item as *const LvItemW as isize),
-        );
-    }
+    let text_result = SendDlgItemMessageW(hwnd, IDC_SCHEMA_LIST, LVM_SETITEMTEXTW, WPARAM(index as usize), LPARAM(&mut text_item as *mut LvItemW as isize)).0;
+    let state_result = if checked {
+        let mut state_item = LvItemW {
+            mask: LVIF_STATE,
+            i_item: index,
+            i_sub_item: 0,
+            state: state_image(true),
+            state_mask: LVIS_STATEIMAGEMASK,
+            text: std::ptr::null_mut(),
+            text_max: 0,
+            i_image: 0,
+            l_param: 0,
+            i_indent: 0,
+            i_group_id: 0,
+            columns: 0,
+            pu_columns: std::ptr::null_mut(),
+            pi_col_fmt: std::ptr::null_mut(),
+            i_group: 0,
+        };
+        SendDlgItemMessageW(hwnd, IDC_SCHEMA_LIST, LVM_SETITEMSTATE, WPARAM(index as usize), LPARAM(&mut state_item as *mut LvItemW as isize)).0
+    } else {
+        0
+    };
+    (inserted, text_result, state_result)
 }
 
 /// 右侧简介：显示名、作者、简介，与官方 `ShowDetails` 的三段一致。
@@ -263,15 +319,21 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                 with_state(|state| state.initialized = false);
                 return 1;
             }
-            eprintln!(  "weasel-settings: 初始化 列表句柄={:?} 行数={:?} 勾选扩展={}",  list.0,  with_state(|state| state.rows.len()),  LVS_EX_CHECKBOXES + LVM_SETEXTENDEDLISTVIEWSTYLE );
+            // 诊断：把控件的窗口样式打出来。LVS_OWNERDATA=0x1000（虚拟列表会拒绝插行）；
+            // LVS_REPORT=0x1、LVS_ALIGNLEFT=0x800。
             unsafe {
-                SendMessageW(
-                    list,
-                    LVM_SETEXTENDEDLISTVIEWSTYLE,
-                    WPARAM(0),
-                    LPARAM(LVS_EX_CHECKBOXES as isize),
-                );
+                let style = GetWindowLongPtrW(list, -16) as u32;   // GWL_STYLE
+                let exstyle = GetWindowLongPtrW(list, -20) as u32; // GWL_EXSTYLE
+                eprintln!("weasel-settings: 列表样式 style=0x{style:08X} (OWNERDATA={}) exstyle=0x{exstyle:08X}",
+                    if style & 0x1000 != 0 { "是" } else { "否" });
             }
+            if !DEFERRED.with(|c| c.replace(true)) {
+                // 第一次进来：先把标志还原，投递一条消息，等对话框就绪后再填。
+                with_state(|state| state.initialized = false);
+                unsafe { PostMessageW(Some(hwnd), WM_APP_FILL, WPARAM(0), LPARAM(0)) };
+                return 1;
+            }
+            eprintln!(  "weasel-settings: 初始化 列表句柄={:?} 行数={:?} 勾选扩展={}",  list.0,  with_state(|state| state.rows.len()),  LVS_EX_CHECKBOXES + LVM_SETEXTENDEDLISTVIEWSTYLE );
             // 报表视图**必须先有列**才能插入行，否则 LVM_INSERTITEM 会失败（行数一直是 0）。
             unsafe {
                 let mut header = wide("方案");
@@ -297,7 +359,8 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
             let mut first_selected: Option<usize> = None;
             with_state(|state| {
                 for (index, row) in state.rows.iter().enumerate() {
-                    unsafe { insert_row(list, index as i32, &row.name, row.selected) };
+                    let (ins, txt, st) = unsafe { insert_row(hwnd, index as i32, &row.name, row.selected) };
+                    if index < 3 { eprintln!("weasel-settings: 插行 {index} → 插入={ins} 文本={txt} 状态={st}"); }
                     if index < 4 {
                         eprintln!("weasel-settings: 插入第 {index} 行「{name}」", name = row.name);
                     }
@@ -311,6 +374,10 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                 SendDlgItemMessageW(hwnd, IDC_SCHEMA_LIST, 0x1004, WPARAM(0), LPARAM(0))
             };
             eprintln!("weasel-settings: 插完 LVM_GETITEMCOUNT={}", rows.0);
+            // 勾选框样式放在插入之后设置：实测先设它会导致 LVM_INSERTITEM 返回 -1。
+            unsafe {
+                SendMessageW(list, LVM_SETEXTENDEDLISTVIEWSTYLE, WPARAM(0), LPARAM(LVS_EX_CHECKBOXES as isize));
+            }
             if let Some(index) = first_selected {
                 let mut item = LvItemW {
                     mask: LVIF_STATE,
@@ -355,6 +422,11 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
             // 显式显示：这个模板创建出来后一直不可见（/style 同模板却正常），
             // 这里主动 ShowWindow 一次。
             unsafe { ShowWindow(hwnd, 5) }; // SW_SHOW
+            1
+        }
+        WM_APP_FILL => {
+            // 推迟到这里的填充：此时对话框与列表控件都已完全就绪。
+            let _ = handle(hwnd, WM_INITDIALOG_, WPARAM(0), LPARAM(0));
             1
         }
         WM_NOTIFY_ => {

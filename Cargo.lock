@@ -5791,7 +5791,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-broker"
-version = "0.1.8"
+version = "0.18.0"
 dependencies = [
  "embed-resource",
  "libloading",
@@ -5807,7 +5807,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-common"
-version = "0.1.8"
+version = "0.18.0"
 dependencies = [
  "prost",
  "prost-build",
@@ -5830,7 +5830,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-renderer"
-version = "0.1.8"
+version = "0.18.0"
 dependencies = [
  "embed-resource",
  "serde",
@@ -5845,7 +5845,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-server"
-version = "0.1.8"
+version = "0.18.0"
 dependencies = [
  "bindgen",
  "embed-resource",
@@ -5865,7 +5865,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-settings"
-version = "0.1.8"
+version = "0.18.0"
 dependencies = [
  "embed-resource",
  "libloading",
@@ -5886,7 +5886,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-style"
-version = "0.1.8"
+version = "0.18.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5895,7 +5895,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-theme-api"
-version = "0.1.8"
+version = "0.18.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5904,7 +5904,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-theme-official"
-version = "0.1.8"
+version = "0.18.0"
 dependencies = [
  "embed-resource",
  "serde_json",
@@ -5918,7 +5918,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-theme-support"
-version = "0.1.8"
+version = "0.18.0"
 dependencies = [
  "weasel-theme-api",
  "windows-bindgen",
@@ -5934,7 +5934,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-tip"
-version = "0.1.8"
+version = "0.18.0"
 dependencies = [
  "embed-resource",
  "tokio",
