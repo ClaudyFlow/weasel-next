@@ -236,8 +236,10 @@ fn deploy_in_background() {
         return;
     }
     let _ = std::process::Command::new(engine)
-        .arg("--deploy")
+        .arg("--deploy-ui")
         .current_dir(dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn();
 }
 
@@ -614,7 +616,10 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                         // 写回成功后自动触发一次重新部署 —— 官方是让 WeaselDeployer 跑 rime->deploy()
                         // （Configurator.cpp:144），我们对应的是引擎的 --deploy 开关；
                         // 不部署的话方案不会进引擎，选了也不生效、打不了字。
-                        deploy_in_background();
+                        // 这里**不能**自己 spawn 引擎去部署：实测引擎返回 AlreadyRunning（单实例），
+                        // 从设置程序拉起第二个实例必然失败。部署必须由掌握引擎生死的 broker 执行
+                        // （broker 的 Operation::Deploy 会先停引擎、部署、再拉起并等完成）。
+                        // 待办：改为给 broker 窗口（类名 weasel-next-broker）PostMessage 请求部署。
                         unsafe { EndDialog(hwnd, IDOK as isize) };
                     }
                     Some(Err(error)) => {
