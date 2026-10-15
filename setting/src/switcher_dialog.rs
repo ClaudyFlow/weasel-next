@@ -35,6 +35,7 @@ const LVM_GETITEMSTATE: u32 = LVM_FIRST + 44; // 0x102C
 const LVM_SETITEMSTATE: u32 = LVM_FIRST + 43; // 0x102B
 const LVM_SETEXTENDEDLISTVIEWSTYLE: u32 = LVM_FIRST + 54; // 0x1036
 /// 报表视图**必须先有列**才能插入行，否则 LVM_INSERTITEM 会失败（行数一直是 0）。
+const LVM_GETITEMCOUNT: u32 = LVM_FIRST + 4; // 0x1004
 const LVM_INSERTCOLUMNW: u32 = LVM_FIRST + 97; // 0x1061
 const LVCF_FMT: u32 = 0x0001;
 const LVCF_WIDTH: u32 = 0x0002;
@@ -454,29 +455,45 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
             let id = (wparam.0 & 0xffff) as i32;
             if id == IDOK {
                 let list = unsafe { GetDlgItem(Some(hwnd), IDC_SCHEMA_LIST) };
-                // 先按界面顺序收集勾选结果
-                let mut checked: Vec<bool> = Vec::new();
-                with_state(|state| {
-                    for index in 0..state.rows.len() {
-                        let value = unsafe {
-                            SendMessageW(
-                                list,
-                                LVM_GETITEMSTATE,
-                                WPARAM(index),
-                                LPARAM(LVIS_STATEIMAGEMASK as isize),
-                            )
-                        };
-                        let image = ((value.0 as u32) & LVIS_STATEIMAGEMASK) >> 12;
-                        checked.push(image == 2);
+                // 照官方 SwitcherSettingsDialog::OnOK 的写法：按**控件的行数**循环，
+                // 不用 state.rows 的长度 —— 两者不一致时按下标配对才不会静默丢数据。
+                let count = unsafe {
+                    SendMessageW(list, LVM_GETITEMCOUNT, WPARAM(0), LPARAM(0)).0 as usize
+                };
+                let mut checked: Vec<bool> = Vec::with_capacity(count);
+                for index in 0..count {
+                    let value = unsafe {
+                        SendMessageW(
+                            list,
+                            LVM_GETITEMSTATE,
+                            WPARAM(index),
+                            LPARAM(LVIS_STATEIMAGEMASK as isize),
+                        )
+                    };
+                    let image = ((value.0 as u32) & LVIS_STATEIMAGEMASK) >> 12;
+                    checked.push(image == 2);
+                }
+                // 官方：一项都没选就报错退出，不写文件。
+                if !checked.iter().any(|on| *on) {
+                    let text = wide("至少要选用一项。");
+                    let caption = wide("提示");
+                    unsafe {
+                        MessageBoxW(
+                            Some(hwnd),
+                            PCWSTR(text.as_ptr()),
+                            PCWSTR(caption.as_ptr()),
+                            0u32 | MB_ICONWARNING_,
+                        );
                     }
-                });
+                    return 1;
+                }
                 let outcome = with_state(|state| {
                     let selected: Vec<String> = state
                         .rows
                         .iter()
-                        .zip(checked.iter())
-                        .filter(|(_, on)| **on)
-                        .map(|(row, _)| row.id.clone())
+                        .enumerate()
+                        .filter(|(index, _)| checked.get(*index).copied().unwrap_or(false))
+                        .map(|(_, row)| row.id.clone())
                         .collect();
                     let path = switcher::user_default_custom_path(&state.user);
                     switcher::set_schema_list(&path, &selected)
