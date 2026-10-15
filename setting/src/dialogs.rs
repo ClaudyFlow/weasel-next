@@ -54,6 +54,7 @@ const COLOR_WINDOWTEXT: i32 = 8;
 const COLOR_HIGHLIGHT: i32 = 13;
 const COLOR_HIGHLIGHTTEXT: i32 = 14;
 const TRANSPARENT_: i32 = 1;
+const DT_RIGHT: u32 = 0x00000002;
 const DT_LEFT: u32 = 0x0000;
 const DT_VCENTER: u32 = 0x0004;
 const DT_SINGLELINE: u32 = 0x0020;
@@ -451,16 +452,49 @@ unsafe extern "system" fn style_proc(
         }
         WM_MEASUREITEM_ => {
             let item = lparam.0 as *mut MEASUREITEMSTRUCT;
-            if !item.is_null() && unsafe { (*item).CtlID } == IDC_COLOR_LIST as u32 {
-                unsafe { (*item).itemHeight = 18 };
+            if !item.is_null() && unsafe { (*item).CtlID } == IDC_COLOR_LIST as u32 || unsafe { (*item).CtlID } == IDC_STYLE_LIST as u32 {
+                unsafe { (*item).itemHeight = 22 };
                 return 1;
             }
             0
         }
         WM_DRAWITEM_ => {
             let item = lparam.0 as *mut DRAWITEMSTRUCT;
-            if item.is_null() || unsafe { (*item).CtlID } != IDC_COLOR_LIST as u32 {
+            if item.is_null() || unsafe { (*item).CtlID } != IDC_COLOR_LIST as u32 && unsafe { (*item).CtlID } != IDC_STYLE_LIST as u32 {
+
                 return 0;
+            }
+            // 右侧样式列表：两栏 —— 第一列（标签+键路径）左对齐，第二列（当前值）右对齐。
+            if unsafe { (*item).CtlID } == IDC_STYLE_LIST as u32 {
+                let item = unsafe { &*item };
+                let Some(key) = crate::style_keys::KEYS.get(item.itemID as usize) else {
+                    return 1;
+                };
+                let current = unsafe { state_of(hwnd) }
+                    .map(|state| { let state = state.borrow(); style_value(&state.shared, &state.user, key.key) })
+                    .flatten()
+                    .unwrap_or_default();
+                unsafe {
+                    let selected = item.itemState & ODS_SELECTED != 0;
+                    let background = if selected { GetSysColor(COLOR_HIGHLIGHT) } else { GetSysColor(COLOR_WINDOW) };
+                    let foreground = if selected { GetSysColor(COLOR_HIGHLIGHTTEXT) } else { GetSysColor(COLOR_WINDOWTEXT) };
+                    let brush = CreateSolidBrush(COLORREF(background));
+                    FillRect(item.hDC, &item.rcItem, brush);
+                    DeleteObject(HGDIOBJ(brush.0));
+                    SetBkMode(item.hDC, TRANSPARENT_);
+                    SetTextColor(item.hDC, COLORREF(foreground));
+                    let mut left_rc = item.rcItem;
+                    left_rc.left += 6;
+                    left_rc.right = left_rc.left + (left_rc.right - left_rc.left) * 3 / 5;
+                    let left_text = wide(&format!("{}   {}", key.zh_hans, key.key));
+                    DrawTextW(item.hDC, PCWSTR(left_text.as_ptr()), -1, &mut left_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                    let mut right_rc = item.rcItem;
+                    right_rc.left = left_rc.right;
+                    right_rc.right -= 6;
+                    let right_text = wide(&current);
+                    DrawTextW(item.hDC, PCWSTR(right_text.as_ptr()), -1, &mut right_rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+                }
+                return 1;
             }
             let item = unsafe { &*item };
             let Some(state) = (unsafe { state_of(hwnd) }) else {
