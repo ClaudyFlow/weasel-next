@@ -219,6 +219,28 @@ pub fn show(shared: &Path, user: &Path) -> Result<(), String> {
 
 
 /// 把一行插进 ListView，并按需要打勾。
+/// 在后台拉起一次重新部署（`Weasel-Next-Engine.exe --deploy`）。
+///
+/// 官方在 `WeaselDeployer` 里跑 `rime->deploy()`（`Configurator.cpp:144`）并重建
+/// `build\<方案>\`；我们交给引擎的 `--deploy` 开关（`server\src\main.rs:404`）。
+/// 不等待、不管输出 —— 部署要几秒，不能让设置界面卡住。
+fn deploy_in_background() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(dir) = exe.parent() else {
+        return;
+    };
+    let engine = dir.join("Weasel-Next-Engine.exe");
+    if !engine.is_file() {
+        return;
+    }
+    let _ = std::process::Command::new(engine)
+        .arg("--deploy")
+        .current_dir(dir)
+        .spawn();
+}
+
 unsafe fn insert_row(hwnd: HWND, index: i32, name: &str, checked: bool) -> (isize, isize, isize) {
     // 分三步，每步都记返回值，便于定位是哪一步被控件拒绝：
     //   1) 先插一个空行（mask=0，不带文本也不带状态）
@@ -589,6 +611,10 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                 });
                 match outcome {
                     Some(Ok(())) => {
+                        // 写回成功后自动触发一次重新部署 —— 官方是让 WeaselDeployer 跑 rime->deploy()
+                        // （Configurator.cpp:144），我们对应的是引擎的 --deploy 开关；
+                        // 不部署的话方案不会进引擎，选了也不生效、打不了字。
+                        deploy_in_background();
                         unsafe { EndDialog(hwnd, IDOK as isize) };
                     }
                     Some(Err(error)) => {
