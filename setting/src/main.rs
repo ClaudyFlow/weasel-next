@@ -5,6 +5,7 @@ mod bindings;
 mod broker;
 mod colors;
 mod dialogs;
+mod style_keys;
 mod switcher_dialog;
 mod skins;
 mod frame;
