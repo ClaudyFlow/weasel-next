@@ -119,7 +119,7 @@ broker 的监控每 16～30 秒重新拉起一次，一直循环。所以窗口�
 下一步：查通道是谁先关的。那句话是"给 TIP 传 UI 事件的通道被关闭了"，**多半是 TIP 在一次
 按键结束后就把通道收了**，不是渲染器自己挂。要读 `renderer\src\ui_runtime.rs` 和 TIP 侧的通道管理。
 
-### 2. broker 改名成 `Weasel-Next-Server.exe`（用户要求，未完成，已回退）
+### 2. broker 改名成 `weasel-broker.exe`（用户要求，未完成，已回退）
 
 为了和官方 `WeaselServer.exe` 区分。做到一半卡在编译：
 
@@ -131,7 +131,7 @@ error: invalid instruction `cargo:rustc-link-arg-bin` from build script of `weas
 等三行），`{binary}` 由 `broker\build.rs` 传入。已经把传入名改成新名字仍被拒绝；
 `cargo clean -p weasel-broker` 报 `Removed 0 files`（bin 目标换了名，包名匹配不到）。
 
-下一步：先 `cargo metadata` 确认 `[[bin]] name = "Weasel-Next-Server"` 之后 cargo 认的
+下一步：先 `cargo metadata` 确认 `[[bin]] name = "weasel-broker"` 之后 cargo 认的
 target 名到底是什么（连字符可能被规范化），再改 `manifest.rs` 的调用。
 
 改动清单（回退前的做法，参考）：`broker\Cargo.toml` 加 `[[bin]]`（**包名保持
@@ -207,3 +207,44 @@ powershell -File librime\build-librime-mingw.ps1
 # 日志
 %LOCALAPPDATA%\Rime-Next\Logs\{broker,server,renderer,deploy}.<日期>.log
 ```
+
+---
+
+## 八、改名尝试的追加发现（2026-10-15 第二次尝试后）
+
+第二次尝试从「清空 broker 构建脚本缓存」入手，仍然失败：
+
+```
+error: invalid instruction `cargo:rustc-link-arg-bin` from build script of `weasel-broker`
+```
+
+**关键发现**：`build_support\manifest.rs` 第 21 行是 `if toolchain::is_msvc_target()`——
+那三条 `cargo:rustc-link-arg-bin={binary}=...` **只在 MSVC 目标下发出**；
+GNU 分支编译 `RT_MANIFEST` 资源（第 33 行起），发完就 `return`（第 30 行）。
+
+也就是说 **GNU 构建根本不该产生这个指令**。既然 cargo 还在报它，说明**另有一个辅助模块**
+（多半是 `build_support\icon.rs` 或 `build_support\version.rs`，两者都按 bin 名发资源指令）
+在发同样的指令，而我一直改错了地方（只在 `manifest.rs` 的调用点改名字）。
+
+**下次接手的第一步**：
+
+```powershell
+Get-ChildItem build_support,broker -Recurse -File -Filter *.rs |
+  Select-String -Pattern 'rustc-link-arg-bin'
+```
+
+把**所有**发出点找齐（不是只看 manifest.rs），确认每个点传的 bin 名 —— 只要有一处传了
+`weasel-broker` 而实际 bin 叫 `Weasel-Next-Server`，cargo 就会拒绝整个构建脚本的输出。
+
+**另外两个本次踩到的坑**：
+
+1. 全局替换 `"weasel-broker` → `"Weasel-Next-Server` **会误伤 `Cargo.toml` 的
+   `name = "weasel-broker"`**（包名），导致 cargo 报
+   `package ID specification 'weasel-broker' did not match any packages`。
+   包名必须保持不动，替换时要把 `[package] name` 排除在外。
+2. 往 `broker/Cargo.toml` 插 `[[bin]]` 时若用 `Replace("[dependencies]", ...)`，
+   会把后面的 `serde_json = "1"` 挤进 `[[bin]]` 段里、破坏清单结构。
+   `[[bin]]` 要追加在**文件末尾**。
+
+**当前状态**：改名已再次回退，全量编译通过（`Finished release profile`），
+工作树干净，安装包仍是 `weasel-broker.exe` 那一版。
