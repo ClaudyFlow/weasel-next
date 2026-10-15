@@ -45,6 +45,7 @@ const CB_GETCURSEL: u32 = 0x0147;
 const CB_SHOWDROPDOWN: u32 = 0x014F;
 const CBN_SELCHANGE: u32 = 1;
 const LB_ADDSTRING: u32 = 0x0180;
+const LB_SETCURSEL: u32 = 0x0186;
 const LB_RESETCONTENT: u32 = 0x0184;
 const ODS_SELECTED: u32 = 0x0001;
 const SW_HIDE: i32 = 0;
@@ -289,6 +290,18 @@ unsafe extern "system" fn style_proc(
                         )
                     };
                 }
+
+                // 默认选中第一条样式键 —— 否则下方那个框是空的；再投一条选中变化通知，
+                // 让已有的处理逻辑去填候选并把当前值预选上（官方同样默认选中第一条）。
+                unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_LIST, LB_SETCURSEL, WPARAM(0), LPARAM(0)) };
+                unsafe {
+                    PostMessageW(
+                        Some(hwnd),
+                        WM_COMMAND_,
+                        WPARAM(((LBN_SELCHANGE_ as usize) << 16) | IDC_STYLE_LIST as usize),
+                        LPARAM(0),
+                    )
+                };
 
                 SendDlgItemMessageW(hwnd, IDC_COLOR_LIST, LB_RESETCONTENT, WPARAM(0), LPARAM(0));
             }
