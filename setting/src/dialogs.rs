@@ -36,6 +36,10 @@ const WM_CLOSE_: u32 = 0x0010;
 const WM_MEASUREITEM_: u32 = 0x002C;
 const WM_DRAWITEM_: u32 = 0x002B;
 const CB_ADDSTRING: u32 = 0x0143;
+const LB_GETCURSEL: u32 = 0x0188;
+const CB_RESETCONTENT: u32 = 0x014B;
+const LBN_SELCHANGE_: u32 = 1;
+const CBN_SELCHANGE_: u32 = 1;
 const CB_SETCURSEL: u32 = 0x014E;
 const CB_GETCURSEL: u32 = 0x0147;
 const CBN_SELCHANGE: u32 = 1;
@@ -319,6 +323,36 @@ unsafe extern "system" fn style_proc(
                 }
                 return 1;
             }
+            // 选中一条样式键：枚举键把官方候选项填进下面的下拉框。
+            if id == IDC_STYLE_LIST && ((wparam.0 >> 16) & 0xffff) as u32 == LBN_SELCHANGE_ {
+                let index = unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_LIST, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+                if index >= 0 {
+                    if let Some(key) = crate::style_keys::KEYS.get(index as usize) {
+                        unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_VALUE_COMBO, CB_RESETCONTENT, WPARAM(0), LPARAM(0)) };
+                        for choice in key.choices {
+                            let text = wide(choice.zh_hans);
+                            unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_VALUE_COMBO, CB_ADDSTRING, WPARAM(0), LPARAM(text.as_ptr() as isize)) };
+                        }
+                    }
+                }
+                return 1;
+            }
+            // 选值即写补丁 —— 官方那个「设置」按钮已按需求去掉，选择就是设置。
+            if id == IDC_STYLE_VALUE_COMBO && ((wparam.0 >> 16) & 0xffff) as u32 == CBN_SELCHANGE_ {
+                let sel = unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_VALUE_COMBO, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+                let key_index = unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_LIST, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+                if sel >= 0 && key_index >= 0 {
+                    if let Some(key) = crate::style_keys::KEYS.get(key_index as usize) {
+                        if let Some(choice) = key.choices.get(sel as usize) {
+                            if let Some(path) = weasel_style::settings::user_custom_path() {
+                                let _ = weasel_style::settings::write_patch(&path, key.key, choice.value);
+                            }
+                        }
+                    }
+                }
+                return 1;
+            }
+
             if id == IDOK || id == IDCANCEL {
                 unsafe { EndDialog(hwnd, id as isize) };
                 return 1;
