@@ -461,3 +461,76 @@ let selected: Vec<String> = state
 2. 按 1b 的三层修法改勾选保存。
 3. `/style` 右侧样式键列表（照官方 `UIStyleSettings` 的样式键表搬）。
 4. 渲染器通道生命周期（打字与候选窗的共同根因）。
+---
+
+## 十二、方案保存的最后一个 bug 与修法（2026-10-15 深夜，已定位未完成）
+
+### 现象与证据
+
+`%APPDATA%\Rime-Next\default.custom.yaml` 写出后是**空列表**（22 字节）：
+
+```yaml
+patch:
+  schema_list:
+```
+
+「至少选一项」的守卫没有触发 → 说明 `checked` 里**确实有勾选**，
+但**从 ItemData 取回 id 时全部是 null** → `selected` 为空 → 写出空列表。
+
+### 根因
+
+**`LVM_SETITEMDATA` / `LVM_GETITEMDATA` 在报表模式（report mode）的 ListView 上无效。**
+MSDN 明确写着：不能用这两个宏设置/获取报表模式列表项的数据，
+必须用 `LVM_SETITEM` / `LVM_GETITEM` 配 `LVIF_PARAM`。
+我们的方案列表正是报表模式（有表头），所以存进去的指针读不回来。
+
+官方的 WTL `CCheckListViewCtrl` 内部就是把 `RimeSchemaInfo*` 放进 `lParam` 的
+（`schema_list_.SetItemData(k, (DWORD_PTR)info)`，读取时 `GetItemData(i)`）。
+
+### 修法（照做即可，改动很小）
+
+1. 加一个报表模式专用的结构（字段顺序照 Win32 `LVITEMW` 排到 `lParam` 为止）：
+
+```rust
+#[repr(C)]
+struct LvItemParam {
+    mask: u32, i_item: i32, i_sub_item: i32,
+    state: u32, state_mask: u32,
+    text: *mut u16, text_max: i32, image: i32,
+    param: isize,
+}
+const LVIF_PARAM_: u32 = 0x0004;
+const LVM_GETITEM: u32 = LVM_FIRST + 5; // 0x1005
+const LVM_SETITEM: u32 = LVM_FIRST + 6; // 0x1006
+```
+
+2. 写入端（插入列表项之后）把 `LVM_SETITEMDATA` 换成：
+
+```rust
+let mut param_item = LvItemParam {
+    mask: LVIF_PARAM_, i_item: index as i32, i_sub_item: 0,
+    state: 0, state_mask: 0, text: std::ptr::null_mut(),
+    text_max: 0, image: 0, param: id_ptr,
+};
+SendDlgItemMessageW(hwnd, IDC_SCHEMA_LIST, LVM_SETITEM,
+                    WPARAM(0), LPARAM(&mut param_item as *mut LvItemParam as isize));
+```
+
+3. 读取端把 `LVM_GETITEMDATA` 换成 `LVM_GETITEM` 填同一个结构，再取 `param_item.param`。
+
+**注意**：`WPARAM` 收 `usize` 不收 `isize`（编译期会报 E0308）。
+
+### 本次未完成的原因
+
+第二次改时把 `LvItemParam` 结构与常量插到了错误位置（锚点选成了 `unsafe fn insert_row`
+所在行，但那里的模块级/函数内边界判断没做对），编译报
+`error: expected item, found keyword 'let'`（switcher_dialog.rs:40），已 `git checkout` 回退到
+可编译状态。**下次插入时先确认锚点行确实在模块级**（例如锚定 `const LVM_GETITEMCOUNT` 那一行，
+而不是函数定义行）。
+
+### 同时待做的两项
+
+- **快捷键框**（`IDC_HOTKEYS` = 1003）是空的。官方在 `SwitcherSettingsDialog.cpp:95` 填它，
+  值来自出厂 `default.yaml` 的 `switcher: hotkeys:`（`Control+grave` / `Control+Shift+grave` / `F4`）。
+- **已选方案不勾选**是上面这个空列表的直接后果，不是读端的 bug：
+  `read_schema_list` 从空补丁读到空列表，自然一条都不勾。
