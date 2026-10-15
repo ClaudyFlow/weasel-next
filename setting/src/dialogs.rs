@@ -250,6 +250,23 @@ unsafe extern "system" fn style_proc(
             unsafe {
                 SendDlgItemMessageW(hwnd, IDC_COLOR_SCHEME, CB_SETCURSEL, WPARAM(state.selected), LPARAM(0));
                 // 左侧颜色列表：先清空再逐条加入（自绘，文字内容仅用于行数）
+                // 右侧「样式设置」列表：照官方 include/WeaselStyleKeys.h 的 GetStyleKeys() 逐条填。
+                // 官方是自绘（OnMeasureItem/OnDrawItem，左标签右「key: 值」、改动加 +），
+                // 这里先把「标签 + 键路径」填进去，保证列表有内容、可见可选中。
+                unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_LIST, LB_RESETCONTENT, WPARAM(0), LPARAM(0)) };
+                for key in crate::style_keys::KEYS {
+                    let text = wide(&format!("{}   {}", key.zh_hans, key.key));
+                    unsafe {
+                        SendDlgItemMessageW(
+                            hwnd,
+                            IDC_STYLE_LIST,
+                            LB_ADDSTRING,
+                            WPARAM(0),
+                            LPARAM(text.as_ptr() as isize),
+                        )
+                    };
+                }
+
                 SendDlgItemMessageW(hwnd, IDC_COLOR_LIST, LB_RESETCONTENT, WPARAM(0), LPARAM(0));
             }
             for (key, value) in &state.colors {
