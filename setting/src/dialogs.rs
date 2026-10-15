@@ -91,6 +91,10 @@ fn builtin_style_default(key: &str) -> Option<&'static str> {
         "style/vertical_right_to_left" => Some("false"),
         // lib.rs 里 Layout::default 的 border_width 是 3（与 border 同义）。
         "style/layout/border" => Some("3"),
+        // lib.rs 的 Layout::default：hilite_padding_x/y = 0、hilited_corner_radius = -1（-1 表示跟随 corner_radius）。
+        "style/layout/hilite_padding_x" => Some("0"),
+        "style/layout/hilite_padding_y" => Some("0"),
+        "style/layout/hilited_corner_radius" => Some("-1"),
         _ => None,
     }
 }
