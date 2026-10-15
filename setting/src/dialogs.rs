@@ -72,6 +72,20 @@ const IDC_STYLE_VALUE_COMBO: i32 = 1007;
 const IDC_STYLE_VALUE_EDIT: i32 = 1008;
 const IDC_SET_STYLE: i32 = 1009;
 
+/// 用户补丁里这条样式键的当前值。
+///
+/// `weasel.custom.yaml` 用的是**斜杠键**（`style/color_scheme: aqua`），
+/// 与 `weasel.yaml` 的嵌套写法不同，所以这里按单层 map 直接查 —— 官方在
+/// `UIStyleSettingsDialog` 里也是这么取的（`settings_->GetStyleValue(info, &current)`）。
+fn patched_style_value(key: &str) -> Option<String> {
+    let path = style_settings::user_custom_path()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let yaml = weasel_style::parse_yaml(&text).ok()?;
+    let patch = yaml.get("patch")?;
+    patch.get(key)?.as_str().map(|value| value.to_string())
+}
+
+
 /// 颜色键清单与官方 `WeaselStyleKeys` 的颜色部分一一对应。
 const COLOR_KEYS: &[&str] = &[
     "back_color",
@@ -260,7 +274,11 @@ unsafe extern "system" fn style_proc(
                 // 这里先把「标签 + 键路径」填进去，保证列表有内容、可见可选中。
                 unsafe { SendDlgItemMessageW(hwnd, IDC_STYLE_LIST, LB_RESETCONTENT, WPARAM(0), LPARAM(0)) };
                 for key in crate::style_keys::KEYS {
-                    let text = wide(&format!("{}   {}", key.zh_hans, key.key));
+                    // 官方每条显示「标签 + key: 当前值」，用户改过的值来自补丁文件。
+                    let text = match patched_style_value(key.key) {
+                        Some(value) => wide(&format!("{}   {}: {}", key.zh_hans, key.key, value)),
+                        None => wide(&format!("{}   {}", key.zh_hans, key.key)),
+                    };
                     unsafe {
                         SendDlgItemMessageW(
                             hwnd,
