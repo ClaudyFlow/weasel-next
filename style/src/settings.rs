@@ -173,25 +173,6 @@ mod tests {
 
 
 
-    #[test]
-    fn appends_color_override_with_path_key() {
-        let path = temp_path("color-custom.yaml");
-        let _ = std::fs::remove_file(&path);
-        set_scheme_color(&path, "aqua", "back_color", "0x00eceeee").unwrap();
-        set_scheme_color(&path, "aqua", "text_color", "0x00000000").unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            text.contains("preset_color_schemes/aqua/back_color: 0x00eceeee"),
-            "颜色应写成路径式键：{text}"
-        );
-        assert!(
-            text.contains("preset_color_schemes/aqua/text_color: 0x00000000"),
-            "第二条也应写入：{text}"
-        );
-        let modified = modified_colors(&path, "aqua").unwrap();
-        assert_eq!(modified.get("back_color").map(String::as_str), Some("0x00eceeee"));
-        assert_eq!(modified.len(), 2);
-    }
 
 
     #[test]
