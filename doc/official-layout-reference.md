@@ -87,3 +87,64 @@ _CalcPageIndicator: _pageEnabled = (prevpage_color & 0xff000000) && (nextpage_co
 4. `align_type`（center/bottom）的垂直居中没做；
 5. **预编辑条整条没画**（ThemeCapabilities 报 preedit: false）→ 官方最显眼的灰底 + 三角指针缺失；
 6. `mark`（页码标记竖线）与页码箭头未实现（aqua 的 prevpage/nextpage 是 0x00000000，所以箭头本就不该显示 ✓）。
+---
+
+## 五、绘制流程移植清单（照 WeaselPanel.cpp:423-509 DoPaint）
+
+官方顺序（逐句对照，我们照做）：
+
+```
+1. BeginDraw()
+2. dc->Clear(D2D1::ColorF{0,0,0,0})                    整窗清成**全透明**
+3. 判断要不要画背景：
+     有预编辑（且非 inline） 或 有候选 或 有辅助串      ← 三者皆无则不画（窗口空）
+4. 画面板底：_HighlightRect(
+       m_layout->GetContentRect(),                      ← ★ 内容矩形（已含 offset 外扩）
+       round_corner_ex, border, back_color, shadow_color, border_color)
+5. 画预编辑：_DrawPreedit(m_ctx.preedit, true)           ← 白底块 + 文字 + 右端小三角
+6. 画辅助串：_DrawPreedit(m_ctx.aux, false)
+7. 画候选：  _DrawCandidates()                           ← 选中行先 _HighlightRect(该行矩形, hilited_candidate_back_color)
+                                                           再画所有行的 label/text/comment
+8. 状态图标（我们不用 status icon，跳过）
+9. EndDraw()  → 失败则 DeviceResources::Reset() + InitDirect2D() 重来
+10. swapChain->Present(1, 0)   ← 垂直同步；设备丢失同样 Reset+Init
+```
+
+`_HighlightRect`（L799-823）——**所有圆角块共用**：
+
+```
+if roundInfo.Hemispherical: radius = round_corner_ex - border/2
+if shadow_color 非全透明 且 shadow_radius:
+    FillGeometry(rect, shadow_color, radius, 模糊=true)          ← 阴影
+if back_color 非全透明:
+    FillGeometry(rect, back_color, radius)                        ← 底色
+if border_color 非全透明 且 border != 0:
+    pGeometry = CreateRoundedRectanglePath(rect, radius - border/2)
+    DrawGeometry(pGeometry, brush, 笔宽 = border)                  ← 描边（画在矩形内侧）
+```
+
+我们这边的对应位置（`theme\official\src\mod.rs`）：
+
+```
+paint()  L499 起
+  现状：Clear(透明) ✓ → FillRectangle(整窗, background) ✗（应为"内容矩形"）
+        → FillRoundedRectangle(整窗, background) ✗（应为"内容矩形"）
+        → 描边 ✓ 但矩形也是整窗 ✗
+  要改：把三处的矩形换成 layout 的**内容矩形**（= 内容尺寸 + offset 外扩）
+        并把选中行的高亮从"整窗"改成"该候选行矩形"
+logic.rs Layout
+  现状：只有 cells（横向区间）+ width/height ✗
+  要改：加 内容矩形、每候选矩形、预编辑矩形；按 VerticalLayout::DoLayout 计算
+        （根公式见本文件第二节：real_margin = max(|margin|, hilite_padding)、offset = border*2）
+```
+
+**顺序建议**（每步都能单独验证 ✓）：
+
+```
+第一步  只换矩形：面板底/描边改成"内容矩形"，选中高亮改成"该行矩形"
+         → 效果：窗口不再"红块铺满"，背景与高亮各就各位
+第二步  补内容矩形与 offset（real_margin / border*2）→ 窗口大小和留白对上官方
+第三步  补预编辑行（白底 + 右端小三角）→ 最显眼的差别消失
+第四步  label / text / comment 三矩形 + align_type 垂直居中 → 序号列与注释列对齐官方
+第五步  mark 与页码箭头（aqua 全透明 → 本就不显示；仅实现规则以便别的皮肤正确）
+```
