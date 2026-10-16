@@ -148,3 +148,107 @@ logic.rs Layout
 第四步  label / text / comment 三矩形 + align_type 垂直居中 → 序号列与注释列对齐官方
 第五步  mark 与页码箭头（aqua 全透明 → 本就不显示；仅实现规则以便别的皮肤正确）
 ```
+---
+
+## 六、移植骨架（logic.rs 全量重写用；照抄 VerticalLayout::DoLayout）
+
+### 6.1 数据结构（替换现在的 `struct Layout { cells, width, height }`）
+
+```rust
+/// 一行候选的四个矩形（官方 StandardLayout 的 _candidateLabelRects / _candidateTextRects /
+/// _candidateCommentRects / _candidateRects 四组数组，一一对应）。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Row {
+    pub label: Rect,     // 序号矩形（官方 labelRect）
+    pub text: Rect,      // 主文本矩形
+    pub comment: Rect,   // 注释矩形（空时为全 0）
+    pub rect: Rect,      // 高亮矩形 = label/text/comment 上下界的并集
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Rect { pub left: f32, pub top: f32, pub right: f32, pub bottom: f32 }
+
+pub struct Layout {
+    pub rows: Vec<Row>,       // 每行（含命中用）
+    pub preedit: Rect,        // 预编辑行矩形（官方 GetPreeditRect）
+    pub aux: Rect,            // 辅助串矩形
+    pub content: Rect,        // 内容矩形 → 面板底与描边都用它（官方 GetContentRect）
+    pub size: (f32, f32),     // contentSize = (宽 + offset*2, 高 + offset*2)
+    pub prev_page: Rect,      // 官方 GetPrepageRect（aqua 的 prevpage_color 全透明 → 空矩形）
+    pub next_page: Rect,
+}
+```
+
+### 6.2 DoLayout 逐句映射（官方 VerticalLayout.cpp L5-210）
+
+```
+const space = hilite_spacing                                  // L6
+height = real_margin_y                                        // L7
+base_offset = 0（mark：hilited_mark_color 无 alpha 或 mark_text 空 → 0）  // L9 + _CalcMarkMetrics
+(pgw, pgh) = (0,0)（_pageEnabled 为假 → 0）                    // L13 + _CalcPageIndicator
+
+preedit 非空且 !inline_preedit：
+    preedit = 行矩形(_GetPreeditSize(...) 的实测宽高, x = real_margin_x + offsetX, y = height)
+    height += preedit 高
+
+for i, item in items:
+    if i > 0 { height += candidate_spacing }                  // L38
+    w = real_margin_x + base_offset
+    label   = (w, height, w + labelWidth, height + lineHeight) // L44-46
+    w += labelWidth + space                                    // L47
+    text    = (w, height, w + textWidth, height + lineHeight)  // L53-55
+    w += textWidth
+    if comment 非空且 comment_color 有 alpha {
+        w += space                                             // L66
+        comment = (w, height, w + commentWidth, height + commentH)
+    }
+    行高 h = max(label/text/comment 的高)                       // L48/57/74
+    if align != top { 各矩形按 (h - 高)/2 或 (h - 高) 下移 }     // L78-92
+    row.rect = (real_margin_x + offsetX, min(top 三者),
+                width - real_margin_x + offsetX, max(bottom 三者))   // L94-106
+    width = max(width, w)                                      // L108
+    height += h                                                // L109
+
+width = max(width, 最长内容宽 + 2 * real_margin_x)              // L113-115
+height += real_margin_y                                        // L142
+if 有候选 { width = max(width, min_width); height = max(height, min_height) }  // L145-146
+候选矩形右对齐：right = max(right, left - real_margin_x + width - real_margin_x)  // L150-156
+content  = (0, 0, width, height)                               // L201
+size     = (width + offsetX*2, height + offsetY*2)             // L158
+highlight = rows[selected_index].rect                          // L162
+预编辑分段：把 preedit 按 preeditRange 切成 before / hilite / after 三段   // L181-186
+```
+
+### 6.3 offset / real_margin（官方 Layout.cpp L44-60）
+
+```
+real_margin_x = max(|margin_x|, hilite_padding_x)
+real_margin_y = max(|margin_y|, hilite_padding_y)
+offsetX = offsetY = 0
+if shadow_radius != 0 {
+    offsetX = |shadow_offset_x| + shadow_radius*2;  offsetY = |shadow_offset_y| + shadow_radius*2
+    if shadow_offset_x != 0 || shadow_offset_y != 0 { offsetX -= shadow_radius/2; offsetY -= shadow_radius/2 }
+}
+offsetX += border*2;  offsetY += border*2
+```
+
+### 6.4 mod.rs 要同步改的地方
+
+```
+paint()         面板底/描边用 layout.content（不是 (0,0,width,height)）
+                高亮用 layout.rows[i].rect（现在用横向 cell ✗）
+                预编辑行用 layout.preedit（现在完全没画 ✗）
+                删除 logic::BOTTOM_PAD（官方没有这个加高 ✗）
+命中测试 hit()   从"横向 cells 区间"改成"逐行判 y 落在哪一行的 rect 内"
+                （官方 OnMouseMove 用 m_layout->GetCandidateRect(i) 逐个做 PtInRect ✓）
+```
+
+### 6.5 实施顺序（每步单独编译 + 哈希校验安装 + 看效果）
+
+```
+① logic.rs 换成行模型 + mod.rs 取 rows[i].rect 画高亮      → 选中行只盖一行
+② 内容矩形与 offset 接上                                   → 窗口留白/大小对上官方
+③ 预编辑行（白底块 + 右端小三角）                          → 最显眼的差别消失
+④ label/text/comment 三矩形 + align_type 垂直居中          → 序号列与注释列对齐
+⑤ 删 BOTTOM_PAD                                           → 底部留白符合官方
+```
