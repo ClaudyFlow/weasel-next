@@ -150,10 +150,10 @@ async fn bounded_operation<T>(
     let mut future = std::pin::pin!(future);
     loop {
         if service_supervisor::is_stopping() {
-            return Err("broker shutdown interrupted deployment observation; deployment process left running".into());
+            return Err("broker 关闭打断了部署观察，部署进程仍在运行".into());
         }
         if Instant::now() >= deadline {
-            return Err("deployment observation timed out; deployment process left running".into());
+            return Err("等待部署超时，部署进程仍在运行".into());
         }
         if let Ok(result) = tokio::time::timeout(Duration::from_millis(100), future.as_mut()).await
         {
@@ -236,8 +236,8 @@ fn deploy(services: &mut OperationServices) -> OperationOutcome {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|error| format!("could not start deployment UI: {error}"))?;
-            let _ = writeln!(log, "[broker] deployment UI started pid={:?}", child.id());
+            .map_err(|error| format!("无法启动部署界面：{error}"))?;
+            let _ = writeln!(log, "[broker] 部署界面已启动，进程号 {:?}", child.id());
             let mut stdout = child.stdout.take().unwrap();
             let result = bounded_operation(
                 async {

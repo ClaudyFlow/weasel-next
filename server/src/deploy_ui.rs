@@ -59,7 +59,7 @@ pub fn run() -> Result<(), String> {
         )
     })();
     if let Err(error) = &result {
-        diagnostic(&format!("deployment UI failed: {error}"));
+        diagnostic(&format!("部署界面失败：{error}"));
         crate::deploy_telemetry::Telemetry::stdout().finish_and_wait(
             weasel_common::deploy_protocol::DeployComplete {
                 success: false,
@@ -90,7 +90,7 @@ fn with_fallback<G>(
         Err(error) => match guard {
             Some(guard) => {
                 diagnostic(&format!(
-                    "XAML deployment UI unavailable; using Task Dialog: {error}"
+                    "XAML 部署界面不可用，改用任务对话框：{error}"
                 ));
                 fallback(guard).map(Some)
             }
@@ -128,7 +128,7 @@ fn run_task_dialog(guard: SingleInstance) -> Result<DeployComplete, String> {
         .map_err(|_| "deployment worker panicked".to_owned())?;
     if let Err(error) = shown {
         diagnostic(&format!(
-            "Task Dialog unavailable; deployment completed without UI: {error}"
+            "任务对话框也不可用，本次部署在无界面下完成：{error}"
         ));
     }
     Ok(done)
@@ -150,7 +150,7 @@ fn open_deploy_log(log_path: &Arc<Mutex<Option<PathBuf>>>) {
             }
         })
     {
-        diagnostic(&format!("could not start deployment log opener: {error}"));
+        diagnostic(&format!("无法启动部署日志查看器：{error}"));
     }
 }
 

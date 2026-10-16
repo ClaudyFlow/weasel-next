@@ -195,7 +195,7 @@ impl UiSink for UiMailbox {
 
 /// 记录部署流程的诊断信息。
 pub fn diagnostic(message: &str) {
-    tracing::info!(message, "deployment diagnostic");
+    tracing::info!(message, "部署诊断");
 }
 
 /// 执行部署子进程，并将有限日志预览、遥测和最终状态发送给接收方。
@@ -213,7 +213,7 @@ pub fn run(ui: Option<Arc<dyn UiSink>>, guard: SingleInstance) -> DeployComplete
             Some(log)
         }
         Err(error) => {
-            diagnostic(&format!("deployment output log unavailable: {error}"));
+            diagnostic(&format!("拿不到部署输出日志：{error}"));
             None
         }
     };
@@ -221,7 +221,7 @@ pub fn run(ui: Option<Arc<dyn UiSink>>, guard: SingleInstance) -> DeployComplete
         if let Some(log) = output_log.as_mut()
             && let Err(error) = log.write_output(source, &text)
         {
-            diagnostic(&format!("deployment output log write failed: {error}"));
+            diagnostic(&format!("写入部署输出日志失败：{error}"));
             output_log = None;
         }
         if let Some(ui) = &ui {
@@ -255,7 +255,7 @@ pub fn run(ui: Option<Arc<dyn UiSink>>, guard: SingleInstance) -> DeployComplete
         let level = if done.success { "INFO" } else { "ERROR" };
         if let Err(error) = log.record(level, &done.message) {
             diagnostic(&format!(
-                "deployment output log completion write failed: {error}"
+                "写入部署输出日志的收尾记录失败：{error}"
             ));
         }
     }
