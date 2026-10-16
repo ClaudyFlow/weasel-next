@@ -416,7 +416,7 @@ impl Window {
                     // monitor instead of anchoring to a rect.
                     app.content.as_ref().map(|c| {
                         let width = pixels(c.layout.width, dpi);
-                        let height = pixels(c.layout.height + logic::BOTTOM_PAD, dpi);   // 窗口加高：底部留白 ✓
+                        let height = pixels(c.layout.height, dpi);
                         let (x, y) = crate::presentation::preview_position(width, height);
                         (x, y, width, height)
                     })
@@ -428,7 +428,7 @@ impl Window {
                             .filter(|a| a.valid)
                             .map(|anchor| {
                                 let width = pixels(c.layout.width, dpi);
-                                let height = pixels(c.layout.height + logic::BOTTOM_PAD, dpi);   // 窗口加高：底部留白 ✓
+                                let height = pixels(c.layout.height, dpi);
                                 let (x, y) =
                                     crate::presentation::popup_position(anchor, width, height);
                                 (x, y, width, height)
@@ -532,24 +532,15 @@ impl Window {
             target.Clear(Some(&glass));
             if let Some(c) = &app.content {
                 let width = c.layout.width;
-                let height = c.layout.height + logic::BOTTOM_PAD;   // 面板加高：底部留白 ✓
+                let height = c.layout.height;
                     // 圆角裁剪 + 分层透明度：每次渲染都按当前尺寸重裁（圆角不能只在第一帧对 ✗）
                     unsafe { apply_round_region(self.hwnd.get(), width, height); }
                 if width > 0.0 && height > 0.0 {
-                    // 圆角半径 = 高度的四分之一（用户指定），并保证不超出半宽。
-                    let radius = (height / 6.0).min(width / 2.0).max(4.0);   // 对齐截图：小圆角 ✓
+                    // 官方：圆角 = style/layout/round_corner（aqua = 4）。
+                    const ROUND_CORNER: f32 = 4.0;   // TODO 从 theme.toml 的 round_corner 读（现在与官方 aqua 一致 ✓）
+                    let radius = ROUND_CORNER.min(width / 2.0).max(1.0);
                     // 圆角要"切干净"：显式用逐图元抗锯齿，边缘平滑无锯齿。
                     target.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-                    // 面板本体：圆角矩形 + 40% 淡罩。
-                    // 原来 15% 在深色背景上几乎看不出轮廓 → 圆角"像没了" ✗；
-                    // 透明度低一点（40%）才既有玻璃感、又能看清圆角形状。
-                    // ★ 先铺满整窗黑底：面板绘制尺寸是按 DIP 算的，而窗口是**像素** ✗
-                    // 高分屏或舍入下会留下 1~2px 未绘制像素 → 在整窗统一透明下显示为**黑斑** ✗
-                    // 先铺一层满窗黑（圆角之外由 SetWindowRgn 裁掉 ✓），再画圆角面板 ✓
-                    let mut base = color(p.background);
-                    base.a = 1.0;
-                    brush.SetColor(&base);
-                    target.FillRectangle(&rect(0.0, 0.0, width + 4.0, height + 4.0), &brush);
 let mut fill = color(p.background);
                     fill.a = 1.0;   // 面板用真彩色 ✓ 透明由整窗 LWA_ALPHA 提供（否则 DWM 忽略逐像素 alpha → 又暗又平 ✗）
                     brush.SetColor(&fill);
@@ -562,60 +553,20 @@ let mut fill = color(p.background);
                         &brush,
                     );
                     // 圆角描边：加厚到 2px、更亮 —— 轮廓清楚（内缩半个描边宽，避免被裁）。
-                    let mut outline = color(p.border);   // 黑底外描边 ✓（下面把 alpha 调淡，避免顶部像一条黑边 ✗）
-                    outline.a = 0.60;   // Aero 外框：蓝灰、清晰但不硬 ✓
+                    // 官方 _HighlightRect：描边画在矩形内侧（路径半径 = radius - border/2），线宽 = border，颜色不透明。
+                    let mut outline = color(p.border);
+                    outline.a = 1.0;
                     brush.SetColor(&outline);
                     target.DrawRoundedRectangle(
                         &D2D1_ROUNDED_RECT {
-                            rect: rect(1.0, 1.0, width - 1.0, height - 1.0),
+                            rect: rect(1.5, 1.5, width - 1.5, height - 1.5),
                             radiusX: radius,
                             radiusY: radius,
                         },
                         &brush,
-                        2.0,
+                        3.0,   // 线宽 = border ✓
                         None,
                     );
-                    // 镜面高光：顶边 2px 亮线（沿直线段内缩 radius，避免戳出圆角）
-                    let mut highlight = color(0xffffff);
-                    highlight.a = 0.65;
-                    brush.SetColor(&highlight);
-                    // ★ Aero 招牌：顶部**高光带**（不是一条线 ✗）—— 24 层渐隐细线模拟线性渐变，
-// 顶部 alpha 0.72 二次衰减到 0，覆盖上半 48% 高度（无需渐变画刷 API ✓ 低风险 ✓）
-                    let band_start = 0.0;   // ★ 去掉顶部暗边：高光从最顶端开始 ✓
-                    let band_end = height * 0.60;   // 高光带再宽一点 ✓
-                    let steps = 24u32;
-                    let band_h = (band_end - band_start) / steps as f32;
-                    for i in 0..steps {
-                        let f = i as f32 / steps as f32;
-                        let mut hl = color(0xffffff);
-                        hl.a = 0.55 * (1.0 - f) * (1.0 - f);   // ★ Aero 招牌：强顶光（玻璃上半那道白光 ✓）
-                        brush.SetColor(&hl);
-                        let y0 = band_start + i as f32 * band_h;
-                        target.FillRectangle(&rect(0.0, y0, width, y0 + band_h), &brush);   // ★ 全宽高光带（溢出圆角的部分由 SetWindowRgn 裁掉 ✓）
-                    }
-                    let mut hl_line = color(0xffffff);
-                    hl_line.a = 0.75;   // Aero 顶端亮线（很亮 ✓）
-                    brush.SetColor(&hl_line);
-                    target.FillRectangle(&rect(0.0, band_start, width, band_start + 1.0), &brush);   // 亮线跟着高光带顶边 ✓
-                    // 左右淡边（同样内缩 radius，止于上下圆角之间）
-                    highlight.a = 0.20;   // 黑底上侧边也要收细 ✓
-                    brush.SetColor(&highlight);
-                    // ★ 左右两侧对称的高光蓝边（Aero 的玻璃侧壁反光 ✓）
-                    let mut edge_blue = color(0xFFFFFF);   // 黑底高亮：侧边用白色细高光 ✓
-                    edge_blue.a = 0.22;
-                    brush.SetColor(&edge_blue);
-                    target.FillRectangle(&rect(0.0, radius, 2.0, height - radius), &brush);
-                    target.FillRectangle(&rect(width - 2.0, radius, width, height - radius), &brush);
-                    brush.SetColor(&highlight);
-                    target.FillRectangle(
-                        &rect(width - 2.0, radius, width, height - radius),
-                        &brush,
-                    );
-                    // 底部暗边（厚度感）
-                    let mut shade = color(0x000000);
-                    shade.a = 0.30;
-                    brush.SetColor(&shade);
-                    target.FillRectangle(&rect(radius, height - 1.0, width - radius, height), &brush);
                     brush.SetColor(&color(p.text));
                 }
             }
