@@ -168,6 +168,16 @@ fn with_state<T>(f: impl FnOnce(&mut SwitcherDialog) -> T) -> Option<T> {
     })
 }
 
+/// 临时诊断：把方案选单对话框收到的消息追加写到 %TEMP%\weasel-switcher-diag.log。
+/// 查"右侧简介不跟着变"用 —— 看 LVN_ITEMCHANGED 到底有没有到、iItem 是多少。
+fn diag(text: &str) {
+    use std::io::Write;
+    let path = std::env::temp_dir().join("weasel-switcher-diag.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{text}");
+    }
+}
+
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -549,6 +559,7 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                 return 0;
             }
             let header = unsafe { &*header };
+            diag(&format!("NOTIFY code={} iItem={} idFrom={}", header.code, header.i_item, header.id_from));
             if header.code as i32 == LVN_ITEMCHANGED {
                 let index = header.i_item as usize;
                 with_state(|state| {
