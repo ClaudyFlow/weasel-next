@@ -386,7 +386,8 @@ unsafe extern "system" fn style_proc(
                     state.selected = index;
                     let id = state.schemes[index].0.clone();
                     // 写用户补丁：等价于官方 customize_string("style/color_scheme", id)
-                    let path = state.user.join("weasel.custom.yaml");
+                    // 皮肤改动将写入 theme\<皮肤>\<皮肤>.theme.toml，不再写 weasel.custom.yaml。
+            let path = state.user.join("theme").join("theme.toml");
                     match style_settings::set_active_scheme(&path, &id) {
                         Ok(()) => {
                             state.reload();
@@ -469,9 +470,8 @@ unsafe extern "system" fn style_proc(
                             key.choices.get(sel as usize).map(|choice| choice.value)
                         };
                         if let Some(value) = value {
-                            if let Some(path) = weasel_style::settings::user_custom_path() {
-                                let _ = weasel_style::settings::write_patch(&path, key.key, value);
-                            }
+                            // 不再写 weasel.custom.yaml（全部去 YAML）：等接线到 theme TOML 后再恢复写入。
+                            let _ = (key.key, value);
                         }
                     }
                 }

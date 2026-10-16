@@ -151,7 +151,9 @@ pub fn write_patch(custom_path: &Path, patch_path: &str, value: &str) -> io::Res
 
 /// 切换当前配色（官方 `ApplyColorPatches` 的第一步）。
 pub fn set_active_scheme(custom_path: &Path, scheme_id: &str) -> io::Result<()> {
-    write_patch(custom_path, "style/color_scheme", scheme_id)
+    // 不再写 weasel.custom.yaml（全部去 YAML）：等接线到 theme\theme.toml 后恢复写入。
+    let _ = (custom_path, scheme_id);
+    Ok(())
 }
 
 /// 改某套配色里的一个颜色（官方 `ApplyColorPatches` 的第二步）。
@@ -168,7 +170,9 @@ pub fn set_scheme_color(
     if value.is_empty() {
         remove_patch(custom_path, &path)
     } else {
-        write_patch(custom_path, &path, value)
+        // 同上：皮肤改动将写入 theme\<皮肤>\<皮肤>.theme.toml，不再写 YAML。
+    let _ = (custom_path, path, value);
+    Ok(())
     }
 }
 
