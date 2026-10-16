@@ -275,31 +275,70 @@ pub fn theme_candidates(shared: &Path, user: &Path, name: &str) -> Vec<PathBuf> 
 }
 
 /// 按搜索顺序读第一个存在的主题文件。
+/// 合并两份主题文件：主文件（布局 + 用哪套皮肤）与皮肤文件（只有配色）。
+fn merge_theme(main: ThemeFile, skin: ThemeFile) -> ThemeFile {
+    ThemeFile {
+        config_version: main.config_version.or(skin.config_version),
+        color_scheme: main.color_scheme.or(skin.color_scheme),
+        color_scheme_dark: main.color_scheme_dark.or(skin.color_scheme_dark),
+        style: main.style.or(skin.style),
+        // 配色以皮肤文件为准；皮肤文件没有则退回主文件里的（兼容拆分前的旧文件）。
+        schemes: if skin.schemes.is_empty() { main.schemes } else { skin.schemes },
+    }
+}
+
+/// 主题主文件的位置：`theme\theme.toml`（用户覆盖优先，其次共享）。
+pub fn theme_main_candidates(shared: &Path, user: &Path) -> Vec<PathBuf> {
+    vec![user.join("theme").join("theme.toml"), shared.join("theme").join("theme.toml")]
+}
+
+/// 读主题：主文件（`theme\theme.toml`）+ 皮肤文件（`theme\<名字>\<名字>.theme.toml`）合并。
+///
+/// 两者都可缺：只有主文件时按旧行为直接用；只有皮肤文件时也能工作。都没有则返回 `None`。
 pub fn load_theme(
     shared: &Path,
     user: &Path,
     name: &str,
 ) -> Result<Option<WeaselConfig>, Box<dyn std::error::Error>> {
-    for candidate in theme_candidates(shared, user, name) {
+    let mut main: Option<ThemeFile> = None;
+    for candidate in theme_main_candidates(shared, user) {
         if candidate.is_file() {
-            return Ok(Some(parse_file(candidate)?.into_config()));
+            main = Some(parse_file(candidate)?);
+            break;
         }
     }
-    Ok(None)
+    let mut skin: Option<ThemeFile> = None;
+    for candidate in theme_candidates(shared, user, name) {
+        if candidate.is_file() {
+            skin = Some(parse_file(candidate)?);
+            break;
+        }
+    }
+    let merged = match (main, skin) {
+        (Some(main), Some(skin)) => merge_theme(main, skin),
+        (Some(main), None) => main,
+        (None, Some(skin)) => skin,
+        (None, None) => return Ok(None),
+    };
+    Ok(Some(merged.into_config()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+/// 拆分后的主题主文件（布局 + 用哪套皮肤）。
+const DEFAULT_THEME_MAIN: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/theme/theme.toml");
     const DEFAULT_THEME: &str =
         concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/theme/default/default.theme.toml");
 
     #[test]
     fn parses_generated_default_theme() {
-        let config = parse_file(DEFAULT_THEME)
-            .expect("生成的 default.theme.toml 必须能解析")
-            .into_config();
+        // 拆分后要读两份再合并：theme.toml（布局 + 用哪套皮肤）+ 皮肤文件（配色）。
+        let main = parse_file(DEFAULT_THEME_MAIN).expect("theme.toml 必须能解析");
+        let skin = parse_file(DEFAULT_THEME).expect("default.theme.toml 必须能解析");
+        let config = merge_theme(main, skin).into_config();
         println!("config_version = {:?}", config.config_version);
         println!("当前配色 = {:?}", config.style.color_scheme);
         println!("配色数量 = {}", config.schemes.len());
