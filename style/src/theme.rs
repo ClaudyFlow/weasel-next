@@ -1,14 +1,14 @@
-//! 读取我们约定的主题文件 `theme\<名字>.theme.yaml`（例如 `default.theme.yaml`）。
+//! 读取我们约定的主题文件 `theme\<名字>.theme.toml`（例如 `default.theme.toml`）。
 //!
-//! 这份文件由 `theme-toml` 这个 bin 从官方 `weasel.yaml` 生成（见 `src/bin/theme_toml.rs`），
+//! 这份文件由 `theme-toml` 这个 bin 从官方 `weasel.toml` 生成（见 `src/bin/theme_toml.rs`），
 //! 内容是官方 style 段与 layout 段的全部字段，加上 `preset_color_schemes` 里每一套配色。
-//! librime 已打补丁把 `.theme.yaml` 归入 `theme/` 子目录，因此运行期路径是：
+//! librime 已打补丁把 `.theme.toml` 归入 `theme/` 子目录，因此运行期路径是：
 //!
-//! * 共享数据：`<程序文件夹>\Rime-Next\theme\default.theme.yaml`
-//! * 用户覆盖：`%APPDATA%\Rime-Next\theme\default.theme.yaml`（可选，优先）
+//! * 共享数据：`<程序文件夹>\Rime-Next\theme\default.theme.toml`
+//! * 用户覆盖：`%APPDATA%\Rime-Next\theme\default.theme.toml`（可选，优先）
 //!
 //! 设计要点与官方一致：**皮肤是数据不是代码**。本模块只负责把文件读成结构体，
-//! 再转换成与 `weasel.yaml` 完全相同的 [`WeaselConfig`]，这样消费方（渲染器、设置界面）
+//! 再转换成与 `weasel.toml` 完全相同的 [`WeaselConfig`]，这样消费方（渲染器、设置界面）
 //! 只需要认一种类型，不必关心数据来自 YAML 还是 TOML。
 
 use serde::Deserialize;
@@ -77,7 +77,13 @@ pub struct LayoutSection {
     pub linespacing: Option<i32>,
     pub baseline: Option<i32>,
     pub layout_type_mode: Option<i32>,
-    /// 官方 `style/layout/type` 的字符串形式（vertical / horizontal / …）
+    /// 官方 `style/layout/type` 的字符串形式（vertical / horizontal / …）。
+    ///
+    /// ⚠️ 文件里的键名是 **`type`**（官方 `WeaselStyleKeys.h:115` 的规范路径就是
+    /// `style/layout/type`），`type` 是 Rust 关键字不能当字段名，所以必须 rename。
+    /// 少了这行，TOML 里写的 `type = "vertical_text"` 会被**静默忽略** —— 竖排文字
+    /// 与"+全屏"这两种布局没有对应的旧布尔键，一忽略就彻底选不上。
+    #[serde(rename = "type")]
     pub layout_type: Option<String>,
 }
 
@@ -125,18 +131,18 @@ pub struct ThemeFile {
 }
 
 /// 解析主题 TOML 文本。
-pub fn parse_theme(text: &str) -> Result<ThemeFile, String> {
-    weasel_common::yaml::from_str(text)
+pub fn parse_toml(text: &str) -> Result<ThemeFile, toml::de::Error> {
+    toml::from_str(text)
 }
 
 /// 一步到位：解析文件。
 pub fn parse_file(path: impl AsRef<Path>) -> Result<ThemeFile, Box<dyn std::error::Error>> {
     let text = std::fs::read_to_string(path)?;
-    Ok(parse_theme(&text)?)
+    Ok(parse_toml(&text)?)
 }
 
 impl ThemeFile {
-    /// 转成与 `weasel.yaml` 同构的 [`WeaselConfig`]，缺项沿用官方默认值。
+    /// 转成与 `weasel.toml` 同构的 [`WeaselConfig`]，缺项沿用官方默认值。
     pub fn into_config(self) -> WeaselConfig {
         let mut config = WeaselConfig {
             config_version: self.config_version.unwrap_or_default(),
@@ -270,10 +276,10 @@ impl ThemeFile {
 /// 读主题里的"编码画在哪"这一个开关（官方 `style/inline_preedit`）。
 ///
 /// 语义与官方一致：**false = 组字串画进候选窗**（官方出厂默认），true = 画在宿主应用里。
-/// 这是主题（布局）的一部分，所以来源是 `theme.yaml`，**不是**宿主配置：
+/// 这是主题（布局）的一部分，所以来源是 `theme.toml`，**不是**宿主配置：
 ///
-/// * 用户目录 `%APPDATA%\Rime-Next\theme\theme.yaml` 优先；
-/// * 其次程序文件夹 `<程序>\Rime-Next\theme\theme.yaml`；
+/// * 用户目录 `%APPDATA%\Rime-Next\theme\theme.toml` 优先；
+/// * 其次程序文件夹 `<程序>\Rime-Next\theme\theme.toml`；
 /// * 都没有（或解析失败）就用官方出厂值 `false`。
 ///
 /// `shared` 传程序文件夹里的 `Rime-Next`，`user` 传 `%APPDATA%\Rime-Next`。
@@ -289,12 +295,12 @@ pub fn inline_preedit(shared: &Path, user: &Path, name: &str) -> bool {
 /// `shared` 传程序文件夹里的 `Rime-Next`，`user` 传 `%APPDATA%\Rime-Next`，
 /// `name` 是主题名（例如 `default`）。
 pub fn theme_candidates(shared: &Path, user: &Path, name: &str) -> Vec<PathBuf> {
-    let file = format!("{name}.theme.yaml");
+    let file = format!("{name}.theme.toml");
     vec![
-        // 树结构：theme/<名字>/<名字>.theme.yaml（首选）
+        // 树结构：theme/<名字>/<名字>.theme.toml（首选）
         user.join("theme").join(name).join(&file),
         shared.join("theme").join(name).join(&file),
-        // 兼容旧的扁平位置：theme/<名字>.theme.yaml
+        // 兼容旧的扁平位置：theme/<名字>.theme.toml
         user.join("theme").join(&file),
         shared.join("theme").join(file),
     ]
@@ -313,12 +319,12 @@ fn merge_theme(main: ThemeFile, skin: ThemeFile) -> ThemeFile {
     }
 }
 
-/// 主题主文件的位置：`theme\theme.yaml`（用户覆盖优先，其次共享）。
+/// 主题主文件的位置：`theme\theme.toml`（用户覆盖优先，其次共享）。
 pub fn theme_main_candidates(shared: &Path, user: &Path) -> Vec<PathBuf> {
-    vec![user.join("theme").join("theme.yaml"), shared.join("theme").join("theme.yaml")]
+    vec![user.join("theme").join("theme.toml"), shared.join("theme").join("theme.toml")]
 }
 
-/// 读主题：主文件（`theme\theme.yaml`）+ 皮肤文件（`theme\<名字>\<名字>.theme.yaml`）合并。
+/// 读主题：主文件（`theme\theme.toml`）+ 皮肤文件（`theme\<名字>\<名字>.theme.toml`）合并。
 ///
 /// 两者都可缺：只有主文件时按旧行为直接用；只有皮肤文件时也能工作。都没有则返回 `None`。
 pub fn load_theme(
@@ -355,13 +361,13 @@ mod tests {
 
     /// 出厂皮肤文件（只有配色；布局与配色选择属于用户设置）。
     const DEFAULT_THEME: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/theme/default/default.theme.yaml");
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/theme/default/default.theme.toml");
 
     #[test]
     fn factory_skin_stands_alone_with_official_defaults() {
-        // 出厂侧不再分发 theme.yaml（布局/配色选择是用户设置），所以皮肤文件必须能单独用：
-        // 配色来自文件，布局走 UIStyle::default()（= 官方 weasel.yaml 的出厂值）。
-        let skin = parse_file(DEFAULT_THEME).expect("default.theme.yaml 必须能解析");
+        // 出厂侧不再分发 theme.toml（布局/配色选择是用户设置），所以皮肤文件必须能单独用：
+        // 配色来自文件，布局走 UIStyle::default()（= 官方 weasel.toml 的出厂值）。
+        let skin = parse_file(DEFAULT_THEME).expect("default.theme.toml 必须能解析");
         let config = merge_theme(ThemeFile::default(), skin).into_config();
         println!("配色数量 = {}", config.schemes.len());
         println!("布局 = {:?}", config.style.layout);
@@ -370,17 +376,17 @@ mod tests {
         assert_eq!(config.schemes.len(), 36, "官方 36 套配色必须齐全");
         assert_eq!(config.style.font_face, "Microsoft YaHei");
         assert_eq!(config.style.font_point, 14);
-        // 布局缺省必须等于官方 weasel.yaml，否则"没写 theme.yaml"就会渲染走样
+        // 布局缺省必须等于官方 weasel.toml，否则"没写 theme.toml"就会渲染走样
         assert_eq!(config.style.layout.min_width, 160);
         assert_eq!(config.style.layout.border, 3);
-        assert_eq!(config.style.layout.round_corner, 4, "官方 weasel.yaml 的 round_corner");
+        assert_eq!(config.style.layout.round_corner, 4, "官方 weasel.toml 的 round_corner");
         assert_eq!(config.style.layout.corner_radius, 4);
         assert_eq!(config.style.layout.shadow_offset_x, 4);
     }
 
     #[test]
     fn skin_colors_keep_official_alpha_semantics() {
-        let skin = parse_file(DEFAULT_THEME).expect("default.theme.yaml 必须能解析");
+        let skin = parse_file(DEFAULT_THEME).expect("default.theme.toml 必须能解析");
         let config = merge_theme(ThemeFile::default(), skin).into_config();
         let aqua = config.scheme("aqua");
         // 不透明黑与全透明必须分得开（生成器写 6 位/8 位就是为这个）
@@ -396,12 +402,47 @@ mod tests {
         }
     }
 
+    /// 官方 `style/layout/type` 在 TOML 里的键名是 **`type`**（关键字 ⇒ 必须 serde rename）。
+    /// 少了 rename，这一行会被静默忽略：`vertical_text` / `+fullscreen` 两种布局**没有**
+    /// 对应的旧布尔键，一忽略就再也选不上（表现：设置界面选了"竖直+文字竖排"却毫无变化）。
+    #[test]
+    fn layout_type_key_is_named_type_in_toml() {
+        let file = parse_toml("[style.layout]\ntype = \"vertical_text\"\n").expect("合法 TOML");
+        let config = file.into_config();
+        assert_eq!(
+            config.style.layout.layout_type, "vertical_text",
+            "`[style.layout] type = \"…\"` 必须被读到"
+        );
+    }
+
+    /// 出厂默认必须是**竖排**（官方 `weasel.yaml` 的 `style/horizontal: false`）。
+    ///
+    /// 这里曾经是 `true`：任何不带 `horizontal` 键的 `theme.toml` 都会走成横向并排，
+    /// 与用户要的"像官方"正好相反（`theme.log` 里五行候选 x 递增、y 不变就是这个）。
+    #[test]
+    fn default_layout_is_vertical_like_official() {
+        let config = ThemeFile::default().into_config();
+        assert!(!config.style.horizontal, "官方 weasel.yaml 的 horizontal 是 false");
+        assert!(!config.style.vertical_text, "默认不是竖排文字（那是另一个开关）");
+        assert!(config.style.layout.layout_type.is_empty(), "默认不指定 layout/type");
+        assert_eq!(config.style.layout.layout_type_mode, -1, "默认不指定整型布局码");
+    }
+
+    /// 文件里**显式**写了 `horizontal = true` 时必须以文件为准（默认值只是兜底）。
+    /// 与上一条配对：默认竖排，但用户/官方文件说横排就横排。
+    #[test]
+    fn explicit_horizontal_in_file_wins_over_default() {
+        let file = parse_toml("[style]\nhorizontal = true\n").expect("合法 TOML");
+        let config = merge_theme(file, ThemeFile::default()).into_config();
+        assert!(config.style.horizontal, "文件里的 horizontal = true 应覆盖默认值");
+    }
+
     #[test]
     fn search_order_prefers_user_directory() {
         let shared = Path::new("C:\\share");
         let user = Path::new("C:\\user");
         let candidates = theme_candidates(shared, user, "default");
-        assert_eq!(candidates[0], PathBuf::from("C:\\user\\theme\\default\\default.theme.yaml"));
-        assert_eq!(candidates[1], PathBuf::from("C:\\share\\theme\\default\\default.theme.yaml"));
+        assert_eq!(candidates[0], PathBuf::from("C:\\user\\theme\\default\\default.theme.toml"));
+        assert_eq!(candidates[1], PathBuf::from("C:\\share\\theme\\default\\default.theme.toml"));
     }
 }

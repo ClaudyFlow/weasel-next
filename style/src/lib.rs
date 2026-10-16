@@ -1,7 +1,7 @@
-//! 官方 Weasel 皮肤文件（`weasel.yaml`）的解析与 `UIStyle` 中间层。
+//! 官方 Weasel 皮肤文件（`weasel.toml`）的解析与 `UIStyle` 中间层。
 //!
 //! 目标：**能识别官方的皮肤文件**。字段与 fxliang/weasel 的
-//! `include/WeaselIPCData.h` 的 `UIStyle`、以及 `output/data/weasel.yaml` 的实际键面一一对齐：
+//! `include/WeaselIPCData.h` 的 `UIStyle`、以及 `output/data/weasel.toml` 的实际键面一一对齐：
 //!
 //! * `style:`            25 个键（字体、行为、文本格式、配色选择）
 //! * `style/layout:`     19 个键（对齐、尺寸、间距、圆角、阴影、行距、基线）
@@ -10,7 +10,7 @@
 //! * `show_notifications` / `show_notifications_time` / `global_ascii` / `config_version`
 //!
 //! 设计约束：**不引入 YAML 第三方依赖**（本仓库没有，且要能离线构建），
-//! 因此这里实现一个只覆盖 `weasel.yaml` 形状的极简 YAML 子集解析器：
+//! 因此这里实现一个只覆盖 `weasel.toml` 形状的极简 YAML 子集解析器：
 //! 缩进映射、标量、`#` 注释、单双引号、空行。够用且可测。
 
 /// 官方颜色语义（位数定 alpha、`color_format` 定通道序、混色）。
@@ -104,7 +104,7 @@ struct Level {
 /// 解析极简 YAML。返回顶层映射。
 ///
 /// 支持：任意层级的缩进映射、`key: value` 标量、`key:` 子映射、行尾注释、空行、引号标量。
-/// 不支持：列表、多行标量、锚点（`weasel.yaml` 用不到）。
+/// 不支持：列表、多行标量、锚点（`weasel.toml` 用不到）。
 pub fn parse_yaml(text: &str) -> Result<Yaml, YamlError> {
     let mut stack: Vec<Level> = vec![Level {
         indent: 0,
@@ -251,7 +251,7 @@ pub struct Layout {
     pub layout_type_mode: i32,
     /// 官方 `style/layout/type` 的**字符串**形式（`vertical` / `horizontal` /
     /// `vertical_text` / `vertical+fullscreen` / `horizontal+fullscreen` /
-    /// `vertical_text+fullscreen`；官方 weasel.yaml 用的是这一种）
+    /// `vertical_text+fullscreen`；官方 weasel.toml 用的是这一种）
     pub layout_type: String,
     /// 官方 `style/layout/hilited_corner_radius`（高亮块自己的圆角 ✓ -1 = 跟随 corner_radius ✓）
     pub hilited_corner_radius: i32,
@@ -265,7 +265,7 @@ pub struct Layout {
 }
 
 impl Default for Layout {
-    /// 默认值 = 官方 `output/data/weasel.yaml` 里的值（逐键核对；出厂侧已不再分发 theme.yaml，
+    /// 默认值 = 官方 `output/data/weasel.toml` 里的值（逐键核对；出厂侧已不再分发 theme.toml，
     /// 所以这些默认值必须自带，缺 TOML 也要有官方观感）。
     fn default() -> Self {
         Self {
@@ -286,7 +286,7 @@ impl Default for Layout {
             border: 3,
             layout_type_mode: -1,
             layout_type: String::new(),
-            // -1 = 未指定，跟随 round_corner（官方 weasel.yaml 的注释：round_corner 是
+            // -1 = 未指定，跟随 round_corner（官方 weasel.toml 的注释：round_corner 是
             // hilited_corner_radius 的别名）
             hilited_corner_radius: -1,
             round_corner: 4,
@@ -301,7 +301,7 @@ impl Default for Layout {
 }
 
 impl Default for UIStyle {
-    /// 默认值 = 官方 `weasel.yaml` 的 `style:` 段。
+    /// 默认值 = 官方 `weasel.toml` 的 `style:` 段。
     fn default() -> Self {
         Self {
             font_face: "Microsoft YaHei".into(),
@@ -314,7 +314,13 @@ impl Default for UIStyle {
             antialias_mode: "default".into(),
             ascii_tip_follow_cursor: false,
             click_to_capture: false,
-            horizontal: true,
+            // 官方 `output/data/weasel.yaml` 的 `style/horizontal: false`（= 竖直布局，一行一个候选）。
+            // ⚠️ 这里曾经是 `true`：出厂默认偏离官方后，任何**不带** `horizontal` 键的
+            // `theme.toml`（程序文件夹里那份已被按用户要求删掉，用户那份也可能只写了
+            // `color_scheme`）都会走成横向并排 —— 与用户要的"像官方"正好相反。
+            // 竖排/横排的**权威开关**是 `style/layout/type`（官方 weasel.toml 用字符串名），
+            // `horizontal` 只是它的旧布尔同义键；两者都没有时才轮到这里的默认值。
+            horizontal: false,
             fullscreen: false,
             inline_preedit: false,
             preedit_type: "composition".into(),
@@ -423,7 +429,7 @@ impl ColorScheme {
     }
 }
 
-/// 整份 `weasel.yaml`。
+/// 整份 `weasel.toml`。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WeaselConfig {
     pub config_version: String,
@@ -626,9 +632,9 @@ impl WeaselConfig {
     }
 }
 
-// ------------------------------------------------- 官方 weasel.custom.yaml 补丁
+// ------------------------------------------------- 官方 weasel.custom.toml 补丁
 
-/// 把官方 `weasel.custom.yaml` 的 `patch:` 段应用到 `weasel.yaml` 之上。
+/// 把官方 `weasel.custom.toml` 的 `patch:` 段应用到 `weasel.toml` 之上。
 ///
 /// 官方（Rime）的写法是「路径 + 值」：
 ///
@@ -673,7 +679,7 @@ fn set_path(root: &mut Yaml, path: &str, value: Yaml) {
     }
 }
 
-/// 读官方两份文件：基底 `weasel.yaml` + 用户覆盖 `weasel.custom.yaml`。
+/// 读官方两份文件：基底 `weasel.toml` + 用户覆盖 `weasel.custom.toml`。
 pub fn parse_with_patch(base: &str, custom: Option<&str>) -> Result<WeaselConfig, YamlError> {
     let mut root = parse_yaml(base)?;
     if let Some(text) = custom {
@@ -752,7 +758,7 @@ mod patch_tests {
 
     #[test]
     fn real_official_pair() {
-        let base = std::fs::read_to_string(OFFICIAL).expect("读官方 weasel.yaml");
+        let base = std::fs::read_to_string(OFFICIAL).expect("读官方 weasel.toml");
         let custom = "patch:\n  style/color_scheme: luna\n  style/font_point: 18\n  style/hover_type: hilite\n  style/layout/shadow_radius: 6\n  preset_color_schemes/luna/back_color: 0x202020\n";
         let config = parse_with_patch(&base, Some(custom)).expect("解析");
         assert_eq!(config.style.color_scheme, "luna");
@@ -772,11 +778,16 @@ mod patch_tests {
 mod tests {
     use super::*;
 
-    /// 官方原版皮肤文件（仓库出厂数据，与 fxliang/weasel 的 output/data/weasel.yaml 同一份）。
+    /// 官方原版皮肤文件（仓库出厂数据，与 fxliang/weasel 的 `output/data/weasel.yaml` 逐字节同一份）。
+    ///
+    /// ⚠️ 文件名是 **`.yaml`**：这份是 rime 侧的**数据文件**，不是我们的配置，
+    /// 必须保持 YAML（见 `checkpoint-1483898f.md` 的坑 ①：禁止批量把 rime 数据改名成
+    /// `.toml`）。这里曾经写成 `weasel.toml`，文件根本不存在 ⇒ 本模块 8 个测试全红。
+    /// 解析走的是 `parse_file` → `parse_yaml`（`style` 里那条 YAML 链），所以 `.yaml` 才对得上。
     const OFFICIAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/weasel.yaml");
 
     fn official() -> WeaselConfig {
-        parse_file(OFFICIAL).expect("官方 weasel.yaml 必须能解析")
+        parse_file(OFFICIAL).expect("官方 weasel.toml 必须能解析")
     }
 
     #[test]
@@ -816,7 +827,7 @@ mod tests {
         assert_eq!(config.style.layout.max_width, 0); // 带 tab 的注释也要剥掉
         assert_eq!(config.style.layout.border, 3, "border_width 应同时填进官方 border 键");
         assert_eq!(config.style.layout.hilited_corner_radius, -1, "官方未填则保持 -1（跟随 round_corner）");
-        assert_eq!(config.style.layout.round_corner, 4, "官方 weasel.yaml 的 round_corner");
+        assert_eq!(config.style.layout.round_corner, 4, "官方 weasel.toml 的 round_corner");
         assert_eq!(config.style.layout.corner_radius, 4);
         // app_options
         assert_eq!(

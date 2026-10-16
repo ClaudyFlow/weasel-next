@@ -1,7 +1,7 @@
-//! 把官方小狼毫的皮肤（`weasel.yaml`）转成我们约定的主题文件：
-//! `Rime-Next\theme\default.theme.yaml`。
+//! 把官方小狼毫的皮肤（`weasel.toml`）转成我们约定的主题文件：
+//! `Rime-Next\theme\default.theme.toml`。
 //!
-//! 用法：`cargo run --release -p weasel-style --bin theme-toml -- <输入 weasel.yaml> <输出 default.theme.yaml>`
+//! 用法：`cargo run --release -p weasel-style --bin theme-toml -- <输入 weasel.toml> <输出 default.theme.toml>`
 //!
 //! 约定（TOML v1）：顶层 `config_version` / `color_scheme` / `color_scheme_dark`，
 //! `[style]` 段放官方 style 的 25 个键，`[style.layout]` 放 19 个布局键，
@@ -77,6 +77,11 @@ fn write_style(out: &mut String, config: &WeaselConfig) {
 
     let layout = &style.layout;
     out.push_str("\n[style.layout]\n");
+    // 官方 `weasel.toml` 里布局的**权威键**是 `style/layout/type`（字符串名，
+    // `vertical` / `horizontal` / `vertical_text` / …），`style/horizontal` 只是它的旧布尔
+    // 同义键。这里必须把字符串键写出来：只写 `horizontal` 会漏掉"竖排文字"与"+全屏"
+    // 这两种布局（它们没有对应的布尔键），生成物一装上就与官方不一致。
+    let _ = writeln!(out, "type = \"{}\"", escape(&layout.layout_type));
     let _ = writeln!(out, "align_type = \"{}\"", escape(&layout.align_type));
     let _ = writeln!(out, "min_width = {}", layout.min_width);
     let _ = writeln!(out, "max_width = {}", layout.max_width);
@@ -131,9 +136,9 @@ fn main() {
             matches!(mode.as_deref(), Some("--skin")),
         ),
         _ => {
-            eprintln!("用法: theme-toml <weasel.yaml> <输出.toml> [--skin]");
-            eprintln!("  --skin: 只写配色（出厂皮肤文件 default.theme.yaml 用这个；");
-            eprintln!("          布局与配色选择属于用户设置，放在 %APPDATA%\\Rime-Next\\theme\\theme.yaml）");
+            eprintln!("用法: theme-toml <weasel.toml> <输出.toml> [--skin]");
+            eprintln!("  --skin: 只写配色（出厂皮肤文件 default.theme.toml 用这个；");
+            eprintln!("          布局与配色选择属于用户设置，放在 %APPDATA%\\Rime-Next\\theme\\theme.toml）");
             std::process::exit(2);
         }
     };
@@ -148,19 +153,19 @@ fn main() {
 
     let mut out = String::new();
     if skin_only {
-        out.push_str("# default.theme.yaml —— 皮肤「default」：**只有配色**。\n");
+        out.push_str("# default.theme.toml —— 皮肤「default」：**只有配色**。\n");
         out.push_str("#\n");
         out.push_str(&format!(
-            "# 内容由官方 weasel.yaml（{input}）生成；\n# 布局与\"用哪套皮肤\"在 theme\\theme.yaml 里。\n"
+            "# 内容由官方 weasel.toml（{input}）生成；\n# 布局与\"用哪套皮肤\"在 theme\\theme.toml 里。\n"
         ));
         out.push_str("# 颜色沿用官方语义：位数决定 alpha（6 位不透明、8 位带 alpha），\n");
         out.push_str("# 通道顺序按 color_format（官方默认 abgr，即文本是 AABBGGRR）。\n");
-        out.push_str("# 位置约定: <程序文件夹>\\Rime-Next\\theme\\<皮肤名>\\<皮肤名>.theme.yaml\n\n");
+        out.push_str("# 位置约定: <程序文件夹>\\Rime-Next\\theme\\<皮肤名>\\<皮肤名>.theme.toml\n\n");
     } else {
-        out.push_str("# default.theme.yaml —— 官方小狼毫的皮肤，逐字搬过来\n");
-        out.push_str("#\n# 生成方式: cargo run --release -p weasel-style --bin theme-toml -- <weasel.yaml> <本文件>\n");
+        out.push_str("# default.theme.toml —— 官方小狼毫的皮肤，逐字搬过来\n");
+        out.push_str("#\n# 生成方式: cargo run --release -p weasel-style --bin theme-toml -- <weasel.toml> <本文件>\n");
         out.push_str("# 内容: 官方 style 段与 layout 段全部字段 + preset_color_schemes 里每一套配色。\n");
-        out.push_str("# 位置约定: <程序文件夹>\\Rime-Next\\theme\\default.theme.yaml（由 librime 按路径识别）。\n\n");
+        out.push_str("# 位置约定: <程序文件夹>\\Rime-Next\\theme\\default.theme.toml（由 librime 按路径识别）。\n\n");
     }
     let _ = writeln!(out, "config_version = \"{}\"", escape(&config.config_version));
     let _ = writeln!(out, "color_scheme = \"{}\"", escape(&config.style.color_scheme));
