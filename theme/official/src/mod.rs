@@ -234,14 +234,14 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
                 return Err(windows_core::Error::from_thread().to_string());
             }
         }
-        // The preview keeps the borderless strip identical to input but must be
-        // findable and closable: no WS_EX_TOOLWINDOW (task-bar button) and no
-        // WS_EX_NOACTIVATE (activatable, so it can be closed).
+        // 照官方 WeaselPanel.cpp:374-376：WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST
+        // | WS_EX_NOREDIRECTIONBITMAP（**不要** WS_EX_LAYERED ✗ —— 那会和 DComp 合成冲突，
+        // 且未设 SetLayeredWindowAttributes 时整窗全透明，表现为"看不见颜色"）。
         let (ex_style, title) = if preview {
-            ((WS_EX_TOPMOST | WS_EX_LAYERED) as u32, w!("Weasel-Next 皮肤预览"))
+            ((WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP) as u32, w!("Weasel-Next 皮肤预览"))
         } else {
             (
-                (WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED) as u32,
+                (WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP) as u32,
                 w!("Weasel candidates"),
             )
         };
@@ -544,6 +544,13 @@ impl Window {
 let mut fill = color(p.background);
                     fill.a = 1.0;   // 面板用真彩色 ✓ 透明由整窗 LWA_ALPHA 提供（否则 DWM 忽略逐像素 alpha → 又暗又平 ✗）
                     brush.SetColor(&fill);
+                    crate::diagnostics::record(format_args!(
+                        "调色板: 底 #{:06x} 框 #{:06x} 选中 #{:06x} 字 #{:06x} 次 #{:06x} · 面板矩形 {:.0},{:.0}-{:.0},{:.0} · 行数 {}",
+                        p.background, p.border, p.active, p.text, p.secondary,
+                        rect(0.0, 0.0, width, height).left, rect(0.0, 0.0, width, height).top,
+                        rect(0.0, 0.0, width, height).right, rect(0.0, 0.0, width, height).bottom,
+                        c.layout.rows.len()
+                    ));
                     target.FillRoundedRectangle(
                         &D2D1_ROUNDED_RECT {
                             rect: rect(0.0, 0.0, width, height),
@@ -601,15 +608,24 @@ let mut fill = color(p.background);
                 }
 
                 for cell in &c.layout.cells {
+                // 官方是纵向行模型：每个候选一行，高亮矩形取该行的并集矩形 ✓
+                // aqua 的 prevpage/nextpage/comment 颜色全透明 → 官方不画翻页与表情格 ✓ 这里一并跳过 ✓
+                let row = match cell.hit {
+                    Hit::Candidate(i) => c.layout.rows.get(i).copied(),
+                    _ => None,
+                };
+                let Some(row) = row else { continue };
+                let row_rect = row.rect;
                     let selected = matches!(cell.hit, Hit::Candidate(i) if i == c.snapshot.selected_index as usize);
                     let usable = enabled(&c.snapshot, cell.hit);
-                    let rect = rect(cell.left, 0.0, cell.right, c.layout.height);
+                    let rect = rect(row_rect.left, row_rect.top, row_rect.right, row_rect.bottom);   // 行矩形 → D2D ✓
                     if selected || (usable && app.gesture.hovered == Some(cell.hit)) {
                         // 用户要求：选中/悬停一律用灰色，不要蓝色。
                         // 取文字色（白）降透明度当灰底 —— 透底之上就是一层中性灰。
                         let mut gray = color(p.active);   // ★ 选中与悬停**同色**（用户要求 ✓）
                         gray.a = 1.0;   // ★ 高亮：选中/悬停块完全不透明，在黑底上最醒目 ✓
                         brush.SetColor(&gray);
+                        crate::diagnostics::record(format_args!("高亮填充: 色 #{:06x} 行矩形 {:.0},{:.0}-{:.0},{:.0}", p.active, row_rect.left, row_rect.top, row_rect.right, row_rect.bottom));
                         target.FillRectangle(&rect, &brush);
                     }
                     // ★ 细分隔线（对齐截图：候选区 / 翻页箭头 / 表情之间各一条 ✓）
@@ -922,6 +938,8 @@ impl Drop for DrawGuard<'_> {
 /// 分层窗口扩展样式（0x00080000）。d2d 绑定集里没有导出它，这里本地定义 ✓
 /// 只有设了它，`SetLayeredWindowAttributes` 才生效（整窗统一透明度 ✓）。
 const WS_EX_LAYERED: i32 = 0x0008_0000;
+/// 官方用的合成窗口样式：不分配 GDI 重定向位图，交换链直接交给 DComp。
+const WS_EX_NOREDIRECTIONBITMAP: i32 = 0x0020_0000;
 unsafe fn apply_round_region(hwnd: HWND, width: f32, height: f32) {
     #[link(name = "gdi32")]
     unsafe extern "system" {

@@ -70,6 +70,40 @@ pub struct Cell {
     pub right: f32,
 }
 
+/// 轴对齐矩形（DIP）。官方用 `CRect`，字段含义一致。
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Rect {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl Rect {
+    pub fn width(&self) -> f32 {
+        self.right - self.left
+    }
+    pub fn height(&self) -> f32 {
+        self.bottom - self.top
+    }
+    fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.left && x < self.right && y >= self.top && y < self.bottom
+    }
+}
+
+/// 一行候选的四个矩形（对应官方 StandardLayout 的 label/text/comment/candidate 四组数组）。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Row {
+    /// 序号矩形。
+    pub label: Rect,
+    /// 主文本矩形。
+    pub text: Rect,
+    /// 注释矩形；无注释时为全 0。
+    pub comment: Rect,
+    /// 高亮矩形 = label / text / comment 上下界的并集（官方 L94-106）。
+    pub rect: Rect,
+}
+
 /// 按绘制顺序排列的栏位及其总宽度，全部以 DIP 表示。
 #[derive(Default)]
 pub struct Layout {
@@ -79,6 +113,8 @@ pub struct Layout {
     pub width: f32,
     /// 当前窗口高度；模式提示可独立于候选栏使用更紧凑的尺寸。
     pub height: f32,
+    /// 纵向候选行（官方 VerticalLayout 的行模型）。
+    pub rows: Vec<Row>,
 }
 
 impl Layout {
@@ -86,29 +122,66 @@ impl Layout {
     pub fn mode_indicator() -> Self {
         Self {
             cells: Vec::new(),
+            rows: Vec::new(),
             width: INDICATOR_SIZE,
             height: INDICATOR_SIZE,
         }
     }
 
-    /// 根据候选项的测量宽度构造布局。
+    /// 按官方 `VerticalLayout` 的思路构造**纵向**布局：每个候选一行。
     ///
-    /// 每项宽度受最小宽度约束，随后追加上一页、下一页和表情操作区；输入宽度应与
-    /// 候选项顺序一致，且已包含主文本和行内注释占用的宽度。
+    /// 现在还没有接 TOML 的布局值（`Metrics`），先用与官方 aqua 等价的常量：
+    /// 行高 = 设计基准 `HEIGHT`，边距 / 行距用官方 aqua 的 12 / 5。
+    /// 矩形含义照官方：每行有 label / text / comment 三个矩形，高亮取三者上下界的并集。
     pub fn new(widths: impl IntoIterator<Item = f32>) -> Self {
-        let mut result = Self {
-            height: HEIGHT,
-            ..Default::default()
-        };
+        // 官方 Layout.cpp:44-60 的根公式（aqua 的取值）：
+        //   real_margin_x = max(|margin_x|, hilite_padding_x)
+        //   real_margin_y = max(|margin_y|, hilite_padding_y)
+        //   offsetX = offsetY = border*2（有阴影再加 |shadow_offset| + radius*2）
+        //   contentSize = (width + offsetX*2, height + offsetY*2)
+        const MARGIN_X: f32 = 12.0_f32.max(2.0);   // max(12, hilite_padding_x=2) = 12 ✓
+        const MARGIN_Y: f32 = 12.0_f32.max(2.0);   // max(12, hilite_padding_y=2) = 12 ✓
+        const OFFSET: f32 = 3.0 * 2.0;             // border(3) * 2 ✓ 官方 L59-60
+        const ROW_GAP: f32 = 5.0;                 // candidate_spacing ✓
+        const LABEL_GAP: f32 = 4.0;               // hilite_spacing ✓
+        const MIN_WIDTH: f32 = 160.0;             // min_width ✓
+
+        let mut result = Self::default();
+        let mut widest = MIN_WIDTH;
+        let mut y = OFFSET + MARGIN_Y;
         for (index, text) in widths.into_iter().enumerate() {
-            result.push(
-                Hit::Candidate(index),
-                (93.0 * SCALE).max(NUMBER + text.ceil() + PAD),
-            );
+            if index > 0 {
+                y += ROW_GAP;
+            }
+            // 序号宽度沿用 NUMBER；文本从序号右边 hilite_spacing 处开始。
+            let label_w = NUMBER;
+            let text_w = text.ceil();
+            let row_w = MARGIN_X * 2.0 + label_w + LABEL_GAP + text_w;
+            widest = widest.max(row_w);
+            let label = Rect { left: OFFSET + MARGIN_X, top: y, right: MARGIN_X + label_w, bottom: y + HEIGHT };
+            let text_rect = Rect {
+                left: OFFSET + MARGIN_X + label_w + LABEL_GAP,
+                top: y,
+                right: OFFSET + MARGIN_X + label_w + LABEL_GAP + text_w,
+                bottom: y + HEIGHT,
+            };
+            // 官方：高亮矩形 = label / text / comment 三者上下界的并集（此处无注释）。
+            let rect = Rect {
+                left: label.left,
+                top: label.top.min(text_rect.top),
+                right: text_rect.right,
+                bottom: label.bottom.max(text_rect.bottom),
+            };
+            result.rows.push(Row { label, text: text_rect, comment: Rect::default(), rect });
+            result.cells.push(Cell {
+                hit: Hit::Candidate(index),
+                left: rect.left,
+                right: rect.right,
+            });
+            y += HEIGHT;
         }
-        result.push(Hit::Previous, 49.0 * SCALE);
-        result.push(Hit::Next, 49.0 * SCALE);
-        result.push(Hit::Emoji, 74.0 * SCALE);
+        result.width = widest + OFFSET * 2.0;
+        result.height = if result.rows.is_empty() { HEIGHT } else { y + MARGIN_Y + OFFSET };
         result
     }
     /// 在末尾追加一个区域，并同步扩展总宽度。
