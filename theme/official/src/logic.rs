@@ -105,16 +105,32 @@ pub struct Row {
 }
 
 /// 按绘制顺序排列的栏位及其总宽度，全部以 DIP 表示。
+/// 官方 `VerticalLayout::DoLayout` 的 Rust 版：**纵向**候选栏布局。
+///
+/// 与官方一一对应（行号见 `theme\official\reference\VerticalLayout.cpp`）：
+/// * 每个候选**一行**；每行有 label / text / comment 三个矩形，高亮矩形取三者上下界的并集（L94-106）；
+/// * 行间 `candidate_spacing`、序号与文本间 `hilite_spacing`（L38 / L47）；
+/// * 尺寸按 `Layout.cpp:44-60` 的根公式：`real_margin = max(|margin|, hilite_padding)`、
+///   `offset = border*2`、`contentSize = (width + offset*2, height + offset*2)`（L158）。
+///
+/// 布局值目前用与官方 aqua 等价的常量；接 `theme.toml` 的 `Metrics` 是下一步
+/// （见 `doc\official-layout-reference.md` 第六节）。
 #[derive(Default)]
 pub struct Layout {
-    /// 候选项及固定操作区；相邻区域首尾相接。
+    /// 命中用：每个候选的水平区间（保留给 mod.rs 的兼容用法）。
     pub cells: Vec<Cell>,
-    /// 所有区域宽度之和。
+    /// 内容宽度（含左右 margin，不含 offset 外扩）。
     pub width: f32,
-    /// 当前窗口高度；模式提示可独立于候选栏使用更紧凑的尺寸。
+    /// 内容高度（含上下 margin）。
     pub height: f32,
-    /// 纵向候选行（官方 VerticalLayout 的行模型）。
+    /// 每行候选的四个矩形（官方四组数组的对应物）。
     pub rows: Vec<Row>,
+    /// 预编辑行矩形（官方 `GetPreeditRect`）；无预编辑时为空矩形。
+    pub preedit: Rect,
+    /// 辅助串矩形（官方 `GetAuxiliaryRect`）。
+    pub aux: Rect,
+    /// 内容矩形（官方 `GetContentRect`）：面板底与描边都用它。
+    pub content: Rect,
 }
 
 impl Layout {
@@ -122,95 +138,118 @@ impl Layout {
     pub fn mode_indicator() -> Self {
         Self {
             cells: Vec::new(),
-            rows: Vec::new(),
             width: INDICATOR_SIZE,
             height: INDICATOR_SIZE,
+            rows: Vec::new(),
+            preedit: Rect::default(),
+            aux: Rect::default(),
+            content: Rect { left: 0.0, top: 0.0, right: INDICATOR_SIZE, bottom: INDICATOR_SIZE },
         }
     }
 
-    /// 按官方 `VerticalLayout` 的思路构造**纵向**布局：每个候选一行。
+    /// 按官方 `VerticalLayout::DoLayout` 构造纵向布局。
     ///
-    /// 现在还没有接 TOML 的布局值（`Metrics`），先用与官方 aqua 等价的常量：
-    /// 行高 = 设计基准 `HEIGHT`，边距 / 行距用官方 aqua 的 12 / 5。
-    /// 矩形含义照官方：每行有 label / text / comment 三个矩形，高亮取三者上下界的并集。
-    pub fn new(widths: impl IntoIterator<Item = f32>) -> Self {
-        // 官方 Layout.cpp:44-60 的根公式（aqua 的取值）：
-        //   real_margin_x = max(|margin_x|, hilite_padding_x)
-        //   real_margin_y = max(|margin_y|, hilite_padding_y)
-        //   offsetX = offsetY = border*2（有阴影再加 |shadow_offset| + radius*2）
-        //   contentSize = (width + offsetX*2, height + offsetY*2)
-        const MARGIN_X: f32 = 12.0_f32.max(2.0);   // max(12, hilite_padding_x=2) = 12 ✓
-        const MARGIN_Y: f32 = 12.0_f32.max(2.0);   // max(12, hilite_padding_y=2) = 12 ✓
-        const OFFSET: f32 = 3.0 * 2.0;             // border(3) * 2 ✓ 官方 L59-60
-        const ROW_GAP: f32 = 5.0;                 // candidate_spacing ✓
-        const LABEL_GAP: f32 = 4.0;               // hilite_spacing ✓
-        const MIN_WIDTH: f32 = 160.0;             // min_width ✓
+    /// `widths` 是每个候选**主文本 + 注释**的实测宽度（顺序与候选一致），
+    /// `preedit_width` 为预编辑串的实测宽度（0 表示不显示）。
+    pub fn new_with_preedit(
+        widths: impl IntoIterator<Item = f32>,
+        preedit_width: f32,
+    ) -> Self {
+        // 官方 Layout.cpp:44-60 的根公式（aqua 取值）。
+        const MARGIN_X: f32 = 12.0_f32.max(2.0); // max(margin_x, hilite_padding_x)
+        const MARGIN_Y: f32 = 12.0_f32.max(2.0); // max(margin_y, hilite_padding_y)
+        const OFFSET: f32 = 3.0 * 2.0; // border * 2
+        const ROW_GAP: f32 = 5.0; // candidate_spacing
+        const LABEL_GAP: f32 = 4.0; // hilite_spacing
+        const MIN_WIDTH: f32 = 160.0; // min_width
+        const LINE: f32 = HEIGHT; // 行高（官方按字体实测，这里用设计基准）
 
         let mut result = Self::default();
-        let mut widest = MIN_WIDTH;
         let mut y = OFFSET + MARGIN_Y;
+        let mut widest = MIN_WIDTH;
+
+        // 预编辑行（官方 L18-22）：非 inline 且有内容时占一行。
+        if preedit_width > 0.0 {
+            let rect = Rect {
+                left: OFFSET + MARGIN_X,
+                top: y,
+                right: OFFSET + MARGIN_X + preedit_width,
+                bottom: y + LINE,
+            };
+            result.preedit = rect;
+            widest = widest.max(MARGIN_X * 2.0 + preedit_width);
+            y += LINE + ROW_GAP;
+        }
+
         for (index, text) in widths.into_iter().enumerate() {
             if index > 0 {
-                y += ROW_GAP;
+                y += ROW_GAP; // 官方 L38
             }
-            // 序号宽度沿用 NUMBER；文本从序号右边 hilite_spacing 处开始。
-            let label_w = NUMBER;
-            let text_w = text.ceil();
-            let row_w = MARGIN_X * 2.0 + label_w + LABEL_GAP + text_w;
-            widest = widest.max(row_w);
-            let label = Rect { left: OFFSET + MARGIN_X, top: y, right: MARGIN_X + label_w, bottom: y + HEIGHT };
-            let text_rect = Rect {
-                left: OFFSET + MARGIN_X + label_w + LABEL_GAP,
+            let label = Rect {
+                left: OFFSET + MARGIN_X,
                 top: y,
-                right: OFFSET + MARGIN_X + label_w + LABEL_GAP + text_w,
-                bottom: y + HEIGHT,
+                right: OFFSET + MARGIN_X + NUMBER,
+                bottom: y + LINE,
             };
-            // 官方：高亮矩形 = label / text / comment 三者上下界的并集（此处无注释）。
-            let rect = Rect {
+            let text_rect = Rect {
+                left: label.right + LABEL_GAP, // 官方 L47：label 之后加 hilite_spacing
+                top: y,
+                right: label.right + LABEL_GAP + text.ceil(),
+                bottom: y + LINE,
+            };
+            // 官方 L94-106：高亮矩形 = label / text / comment 三者上下界的并集（此处无注释）。
+            let row_rect = Rect {
                 left: label.left,
                 top: label.top.min(text_rect.top),
                 right: text_rect.right,
                 bottom: label.bottom.max(text_rect.bottom),
             };
-            result.rows.push(Row { label, text: text_rect, comment: Rect::default(), rect });
-            result.cells.push(Cell {
-                hit: Hit::Candidate(index),
-                left: rect.left,
-                right: rect.right,
-            });
-            y += HEIGHT;
+            widest = widest.max(MARGIN_X * 2.0 + NUMBER + LABEL_GAP + text.ceil());
+            result.cells.push(Cell { hit: Hit::Candidate(index), left: row_rect.left, right: row_rect.right });
+            result.rows.push(Row { label, text: text_rect, comment: Rect::default(), rect: row_rect });
+            y += LINE;
         }
-        result.width = widest + OFFSET * 2.0;
-        result.height = if result.rows.is_empty() { HEIGHT } else { y + MARGIN_Y + OFFSET };
+
+        // 官方 L142-147：收尾加下边距；有候选时受 min_width 约束。
+        if !result.rows.is_empty() {
+            y += MARGIN_Y;
+        } else {
+            y = OFFSET + MARGIN_Y + LINE + MARGIN_Y;
+        }
+        result.width = widest;
+        result.height = y;
+        // 官方 L158/L201：内容矩形与内容尺寸都含 offset 外扩。
+        result.content = Rect {
+            left: OFFSET,
+            top: OFFSET,
+            right: OFFSET + result.width,
+            bottom: OFFSET + result.height,
+        };
+        result.width += OFFSET * 2.0;
+        result.height += OFFSET * 2.0;
         result
     }
-    /// 在末尾追加一个区域，并同步扩展总宽度。
-    fn push(&mut self, hit: Hit, width: f32) {
-        self.cells.push(Cell {
-            hit,
-            left: self.width,
-            right: self.width + width,
-        });
-        self.width += width;
+
+    /// 兼容旧签名：没有预编辑串。
+    pub fn new(widths: impl IntoIterator<Item = f32>) -> Self {
+        Self::new_with_preedit(widths, 0.0)
     }
-    /// 按左闭右开的横向边界和栏高查找命中区域。
-    ///
-    /// 超出栏高、区域范围或位于右边界上的点均返回 `None`；查找按区域线性扫描。
+
+    /// 按行的矩形做命中测试（官方 `OnMouseMove` 用 `GetCandidateRect(i)` 逐个 `PtInRect`）。
     pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
-        if !(0.0..self.height).contains(&y) {
-            return None;
+        for (index, row) in self.rows.iter().enumerate() {
+            if row.rect.contains(x, y) {
+                return Some(Hit::Candidate(index));
+            }
         }
-        self.cells
-            .iter()
-            .find(|c| x >= c.left && x < c.right)
-            .map(|c| c.hit)
+        for cell in &self.cells {
+            if x >= cell.left && x < cell.right {
+                return Some(cell.hit);
+            }
+        }
+        None
     }
 }
-
-/// 根据快照判断命中目标当前是否允许触发。
-///
-/// 隐藏快照禁用所有目标；候选项依其自身 `enabled` 标记，翻页依分页能力标记，
-/// 表情操作只受整体可见状态约束。
 pub fn enabled(snapshot: &CandidateView, hit: Hit) -> bool {
     snapshot.visible
         && match hit {
