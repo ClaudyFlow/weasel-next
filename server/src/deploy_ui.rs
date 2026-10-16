@@ -146,7 +146,7 @@ fn open_deploy_log(log_path: &Arc<Mutex<Option<PathBuf>>>) {
                 weasel_common::process::open_path(&path).map_err(|e| e.to_string())
             })();
             if let Err(error) = result {
-                diagnostic(&format!("could not open deployment log: {error}"));
+                diagnostic(&format!("无法打开部署日志：{error}"));
             }
         })
     {
