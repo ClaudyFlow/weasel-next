@@ -1,4 +1,4 @@
-# theme.toml —— 主题主文件：布局 + **当前使用哪套皮肤**（自动生成的一部分，勿手改）。
+# theme.toml —— 主题主文件：布局 + **当前使用哪套皮肤**。
 #
 # 拆分布局：
 #   theme\theme.toml                    布局（[style] / [style.layout]）+ color_scheme 指定用哪套皮肤

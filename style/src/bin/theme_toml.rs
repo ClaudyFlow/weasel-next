@@ -132,7 +132,7 @@ fn main() {
     };
 
     let mut out = String::new();
-    out.push_str("# default.theme.toml —— 官方小狼毫的皮肤，逐字搬过来（自动生成，勿手改）\n");
+    out.push_str("# default.theme.toml —— 官方小狼毫的皮肤，逐字搬过来\n");
     out.push_str("#\n# 生成方式: cargo run --release -p weasel-style --bin theme-toml -- <weasel.yaml> <本文件>\n");
     out.push_str("# 内容: 官方 style 段与 layout 段全部字段 + preset_color_schemes 里每一套配色。\n");
     out.push_str("# 位置约定: <程序文件夹>\\Rime-Next\\theme\\default.theme.toml（由 librime 按路径识别）。\n\n");

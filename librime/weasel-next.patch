@@ -1,5 +1,31 @@
 warning: in the working copy of 'src/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
 warning: in the working copy of 'src/rime/dict/dict_compiler.cc', LF will be replaced by CRLF the next time Git touches it
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index bfc704f..49fa848 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -177,7 +177,7 @@ endif()
+ 
+ # >>> rime-speed-stats input_stat plugin (build-librime-mingw.ps1) >>>
+ if(RIME_INPUT_STAT_CORE_LIB)
+-  add_subdirectory("C:/code/Weasel-Next/plugin/librime" "${CMAKE_BINARY_DIR}/rime-input-stat")
++  add_subdirectory("C:/Code/Weasel-Next/plugin/librime" "${CMAKE_BINARY_DIR}/rime-input-stat")
+   target_link_libraries(rime rime-input-stat)  # plain 签名：librime 自己第 84 行用的是 plain
+   # RIME_MODULE_INITIALIZER 在 GCC/Clang 下是 __attribute__((constructor))：只要插件对象
+   # 被链进来，注册就会在 DLL 加载时自动发生。但静态库对象默认不会被拉入（librime 传下来的
+diff --git a/src/rime/core_module.cc b/src/rime/core_module.cc
+index 43c3cb0..b0f84c9 100644
+--- a/src/rime/core_module.cc
++++ b/src/rime/core_module.cc
+@@ -17,7 +17,7 @@
+ using namespace rime;
+ 
+ static void rime_core_initialize() {
+-  LOG(INFO) << "registering core components.";
++  LOG(INFO) << "注册核心组件。";
+   Registry& r = Registry::instance();
+ 
+   auto config_builder =
 diff --git a/src/rime/dict/dict_compiler.cc b/src/rime/dict/dict_compiler.cc
 index f8049b0..263f1e4 100644
 --- a/src/rime/dict/dict_compiler.cc
@@ -80,6 +106,132 @@ index f8049b0..263f1e4 100644
    return target_resolver->ResolvePath(resource_id);
  }
  
+diff --git a/src/rime/dict/dict_module.cc b/src/rime/dict/dict_module.cc
+index 7131fa8..15fb2cf 100644
+--- a/src/rime/dict/dict_module.cc
++++ b/src/rime/dict/dict_module.cc
+@@ -22,7 +22,7 @@
+ static void rime_dict_initialize() {
+   using namespace rime;
+ 
+-  LOG(INFO) << "registering components from module 'dict'.";
++  LOG(INFO) << "从模块 dict 注册组件。";
+   Registry& r = Registry::instance();
+ 
+   r.Register("tabledb", new DbComponent<TableDb>);
+diff --git a/src/rime/lever/deployment_tasks.cc b/src/rime/lever/deployment_tasks.cc
+index 7f4c9b1..bee3916 100644
+--- a/src/rime/lever/deployment_tasks.cc
++++ b/src/rime/lever/deployment_tasks.cc
+@@ -27,6 +27,9 @@
+ #include <rime/lever/user_dict_manager.h>
+ #ifdef _WIN32
+ #include <windows.h>
++#include <rime/toml_lite.h>
++#include <fstream>
++#include <map>
+ #endif
+ 
+ namespace fs = std::filesystem;
+@@ -52,8 +55,10 @@ bool DetectModifications::Run(Deployer* deployer) {
+         for (fs::directory_iterator iter(p), end; iter != end; ++iter) {
+           path entry(iter->path());
+           if (fs::is_regular_file(fs::canonical(entry)) &&
+-              entry.extension().to_utf8_string() == ".yaml" &&
+-              entry.filename().to_utf8_string() != "user.yaml") {
++              (entry.extension().to_utf8_string() == ".yaml" ||
++               entry.extension().to_utf8_string() == ".toml") &&
++              entry.filename().to_utf8_string() != "user.yaml" &&
++              entry.filename().to_utf8_string() != "user.toml") {
+             last_modified =
+                 (std::max)(last_modified,
+                            filesystem::to_time_t(fs::last_write_time(entry)));
+@@ -90,13 +95,31 @@ bool InstallationUpdate::Run(Deployer* deployer) {
+       LOG(ERROR) << "Error creating user data dir: " << user_data_path;
+     }
+   }
+-  path installation_info(user_data_path / "installation.yaml");
++  path installation_info(user_data_path / "installation.toml");
+   Config config;
+   string installation_id;
+   string last_distro_code_name;
+   string last_distro_version;
+   string last_rime_version;
+-  if (config.LoadFromFile(installation_info)) {
++  // 读平铺 TOML（librime 的 Config 是 yaml-cpp，读不了 TOML），把键灌进去，
++  // 下面那些 GetString/GetBool 因此一行都不用改。
++  bool loaded = false;
++  {
++    an<ConfigItem> node;
++    if (LoadTomlLite(installation_info, &node) && node) {
++      if (auto map = As<ConfigMap>(node)) {
++        for (auto it = map->begin(); it != map->end(); ++it) {
++          if (auto value = As<ConfigValue>(it->second)) {
++            string text;
++            if (value->GetString(&text))
++              config.SetString(it->first, text);
++          }
++        }
++        loaded = true;
++      }
++    }
++  }
++  if (loaded) {
+     if (config.GetString("installation_id", &installation_id)) {
+       LOG(INFO) << "installation info exists. installation id: "
+                 << installation_id;
+@@ -160,7 +183,26 @@ bool InstallationUpdate::Run(Deployer* deployer) {
+   }
+   config.SetString("rime_version", RIME_VERSION);
+   LOG(INFO) << "Rime version: " << RIME_VERSION;
+-  return config.SaveToFile(installation_info);
++  {
++    std::map<string, string> flat;
++    const char* keys[] = {"installation_id", "install_time", "update_time",
++                          "rime_version",     "sync_dir",     "distribution_name",
++                          "distribution_code_name", "distribution_version"};
++    for (const char* key : keys) {
++      string value;
++      if (config.GetString(key, &value))
++        flat[key] = value;
++    }
++    bool backup = false;
++    if (config.GetBool("backup_config_files", &backup))
++      flat["backup_config_files"] = backup ? "true" : "false";
++    std::ofstream out(installation_info.c_str(), std::ios::binary);
++    if (!out)
++      return false;
++    out << "# installation.toml —— 安装信息。\n";
++    out << WriteTomlLite(flat);
++    return true;
++  }
+ }
+ 
+ bool WorkspaceUpdate::Run(Deployer* deployer) {
+diff --git a/src/rime/registry.cc b/src/rime/registry.cc
+index 979396c..b7888ca 100644
+--- a/src/rime/registry.cc
++++ b/src/rime/registry.cc
+@@ -11,16 +11,16 @@
+ namespace rime {
+ 
+ void Registry::Register(const string& name, ComponentBase* component) {
+-  LOG(INFO) << "registering component: " << name;
++  VLOG(1) << "注册组件：" << name;  // 逐条太啰嗦，默认不输出
+   if (ComponentBase* existing = Find(name)) {
+-    LOG(WARNING) << "replacing previously registered component: " << name;
++    LOG(WARNING) << "覆盖之前注册的同名组件：" << name;
+     delete existing;
+   }
+   map_[name] = component;
+ }
+ 
+ void Registry::Unregister(const string& name) {
+-  LOG(INFO) << "unregistering component: " << name;
++  VLOG(1) << "注销组件：" << name;
+   ComponentMap::iterator it = map_.find(name);
+   if (it == map_.end())
+     return;
 diff --git a/src/rime/resource.cc b/src/rime/resource.cc
 index 09a9a5c..e51a1c3 100644
 --- a/src/rime/resource.cc
@@ -184,6 +336,7 @@ index 09a9a5c..e51a1c3 100644
 +  // 原实现是直接拼扁平名字，分类布局（schema/<方案>/<方案>.schema.yaml）永远找不到。
 +  if (!std::filesystem::exists(default_path) && !fallback_root_path_.empty()) {
 +    ResourceResolver fallback_resolver(type_);
+warning: in the working copy of 'src/rime/toml_lite.cc', LF will be replaced by CRLF the next time Git touches it
 +    fallback_resolver.set_root_path(fallback_root_path_);
 +    auto fallback_path = fallback_resolver.ResolvePath(resource_id);
 +    if (std::filesystem::exists(fallback_path)) {
@@ -193,3 +346,219 @@ index 09a9a5c..e51a1c3 100644
    if (!std::filesystem::exists(default_path)) {
      auto fallback_path = std::filesystem::absolute(
          fallback_root_path_ / (type_.prefix + resource_id + type_.suffix));
+diff --git a/src/rime/toml_lite.cc b/src/rime/toml_lite.cc
+new file mode 100644
+index 0000000..c1f2c31
+--- /dev/null
++++ b/src/rime/toml_lite.cc
+@@ -0,0 +1,164 @@
++#include "toml_lite.h"
++
++#include <cctype>
++#include <cstdlib>
++#include <fstream>
++#include <sstream>
++
++namespace rime {
++
++namespace {
++
++std::string Trim(const std::string& s) {
++  size_t b = s.find_first_not_of(" \t\r\n");
++  if (b == std::string::npos)
++    return "";
++  size_t e = s.find_last_not_of(" \t\r\n");
++  return s.substr(b, e - b + 1);
++}
++
++// 去掉行尾注释（引号内的 # 不算）。
++std::string StripComment(const std::string& line) {
++  bool in_quote = false;
++  for (size_t i = 0; i < line.size(); ++i) {
++    char c = line[i];
++    if (c == '\\' && in_quote) {
++      ++i;
++      continue;
++    }
++    if (c == '"')
++      in_quote = !in_quote;
++    else if (c == '#' && !in_quote)
++      return line.substr(0, i);
++  }
++  return line;
++}
++
++bool UnescapeInto(const std::string& raw, std::string* out) {
++  for (size_t i = 0; i < raw.size(); ++i) {
++    char c = raw[i];
++    if (c != '\\') {
++      out->push_back(c);
++      continue;
++    }
++    if (++i >= raw.size())
++      return false;
++    switch (raw[i]) {
++      case 'n': out->push_back('\n'); break;
++      case 't': out->push_back('\t'); break;
++      case 'r': out->push_back('\r'); break;
++      case '"': out->push_back('"'); break;
++      case '\\': out->push_back('\\'); break;
++      default: return false;
++    }
++  }
++  return true;
++}
++
++// 把右侧的值文本解析成 ConfigValue。
++an<ConfigItem> ParseValue(const std::string& text) {
++  std::string v = Trim(text);
++  if (v.empty())
++    return nullptr;
++  if (v.size() >= 2 && v.front() == '"' && v.back() == '"') {
++    std::string out;
++    if (!UnescapeInto(v.substr(1, v.size() - 2), &out))
++      return nullptr;
++    return New<ConfigValue>(out);
++  }
++  if (v == "true")
++    return New<ConfigValue>(true);
++  if (v == "false")
++    return New<ConfigValue>(false);
++  // 整数 / 浮点
++  char* end = nullptr;
++  double d = std::strtod(v.c_str(), &end);
++  if (end && *end == '\0' && end != v.c_str()) {
++    if (v.find('.') == std::string::npos && v.find('e') == std::string::npos &&
++        v.find('E') == std::string::npos)
++      return New<ConfigValue>(static_cast<int>(d));
++    return New<ConfigValue>(d);
++  }
++  return nullptr;  // 未加引号的裸字串：TOML 不允许，这里也拒绝
++}
++
++}  // namespace
++
++an<ConfigItem> ParseTomlLite(const std::string& text) {
++  auto root = New<ConfigMap>();
++  an<ConfigMap> current = root;
++  std::istringstream stream(text);
++  std::string line;
++  while (std::getline(stream, line)) {
++    std::string s = Trim(StripComment(line));
++    if (s.empty())
++      continue;
++    if (s.front() == '[') {
++      if (s.back() != ']')
++        return nullptr;
++      std::string section = Trim(s.substr(1, s.size() - 2));
++      if (section.empty())
++        return nullptr;
++      auto node = New<ConfigMap>();
++      current->Set(section, node);
++      current = node;
++      continue;
++    }
++    size_t eq = s.find('=');
++    if (eq == std::string::npos)
++      return nullptr;
++    std::string key = Trim(s.substr(0, eq));
++    if (key.empty())
++      return nullptr;
++    an<ConfigItem> value = ParseValue(s.substr(eq + 1));
++    if (!value)
++      return nullptr;
++    current->Set(key, value);
++  }
++  return root;
++}
++
++bool LoadTomlLite(const path& file, an<ConfigItem>* out) {
++  std::ifstream input(file.c_str(), std::ios::binary);
++  if (!input)
++    return false;
++  std::ostringstream buffer;
++  buffer << input.rdbuf();
++  an<ConfigItem> parsed = ParseTomlLite(buffer.str());
++  if (!parsed)
++    return false;
+warning: in the working copy of 'src/rime/toml_lite.h', LF will be replaced by CRLF the next time Git touches it
++  if (out)
++    *out = parsed;
++  return true;
++}
++
++std::string WriteTomlLite(const std::map<std::string, std::string>& flat) {
++  std::string out;
++  for (const auto& kv : flat) {
++    out += kv.first;
++    out += " = ";
++    const std::string& v = kv.second;
++    bool plain = (v == "true" || v == "false");
++    if (!plain && !v.empty()) {
++      char* end = nullptr;
++      std::strtod(v.c_str(), &end);
++      if (end && *end == '\0')
++        plain = true;  // 数字不加引号
++    }
++    if (plain) {
++      out += v;
++    } else {
++      out += '"';
++      for (char c : v) {
++        if (c == '"' || c == '\\')
++          out.push_back('\\');
++        out.push_back(c);
++      }
++      out += '"';
++    }
++    out += "\n";
++  }
++  return out;
++}
++
++}  // namespace rime
+\ No newline at end of file
+diff --git a/src/rime/toml_lite.h b/src/rime/toml_lite.h
+new file mode 100644
+index 0000000..03a15bc
+--- /dev/null
++++ b/src/rime/toml_lite.h
+@@ -0,0 +1,37 @@
++// toml_lite —— librime 用的平铺 TOML 子集解析/生成。
++//
++// 为什么要它：installation.yaml / user.yaml 这两个引擎状态文件要改成 .toml，
++// 而 librime 的配置层是 yaml-cpp，读不了 TOML。这里实现**只覆盖我们用到的那点语法**：
++//
++//   key = "字串"        # 双引号字符串，支持 \" \\ \n \t 转义
++//   key = 123           # 整数
++//   key = 1.5           # 浮点
++//   key = true / false  # 布尔
++//   [section]           # 分段 → 嵌套 ConfigMap
++//   # 注释、空行        忽略
++//
++// 不支持（也用不到）：数组、内联表、多行字符串、日期时间。
++
++#ifndef RIME_TOML_LITE_H_
++#define RIME_TOML_LITE_H_
++
++#include <map>
++#include <string>
++
++#include <rime/common.h>
++#include <rime/config.h>
++
++namespace rime {
++
++/// 解析平铺 TOML 子集。成功返回根 ConfigMap；语法有错返回 nullptr。
++an<ConfigItem> ParseTomlLite(const std::string& text);
++
++/// 读文件并解析。文件不存在或解析失败返回 false。
++bool LoadTomlLite(const path& file, an<ConfigItem>* out);
++
++/// 把一层的 键→值 写成 TOML（值按字串加引号；写 installation 那种文件用）。
++std::string WriteTomlLite(const std::map<std::string, std::string>& flat);
++
++}  // namespace rime
++
++#endif  // RIME_TOML_LITE_H_
+\ No newline at end of file

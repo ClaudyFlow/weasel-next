@@ -38,7 +38,7 @@ pub(crate) struct Presenter {
     swap_chain: IDXGISwapChain1,
     d2d_device: ID2D1Device1,
     context: ID2D1DeviceContext1,
-    target_bitmap: ID2D1Bitmap1,
+    target_bitmap: Option<ID2D1Bitmap1>,
     dcomp: IDCompositionDevice,
     dcomp_target: IDCompositionTarget,
     visual: IDCompositionVisual,
@@ -173,7 +173,7 @@ impl Presenter {
             swap_chain,
             d2d_device,
             context,
-            target_bitmap,
+            target_bitmap: Some(target_bitmap),
             dcomp,
             dcomp_target,
             visual,
@@ -223,6 +223,9 @@ impl Presenter {
             return Ok(());
         }
         unsafe { self.context.SetTarget(None::<&ID2D1Image>) };
+        // ★ ResizeBuffers 要求后缓冲的引用计数归零：SetTarget(None) 只解除"目标"，
+        // 旧位图本身仍持有后缓冲 → 必须真正丢掉它，否则返回 DXGI_ERROR_INVALID_CALL (0x887A0001)。
+        self.target_bitmap = None;
         let base: IDXGISwapChain = self
             .swap_chain
             .cast()
@@ -232,7 +235,7 @@ impl Presenter {
             .map_err(|error| format!("ResizeBuffers 失败: {error}"))?;
         let bitmap = unsafe { Self::make_target_bitmap(&self.context, &self.swap_chain)? };
         unsafe { self.context.SetTarget(&bitmap) };
-        self.target_bitmap = bitmap;
+        self.target_bitmap = Some(bitmap);
         self.width = width;
         self.height = height;
         Ok(())
@@ -262,3 +265,16 @@ impl Presenter {
         unsafe { self.context.Clear(Some(&TRANSPARENT)) };
     }
 }
+
+    /// 销毁：**先把窗口的合成目标摘掉**。
+    ///
+    /// 不摘就丢的话，下一次对同一个 HWND 调 `CreateTargetForHwnd` 会返回
+    /// `DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED (0x88980800)` —— 窗口"已经被合成过了"。
+    /// 渲染器在设备恢复时会反复重建 Presenter，所以这一步不能省。
+    impl Drop for Presenter {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = self.dcomp_target.SetRoot(None::<&IDCompositionVisual>);
+            }
+        }
+    }

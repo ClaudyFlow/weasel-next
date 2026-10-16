@@ -106,6 +106,11 @@ impl Graphics {
     ///
     /// 创建失败由调用方转换为主题错误或进入设备丢失恢复流程。
     fn ensure_target(&mut self, hwnd: HWND, dpi: u32) -> windows_core::Result<()> {
+            // 官方 d2d.cpp:136 —— 同一个窗口且交换链/目标还在时**直接返回**，绝不重建。
+            // 重建会让 CreateTargetForHwnd 对已合成的窗口失败（ALREADY_COMPOSED）。
+            if self.target.is_some() {
+                return Ok(());
+            }
             unsafe {
                 let mut rc = RECT::default();
                 GetClientRect(hwnd, &mut rc).ok()?;
@@ -477,7 +482,9 @@ impl Window {
     ///
     /// 非设备丢失错误、超过重试预算或定时器创建失败都会成为持久健康错误。
     fn graphics_error(&self, error: windows_core::Error) {
-        self.app.borrow_mut().graphics.target = None;
+        // 照官方（d2d.cpp:136 AttachWindow 的守卫）：合成目标每个窗口只建一次，
+        // 丢掉再建会对同一个 HWND 报 DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED。
+        // self.app.borrow_mut().graphics.target = None;
         if !self
             .recovery
             .borrow_mut()
@@ -500,13 +507,14 @@ impl Window {
         let mut app = self.app.borrow_mut();
         app.graphics
             .ensure_target(self.hwnd.get(), self.dpi.get())?;
-        let presenter = app
-            .graphics
-            .target
-            .as_ref()
-            .ok_or_else(|| windows_core::Error::from_hresult(E_UNEXPECTED))?;
-        let target = presenter.render_target();
-        let p = app.palette;
+            // 客户区还可能为空（窗口尚未显示或尺寸为 0）：这一帧什么都不画，
+            // 等窗口显示后的下一条消息再来建目标。**这里绝不能报错** —— 上层会把主题
+            // 错误当成"主题不可用"并让渲染器退出，表现就是候选窗一闪不出。
+            let Some(presenter) = app.graphics.target.as_ref() else {
+                return Ok(());
+            };
+            let target = presenter.render_target();
+            let p = app.palette;
         unsafe {
             // Allocate fallible resources before BeginDraw; EndDraw is RAII too.
             let brush = target.CreateSolidColorBrush(&color(p.text), None)?;

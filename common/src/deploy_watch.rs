@@ -71,7 +71,7 @@ pub fn write_stamps(
 ) -> std::io::Result<BTreeMap<String, FolderStamp>> {
     let mut merged: BTreeMap<String, FolderStamp> = BTreeMap::new();
     let mut out = String::from(
-        "# user.toml —— 各文件夹上次部署的时间与哈希（自动生成，勿手改）。\n\
+        "# user.toml —— 各文件夹上次部署的时间与哈希。\n\
          # 哈希没有变化时时间保持不变；部署不再做校验，判断由根目录那份 user.toml 的定期检测承担。\n\n",
     );
     out.push_str(&format!("last_deploy = \"{now}\"\n"));

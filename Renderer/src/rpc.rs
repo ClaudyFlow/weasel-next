@@ -127,6 +127,7 @@ async fn run_rpc(server: RpcServer, mut ui: UiHandle) -> Result<(), String> {
                 };
                 next_owner += 1;
                 let owner = next_owner;
+                crate::diagnostics::record(format_args!("客户端连上：owner={owner}"));
                 let commands = commands.clone();
                 let (events, receiver) = mpsc::channel(32);
                 routes.insert(owner, events);

@@ -353,6 +353,7 @@ impl UiHandle {
     /// 超时不会中断仍在运行的 UI 线程。
     pub fn close(&mut self) -> Result<(), String> {
         if let Some(worker) = self.thread.take() {
+            crate::diagnostics::record(format_args!("UiHandle::close 被调用 → 发 Quit"));
             let wake = self.commands.send(UiCommand::Quit);
             join_ui_thread(worker, Duration::from_secs(2))?;
             if let Ok(result) = self.finished.try_recv() {
@@ -367,6 +368,7 @@ impl UiHandle {
 impl Drop for UiHandle {
     /// 尽力关闭 UI 线程；析构路径无法向调用方报告关闭错误。
     fn drop(&mut self) {
+        crate::diagnostics::record(format_args!("UiHandle 被销毁（Drop）→ 将要发 Quit"));
         let _ = self.close();
     }
 }
@@ -393,7 +395,9 @@ impl UiCommandSender {
         let message = match command {
             UiCommand::Render(owner, snapshot) => {
                 crate::state::validate(&snapshot)?;
+                crate::diagnostics::record(format_args!("收到渲染命令：owner={owner}"));
                 if !mailbox.render(owner, snapshot) {
+                    crate::diagnostics::record(format_args!("渲染命令被丢弃：owner={owner} 不是当前所有者"));
                     return Ok(());
                 }
                 WM_RENDERER_UPDATE
@@ -405,6 +409,7 @@ impl UiCommandSender {
                 WM_RENDERER_UPDATE
             }
             UiCommand::Quit => {
+                crate::diagnostics::record(format_args!("send(Quit) 被调用，将投递 0x{:X}", WM_RENDERER_QUIT));
                 mailbox.closed = true;
                 mailbox.pending = None;
                 WM_RENDERER_QUIT
@@ -679,13 +684,16 @@ fn run_ui(
                 .map_err(|_| "renderer mailbox poisoned")?
                 .closed
             {
+                crate::diagnostics::record(format_args!("UI 循环退出：邮箱被标记关闭"));
                 break;
             }
             let status = GetMessageW(&mut message, None, 0, 0).0;
             if status == -1 {
+                crate::diagnostics::record(format_args!("UI 循环退出：GetMessageW 失败"));
                 return Err("GetMessageW failed".into());
             }
             if status == 0 || is_thread_message(&message, WM_RENDERER_QUIT) {
+            crate::diagnostics::record(format_args!("UI 收到退出消息：status={status} msg=0x{:X} hwnd空={} 期望QUIT=0x{:X} UPDATE=0x{:X} THEME=0x{:X}", message.message, message.hwnd.0.is_null(), WM_RENDERER_QUIT, WM_RENDERER_UPDATE, WM_RENDERER_THEME));
                 break;
             }
             // Release the transport lock before entering any toolkit/COM call.
@@ -694,7 +702,11 @@ fn run_ui(
                 .map_err(|_| "renderer mailbox poisoned")?
                 .take_pending();
             if let Some((owner, snapshot)) = pending {
-                presentation.apply(owner, snapshot)?;
+                crate::diagnostics::record(format_args!("准备绘制 owner={owner} 快照={snapshot:?}"));
+                if let Err(error) = presentation.apply(owner, snapshot) {
+                    crate::diagnostics::record(format_args!("UI 循环退出：渲染失败 {error}"));
+                    return Err(error);
+                }
                 sync_indicator_timer(&mut presentation, &mut indicator_timer)?;
             }
             if message.message == WM_TIMER as u32

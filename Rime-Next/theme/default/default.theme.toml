@@ -1,4 +1,4 @@
-# default.theme.toml —— 皮肤「default」：**只有配色**（自动生成，勿手改）。
+# default.theme.toml —— 皮肤「default」：**只有配色**。
 #
 # 生成方式: cargo run --release -p weasel-style --bin theme-toml -- <weasel.yaml> <theme 目录>
 # 布局与"用哪套皮肤"在 theme\theme.toml 里，本文件不再包含 [style] / color_scheme。
