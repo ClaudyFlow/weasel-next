@@ -438,37 +438,64 @@ pub fn palette_from_path(path: &std::path::Path, dark: bool) -> Palette {
     palette
 }
 
-/// 按 librime 的查找顺序读官方皮肤：先用户目录，再程序文件夹。
+/// 读官方皮肤：用 `weasel_style::theme::load_theme` —— 它按我们的拆分约定读**两份**
+/// （`theme\theme.toml` 的布局与 `color_scheme`，加 `theme\<名字>\<名字>.theme.toml` 的配色），
+/// 用户目录优先、程序文件夹兜底，且兼容拆分前的扁平旧文件。
 ///
-/// 程序文件夹从**宿主进程**的 exe 目录推得（主题 DLL 与渲染器同目录），
-/// 因此路径是 `<程序文件夹>\Rime-Next\theme\default.theme.toml`。
+/// 程序文件夹从**宿主进程**的 exe 目录推得（主题 DLL 与渲染器同目录）。
 pub fn palette_from_official(dark: bool) -> Palette {
     const NAME: &str = "default";
-    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(appdata) = std::env::var_os("APPDATA") {
-        candidates.push(
-            std::path::PathBuf::from(appdata)
-                .join("Rime-Next")
-                .join("theme")
-                .join(format!("{NAME}.theme.toml")),
-        );
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(
-                dir.join("Rime-Next")
-                    .join("theme")
-                    .join(format!("{NAME}.theme.toml")),
-            );
+    let shared = match std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("Rime-Next")))
+    {
+        Some(dir) => dir,
+        None => {
+            crate::diagnostics::record(format_args!("取不到 exe 目录，使用内置色板"));
+            return Palette::new(dark);
         }
-    }
-    for candidate in candidates {
-        if candidate.is_file() {
-            return palette_from_path(&candidate, dark);
+    };
+    let user = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .map(|base| base.join("Rime-Next"))
+        .unwrap_or_else(|| shared.clone());
+    let merged = match weasel_style::theme::load_theme(&shared, &user, NAME) {
+        Ok(Some(config)) => config,
+        Ok(None) => {
+            crate::diagnostics::record(format_args!(
+                "未找到 theme.toml / {NAME}.theme.toml（用户 {} · 共享 {}），使用内置色板",
+                user.display(),
+                shared.display()
+            ));
+            return Palette::new(dark);
         }
-    }
-    crate::diagnostics::record(format_args!("未找到 {NAME}.theme.toml，使用内置色板"));
-    Palette::new(dark)
+        Err(error) => {
+            crate::diagnostics::record(format_args!("皮肤解析失败: {error}"));
+            return Palette::new(dark);
+        }
+    };
+    let scheme = merged.active_scheme(dark);
+    let mut palette = Palette::new(dark);
+    palette.background = rgb_of(scheme.back_color);
+    palette.border = rgb_of(scheme.border_color);
+    palette.active = rgb_of(scheme.hilited_candidate_back_color);
+    palette.hover = palette.active;
+    palette.text = if scheme.candidate_text_color != 0 {
+        rgb_of(scheme.candidate_text_color)
+    } else {
+        rgb_of(scheme.text_color)
+    };
+    palette.secondary = rgb_of(scheme.comment_text_color);
+    palette.active_number = if scheme.hilited_candidate_text_color != 0 {
+        rgb_of(scheme.hilited_candidate_text_color)
+    } else {
+        palette.text
+    };
+    crate::diagnostics::record(format_args!(
+        "皮肤已加载: 配色 {}（{}）· 底色 #{:06x} · 文字 #{:06x}",
+        merged.style.color_scheme, scheme.name, palette.background, palette.text
+    ));
+    palette
 }
 
 #[cfg(test)]
