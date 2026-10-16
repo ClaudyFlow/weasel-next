@@ -137,11 +137,18 @@ fn read_schema_list(text: &str) -> Vec<String> {
 }
 
 /// 列出全部方案：已选中的在前（按 `schema_list` 顺序），其余按 id 排在后面。
-pub fn list_schemas(shared: &Path, custom_path: &Path) -> io::Result<Vec<SchemaInfo>> {
-    let schema_root = shared.join("schema");
+/// 列出全部方案：已选中的在前（按 `schema.toml` 里的顺序，即 a–z），其余按 id 排在后面。
+///
+/// 方案来自**两处** `schema\` 目录：程序文件夹的出厂方案与用户文件夹的方案，
+/// 同名以用户那份为准。已选清单读 `schema.toml`（用户目录优先、回退出厂）。
+pub fn list_schemas(shared: &Path, user: &Path) -> io::Result<Vec<SchemaInfo>> {
     let mut available: BTreeMap<String, (String, String, String)> = BTreeMap::new();
-    if schema_root.is_dir() {
-        for entry in fs::read_dir(&schema_root)? {
+    // 先出厂、后用户：同名时用户的覆盖出厂的。
+    for root in [shared.join("schema"), user.join("schema")] {
+        if !root.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(&root)? {
             let dir = entry?.path();
             if !dir.is_dir() {
                 continue;
@@ -165,16 +172,8 @@ pub fn list_schemas(shared: &Path, custom_path: &Path) -> io::Result<Vec<SchemaI
         }
     }
 
-    // 已选列表：出厂 default.yaml 叠加用户补丁（补丁用文本覆盖，见 parse_with_patch 的语义）
-    let base_text = fs::read_to_string(shared.join("default.yaml")).unwrap_or_default();
-    let mut selected = read_schema_list(&base_text);
-    if let Ok(custom_text) = fs::read_to_string(custom_path) {
-        let patched = read_schema_list(&custom_text);
-        if !patched.is_empty() {
-            selected = patched;
-        }
-    }
-
+    // 已选清单：读 schema.toml（用户目录那份优先，回退出厂那份）。不再读写任何 YAML。
+    let selected = read_schema_toml(shared, user);
     let mut rows = Vec::with_capacity(available.len());
     for id in &selected {
         if let Some((name, author, description)) = available.remove(id) {

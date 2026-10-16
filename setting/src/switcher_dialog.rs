@@ -614,8 +614,8 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                         let slice = unsafe { std::slice::from_raw_parts(raw, len) };
                         selected.push(String::from_utf16_lossy(slice));
                     }
-                    let path = switcher::user_default_custom_path(&state.user);
-                    switcher::set_schema_list(&path, &selected)
+                    let path = state.user.join("schema").join("schema.toml");
+                    switcher::write_schema_toml(&path, &selected)
                 });
                 match outcome {
                     Some(Ok(())) => {
