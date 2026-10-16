@@ -38,6 +38,12 @@ const CONNECT_KEY_TIMEOUT: Duration = Duration::from_millis(500);
 /// 或等一次布局往返，80ms 常常不够 → 前几个字母被英文直通给应用。按键已经被输入法
 /// 吞下，多等一会儿只是晚几十毫秒出现，不会漏给应用，所以这里统一放宽。
 const BUSY_KEY_TIMEOUT: Duration = Duration::from_millis(600);
+/// 一条命令**轮到被派发时**至少还要有的预算。
+///
+/// 用得着它的场景是"排队被拖过期"：首键在跑连接握手（最长 500ms），后面几个键
+/// 的 deadline 是入队时按 80ms 定的，轮到它们时早已过期。那些键已经被输入法吞下，
+/// 直接丢会让开头几个字母凭空消失；给一个下限让它们仍然被送出去。
+const MIN_DISPATCH_BUDGET: Duration = Duration::from_millis(120);
 /// 宿主线程等待按键结果时比预算多留的余量，避免在边界上误判超时。
 const HOST_WAIT_MARGIN: Duration = Duration::from_millis(60);
 /// 停止工作线程时等待原生线程退出的最长毫秒数。
@@ -470,15 +476,18 @@ impl WorkerState {
                 }
             };
             let Some(command) = command else { break };
-            let deadline = command.deadline();
-            if Instant::now() >= deadline {
-                report(
-                    "command-expired",
-                    Some(&self.pipe_name),
-                    "command expired before dispatch",
-                );
-                continue;
-            }
+            // ⚠️ 排队期间被"拖过期"的按键不能直接丢！
+            //
+            // 场景（用户报"打快了前几个字母不识别"）：冷启动/刚切程序时首键要走
+            // "连接 + 握手 + open_input"，它自己拿到 CONNECT_KEY_TIMEOUT(500ms)，但
+            // **它后面排队的第 2、3 个键，deadline 是入队那一刻就按常规预算(80ms)定死的**。
+            // 首键占满 500ms 之后，队列里那几个键的 80ms 早已过期 → 在这里被 `continue`
+            // 丢掉 ⇒ 开头几个字母既不进输入法也不进应用（凭空消失）。
+            //
+            // 这些键**已经被输入法吞下**（不会漏给应用），多等几十毫秒只是晚一点出现，
+            // 所以轮到它们时至少给 MIN_DISPATCH_BUDGET 的预算，而不是按入队时间判死。
+            let arrival = Instant::now();
+            let deadline = command.deadline().max(arrival + MIN_DISPATCH_BUDGET);
             self.discard_disconnected_client().await;
 
             // 建立连接时的首键：放宽预算，避免这一键被英文回退吞掉；

@@ -118,45 +118,81 @@ pub(crate) fn theme_color_scheme(user: &std::path::Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn style_value(shared: &std::path::Path, user: &std::path::Path, key: &str) -> Option<String> {
-    // 0) 配色这一项的唯一落点是用户 theme.toml，先看它（其余键仍走官方 YAML 链）。
-    if key == "style/color_scheme" {
-        if let Some(id) = theme_color_scheme(user) {
-            return Some(id);
+/// 从**主题链**里取一条样式键的当前值（TOML）。
+///
+/// 主题链 = `theme.toml`（布局 + `color_scheme`）叠加 `theme\<皮肤>\<皮肤>.theme.toml`（配色），
+/// 与渲染器读的是同一份；`key` 是官方路径式键（`style/layout/corner_radius`）。
+fn theme_style_value_from(config: &weasel_style::WeaselConfig, key: &str) -> Option<String> {
+    // 只映射右边那栏实际会显示的那些键；其余靠 `builtin_style_default` 兜底。
+    match key {
+        "style/color_scheme" => Some(config.style.color_scheme.clone()).filter(|v| !v.is_empty()),
+        "style/color_scheme_dark" => {
+            config.style.color_scheme_dark.clone().filter(|v| !v.is_empty())
         }
-    }
-    // 1) 用户补丁：weasel.custom.toml 里是**斜杠键**（style/color_scheme: aqua），单层 map 直接查。
-    if let Ok(text) = std::fs::read_to_string(user.join("weasel.custom.toml")) {
-        if let Ok(yaml) = weasel_style::parse_yaml(&text) {
-            if let Some(found) = yaml.get("patch").and_then(|patch| patch.get(key)) {
-                if let Some(value) = found.as_str() {
-                    return Some(value.to_string());
-                }
-            }
+        "style/font_point" => Some(config.style.font_point.to_string()),
+        "style/label_font_point" => Some(config.style.label_font_point.to_string()),
+        "style/comment_font_point" => Some(config.style.comment_font_point.to_string()),
+        "style/font_face" => Some(config.style.font_face.clone()).filter(|v| !v.is_empty()),
+        "style/label_font_face" => Some(config.style.label_font_face.clone()).filter(|v| !v.is_empty()),
+        "style/comment_font_face" => {
+            Some(config.style.comment_font_face.clone()).filter(|v| !v.is_empty())
         }
-    }
-    // 2) 出厂 weasel.toml：**嵌套**结构（style: → layout: → type:），按 / 逐层走。
-    let base = std::fs::read_to_string(shared.join("weasel.toml")).ok()?;
-    let yaml = weasel_style::parse_yaml(&base).ok()?;
-    let mut node = &yaml;
-    let mut resolved = true;
-    for part in key.split('/') {
-        // 注意不能用 ? —— 路径缺失时它会让整个函数返回 None，
-        // 后面的内置默认值兜底就永远跑不到（enhanced_position 就是这么空着的）。
-        match node.get(part) {
-            Some(next) => node = next,
-            None => {
-                resolved = false;
-                break;
-            }
+        "style/layout/type" => Some(config.style.layout.layout_type.clone()).filter(|v| !v.is_empty()),
+        "style/layout/align_type" => Some(config.style.layout.align_type.clone()).filter(|v| !v.is_empty()),
+        "style/preedit_type" => Some(config.style.preedit_type.clone()).filter(|v| !v.is_empty()),
+        "style/antialias_mode" => Some(config.style.antialias_mode.clone()).filter(|v| !v.is_empty()),
+        "style/hover_type" => Some(config.style.hover_type.clone()).filter(|v| !v.is_empty()),
+        "style/inline_preedit" => Some(config.style.inline_preedit.to_string()),
+        "style/display_tray_icon" => Some(config.style.display_tray_icon.to_string()),
+        "style/ascii_tip_follow_cursor" => Some(config.style.ascii_tip_follow_cursor.to_string()),
+        "style/paging_on_scroll" => Some(config.style.paging_on_scroll.to_string()),
+        "style/click_to_capture" => Some(config.style.click_to_capture.to_string()),
+        "style/enhanced_position" => Some(config.style.enhanced_position.to_string()),
+        "style/vertical_auto_reverse" => Some(config.style.vertical_auto_reverse.to_string()),
+        "style/vertical_text_left_to_right" => {
+            Some(config.style.vertical_text_left_to_right.to_string())
         }
-    }
-    if resolved {
-        if let Some(value) = node.as_str() {
-            return Some(value.to_string());
+        "style/vertical_text_with_wrap" => Some(config.style.vertical_text_with_wrap.to_string()),
+        "style/vertical_right_to_left" => Some(config.style.vertical_right_to_left.to_string()),
+        "style/candidate_abbreviate_length" => {
+            Some(config.style.candidate_abbreviate_length.to_string())
         }
+        "style/label_format" => Some(config.style.label_format.clone()).filter(|v| !v.is_empty()),
+        "style/mark_text" => Some(config.style.mark_text.clone()),
+        "style/layout/border" => Some(config.style.layout.border.to_string()),
+        "style/layout/corner_radius" => Some(config.style.layout.corner_radius.to_string()),
+        "style/layout/round_corner" => Some(config.style.layout.round_corner.to_string()),
+        "style/layout/hilited_corner_radius" => {
+            Some(config.style.layout.hilited_corner_radius.to_string())
+        }
+        "style/layout/margin_x" => Some(config.style.layout.margin_x.to_string()),
+        "style/layout/margin_y" => Some(config.style.layout.margin_y.to_string()),
+        "style/layout/spacing" => Some(config.style.layout.spacing.to_string()),
+        "style/layout/candidate_spacing" => Some(config.style.layout.candidate_spacing.to_string()),
+        "style/layout/hilite_spacing" => Some(config.style.layout.hilite_spacing.to_string()),
+        "style/layout/hilite_padding_x" => Some(config.style.layout.hilite_padding_x.to_string()),
+        "style/layout/hilite_padding_y" => Some(config.style.layout.hilite_padding_y.to_string()),
+        "style/layout/shadow_radius" => Some(config.style.layout.shadow_radius.to_string()),
+        "style/layout/shadow_offset_x" => Some(config.style.layout.shadow_offset_x.to_string()),
+        "style/layout/shadow_offset_y" => Some(config.style.layout.shadow_offset_y.to_string()),
+        _ => None,
     }
-    builtin_style_default(key).map(|value| value.to_string())
+}
+
+/// 取一条样式键的当前值：从**已经算好的**结果里查，绝不在绘制期读盘。
+///
+/// ⚠️ 这里曾经在每次调用时 `theme::load_theme()` —— 而它的调用点在 `WM_DRAWITEM`
+/// 里（每条可见列表项一次）⇒ **每画一行就把 `theme.toml` 与 32 KB 的
+/// `default.theme.toml`（36 套配色）重读重解析一遍**，滚动/选中时肉眼可见地卡。
+/// 值只在打开对话框与切皮肤时刷新，所以由 `StyleDialog::refresh_style_values()` 预算好。
+fn style_value(state: &StyleDialog, key: &str) -> Option<String> {
+    let index = crate::style_keys::KEYS.iter().position(|k| k.key == key)?;
+    state
+        .style_values
+        .get(index)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .or_else(|| builtin_style_default(key).map(|value| value.to_string()))
 }
 
 
@@ -198,6 +234,11 @@ struct StyleDialog {
     selected: usize,
     /// 左侧列表当前显示的颜色键与取值。
     colors: Vec<(String, u32)>,
+    /// 右侧列表每条样式键的当前值，**下标与 `style_keys::KEYS` 对齐**。
+    ///
+    /// 必须在这里缓存：绘制期（WM_DRAWITEM）绝不能读盘 —— 每条可见行一次会把
+    /// 32 KB 的皮肤文件重复解析几十遍（见 `style_value` 的注释）。
+    style_values: Vec<String>,
 }
 
 impl StyleDialog {
@@ -236,7 +277,23 @@ impl StyleDialog {
             .iter()
             .position(|(id, _)| *id == active)
             .unwrap_or(0);
+        self.refresh_style_values();
         self.collect_colors();
+    }
+
+    /// 把右边那栏 39 条样式键的当前值算一遍（只在打开 / 切皮肤时调用）。
+    fn refresh_style_values(&mut self) {
+        self.style_values = match &self.config {
+            Some(config) => crate::style_keys::KEYS
+                .iter()
+                .map(|key| {
+                    theme_style_value_from(config, key.key)
+                        .or_else(|| builtin_style_default(key.key).map(str::to_string))
+                        .unwrap_or_default()
+                })
+                .collect(),
+            None => Vec::new(),
+        };
     }
 
     /// 取出当前配色里每个颜色键的取值（缺项按 0 显示）。
@@ -289,6 +346,7 @@ pub fn show_style(shared: &Path, user: &Path) -> Result<(), String> {
         schemes: Vec::new(),
         selected: 0,
         colors: Vec::new(),
+        style_values: Vec::new(),
     };
     state.reload();
     let state = Rc::new(RefCell::new(state));
@@ -363,8 +421,12 @@ unsafe extern "system" fn style_proc(
                     })
                     .unwrap_or_default();
                 for key in crate::style_keys::KEYS {
-                    // 官方每条显示「标签 + key: 当前值」，用户改过的值来自补丁文件。
-                    let text = match style_value(&shared_dir, &user_dir, key.key) {
+                    // 官方每条显示「标签 + key: 当前值」；值取自预读好的缓存
+                    // （绘制期不读盘，见 `style_values` 字段）。
+                    let value = unsafe { state_of(hwnd) }
+                        .map(|state| { let state = state.borrow(); style_value(&state, key.key) })
+                        .flatten();
+                    let text = match value {
                         Some(value) => wide(&format!("{}   {}: {}", key.zh_hans, key.key, value)),
                         None => wide(&format!("{}   {}", key.zh_hans, key.key)),
                     };
@@ -463,9 +525,11 @@ unsafe extern "system" fn style_proc(
                             }
                         }
                         // 把下拉框选中到**当前值**（官方即如此：显示「居中」这类中文标签）。
-                        // 值来自用户补丁；布尔键的 true/false 对应「开 / 关」两项。
+                        // 值取自缓存；布尔键的 true/false 对应「开 / 关」两项。
                         if let Some(key_ref) = crate::style_keys::KEYS.get(index as usize) {
-                            let current = unsafe { state_of(hwnd) }.map(|state| { let state = state.borrow(); style_value(&state.shared, &state.user, key_ref.key) }).flatten();
+                            let current = unsafe { state_of(hwnd) }
+                                .map(|state| { let state = state.borrow(); style_value(&state, key_ref.key) })
+                                .flatten();
                             let target = match current.as_deref() {
                                 Some("true") => Some(0),
                                 Some("false") => Some(1),
@@ -537,8 +601,9 @@ unsafe extern "system" fn style_proc(
                 let Some(key) = crate::style_keys::KEYS.get(item.itemID as usize) else {
                     return 1;
                 };
+                // 值取自缓存（**不读盘**）——这条路径每画一行就走一次，读盘会肉眼可见地卡。
                 let current = unsafe { state_of(hwnd) }
-                    .map(|state| { let state = state.borrow(); style_value(&state.shared, &state.user, key.key) })
+                    .map(|state| { let state = state.borrow(); style_value(&state, key.key) })
                     .flatten()
                     .unwrap_or_default();
                 unsafe {
@@ -552,7 +617,10 @@ unsafe extern "system" fn style_proc(
                     SetTextColor(item.hDC, COLORREF(foreground));
                     let mut left_rc = item.rcItem;
                     left_rc.left += 6;
-                    left_rc.right = left_rc.left + (left_rc.right - left_rc.left) * 3 / 5;
+                    // 左栏（标签 + 键路径）留 1/2：键路径最长的是
+                    // `style/candidate_abbreviate_length`（32 字符），3/5 时会被截断成
+                    // `…_colo`（实测），右栏的值也会被挤到列表右边界外。对半分刚好都放得下。
+                    left_rc.right = left_rc.left + (left_rc.right - left_rc.left) / 2;
                     let left_text = wide(&format!("{}   {}", key.zh_hans, key.key));
                     DrawTextW(item.hDC, PCWSTR(left_text.as_ptr()), -1, &mut left_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                     let mut right_rc = item.rcItem;

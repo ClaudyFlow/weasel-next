@@ -1,5 +1,3 @@
-warning: in the working copy of 'src/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'src/rime/dict/dict_compiler.cc', LF will be replaced by CRLF the next time Git touches it
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index bfc704f..49fa848 100644
 --- a/src/CMakeLists.txt
@@ -120,94 +118,70 @@ index 7131fa8..15fb2cf 100644
  
    r.Register("tabledb", new DbComponent<TableDb>);
 diff --git a/src/rime/lever/deployment_tasks.cc b/src/rime/lever/deployment_tasks.cc
-index 7f4c9b1..bee3916 100644
+index 7f4c9b1..74de1ac 100644
 --- a/src/rime/lever/deployment_tasks.cc
 +++ b/src/rime/lever/deployment_tasks.cc
-@@ -27,6 +27,9 @@
+@@ -25,6 +25,9 @@
+ #include <rime/dict/dict_compiler.h>
+ #include <rime/lever/deployment_tasks.h>
  #include <rime/lever/user_dict_manager.h>
++#include <vector>
++
++#include <rime/toml_lite.h>
  #ifdef _WIN32
  #include <windows.h>
-+#include <rime/toml_lite.h>
-+#include <fstream>
-+#include <map>
  #endif
- 
- namespace fs = std::filesystem;
-@@ -52,8 +55,10 @@ bool DetectModifications::Run(Deployer* deployer) {
-         for (fs::directory_iterator iter(p), end; iter != end; ++iter) {
-           path entry(iter->path());
-           if (fs::is_regular_file(fs::canonical(entry)) &&
--              entry.extension().to_utf8_string() == ".yaml" &&
--              entry.filename().to_utf8_string() != "user.yaml") {
-+              (entry.extension().to_utf8_string() == ".yaml" ||
-+               entry.extension().to_utf8_string() == ".toml") &&
-+              entry.filename().to_utf8_string() != "user.yaml" &&
-+              entry.filename().to_utf8_string() != "user.toml") {
-             last_modified =
-                 (std::max)(last_modified,
-                            filesystem::to_time_t(fs::last_write_time(entry)));
-@@ -90,13 +95,31 @@ bool InstallationUpdate::Run(Deployer* deployer) {
-       LOG(ERROR) << "Error creating user data dir: " << user_data_path;
-     }
+@@ -181,8 +184,20 @@ bool WorkspaceUpdate::Run(Deployer* deployer) {
+     LOG(ERROR) << "Error loading default config.";
+     return false;
    }
--  path installation_info(user_data_path / "installation.yaml");
-+  path installation_info(user_data_path / "installation.toml");
-   Config config;
-   string installation_id;
-   string last_distro_code_name;
-   string last_distro_version;
-   string last_rime_version;
--  if (config.LoadFromFile(installation_info)) {
-+  // 读平铺 TOML（librime 的 Config 是 yaml-cpp，读不了 TOML），把键灌进去，
-+  // 下面那些 GetString/GetBool 因此一行都不用改。
-+  bool loaded = false;
-+  {
-+    an<ConfigItem> node;
-+    if (LoadTomlLite(installation_info, &node) && node) {
-+      if (auto map = As<ConfigMap>(node)) {
-+        for (auto it = map->begin(); it != map->end(); ++it) {
-+          if (auto value = As<ConfigValue>(it->second)) {
-+            string text;
-+            if (value->GetString(&text))
-+              config.SetString(it->first, text);
-+          }
-+        }
-+        loaded = true;
-+      }
++  // [Weasel-Next 补丁] 方案清单的唯一落点是 <用户目录>/schema/schema.toml：
++  //   勾选了哪些方案只写这一处，不再为了给 librime 看而生成 default.custom.yaml。
++  //   读到就用它（列表顺序即菜单顺序，第一条是 rime 没有记忆时的默认方案）；
++  //   读不到才回退 default.yaml 自带的那份清单。
++  vector<string> schema_ids = LoadSchemaIdsFromToml();
++  if (schema_ids.empty()) {
++    LOG(INFO) << "[Weasel-Next] schema/schema.toml 没有可用清单，回退 default.yaml";
++  } else {
++    LOG(INFO) << "[Weasel-Next] 方案清单来自 schema/schema.toml："
++              << schema_ids.size() << " 项";
++  }
++
+   auto schema_list = config->GetList("schema_list");
+-  if (!schema_list) {
++  if (schema_ids.empty() && !schema_list) {
+     LOG(WARNING) << "schema list not defined.";
+     return false;
+   }
+@@ -221,14 +236,20 @@ bool WorkspaceUpdate::Run(Deployer* deployer) {
+       ++failure;
+   };
+   auto schema_component = Config::Require("schema");
+-  for (auto it = schema_list->begin(); it != schema_list->end(); ++it) {
+-    auto item = As<ConfigMap>(*it);
+-    if (!item)
+-      continue;
+-    auto schema_property = item->GetValue("schema");
+-    if (!schema_property)
+-      continue;
+-    const string& schema_id = schema_property->str();
++  // 两个来源共用同一段构建逻辑：先把 id 收集齐，再逐个编译。
++  vector<string> ids = schema_ids;
++  if (ids.empty() && schema_list) {
++    for (auto it = schema_list->begin(); it != schema_list->end(); ++it) {
++      auto item = As<ConfigMap>(*it);
++      if (!item)
++        continue;
++      auto schema_property = item->GetValue("schema");
++      if (!schema_property)
++        continue;
++      ids.push_back(schema_property->str());
 +    }
 +  }
-+  if (loaded) {
-     if (config.GetString("installation_id", &installation_id)) {
-       LOG(INFO) << "installation info exists. installation id: "
-                 << installation_id;
-@@ -160,7 +183,26 @@ bool InstallationUpdate::Run(Deployer* deployer) {
-   }
-   config.SetString("rime_version", RIME_VERSION);
-   LOG(INFO) << "Rime version: " << RIME_VERSION;
--  return config.SaveToFile(installation_info);
-+  {
-+    std::map<string, string> flat;
-+    const char* keys[] = {"installation_id", "install_time", "update_time",
-+                          "rime_version",     "sync_dir",     "distribution_name",
-+                          "distribution_code_name", "distribution_version"};
-+    for (const char* key : keys) {
-+      string value;
-+      if (config.GetString(key, &value))
-+        flat[key] = value;
-+    }
-+    bool backup = false;
-+    if (config.GetBool("backup_config_files", &backup))
-+      flat["backup_config_files"] = backup ? "true" : "false";
-+    std::ofstream out(installation_info.c_str(), std::ios::binary);
-+    if (!out)
-+      return false;
-+    out << "# installation.toml —— 安装信息。\n";
-+    out << WriteTomlLite(flat);
-+    return true;
-+  }
- }
- 
- bool WorkspaceUpdate::Run(Deployer* deployer) {
++  for (const string& schema_id : ids) {
+     build_schema(schema_id);
+     the<Config> schema_config(schema_component->Create(schema_id));
+     if (!schema_config)
 diff --git a/src/rime/registry.cc b/src/rime/registry.cc
 index 979396c..b7888ca 100644
 --- a/src/rime/registry.cc
@@ -336,7 +310,6 @@ index 09a9a5c..e51a1c3 100644
 +  // 原实现是直接拼扁平名字，分类布局（schema/<方案>/<方案>.schema.yaml）永远找不到。
 +  if (!std::filesystem::exists(default_path) && !fallback_root_path_.empty()) {
 +    ResourceResolver fallback_resolver(type_);
-warning: in the working copy of 'src/rime/toml_lite.cc', LF will be replaced by CRLF the next time Git touches it
 +    fallback_resolver.set_root_path(fallback_root_path_);
 +    auto fallback_path = fallback_resolver.ResolvePath(resource_id);
 +    if (std::filesystem::exists(fallback_path)) {
@@ -346,18 +319,67 @@ warning: in the working copy of 'src/rime/toml_lite.cc', LF will be replaced by 
    if (!std::filesystem::exists(default_path)) {
      auto fallback_path = std::filesystem::absolute(
          fallback_root_path_ / (type_.prefix + resource_id + type_.suffix));
+diff --git a/src/rime/switcher.cc b/src/rime/switcher.cc
+index d283a92..4a6caea 100644
+--- a/src/rime/switcher.cc
++++ b/src/rime/switcher.cc
+@@ -8,6 +8,7 @@
+ #include <rime/common.h>
+ #include <rime/composition.h>
+ #include <rime/config.h>
++#include <rime/toml_lite.h>
+ #include <rime/context.h>
+ #include <rime/key_event.h>
+ #include <rime/menu.h>
+@@ -146,6 +147,19 @@ static an<ConfigValue> ParseSchemaListEntry(Config* config,
+ int Switcher::ForEachSchemaListEntry(
+     Config* config,
+     function<bool(const string& schema_id)> process_entry) {
++  // [Weasel-Next 补丁] 方案清单的唯一落点是 <用户目录>/schema/schema.toml：
++  //   读到就用它（顺序即菜单顺序），读不到才回退 default.yaml 的 schema_list。
++  //   这样"勾选了哪些方案"只写一处，不再需要生成的 default.custom.yaml。
++  if (vector<string> ids = LoadSchemaIdsFromToml(); !ids.empty()) {
++    int num = 0;
++    for (const string& schema_id : ids) {
++      ++num;
++      if (!process_entry(schema_id))
++        break;
++    }
++    DLOG(INFO) << "[Weasel-Next] 菜单清单来自 schema.toml: " << num << " 项";
++    return num;
++  }
+   auto schema_list = config->GetList("schema_list");
+   if (!schema_list)
+     return 0;
 diff --git a/src/rime/toml_lite.cc b/src/rime/toml_lite.cc
 new file mode 100644
-index 0000000..c1f2c31
+index 0000000..b6c43ce
 --- /dev/null
 +++ b/src/rime/toml_lite.cc
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,275 @@
++// [Weasel-Next] 平铺 TOML 子集解析 + 方案清单读取。
++//
++// 为什么需要它：方案清单与安装信息要写成 `.toml`，而 librime 的配置层是 yaml-cpp，
++// 读不了 TOML。这里实现**只覆盖我们用到的那点语法**：
++//
++//   key = "字串"           # 双引号字符串，支持 \" \\ \n \t 转义
++//   key = 123              # 整数
++//   key = 1.5              # 浮点
++//   key = true / false     # 布尔
++//   key = ["a", "b"]       # 字符串数组（可跨行，方案清单用）
++//   [section]              # 分段 → 嵌套 ConfigMap
++//   # 注释、空行           忽略
++//
++// 不支持（也用不到）：内联表、多行字符串、日期时间、数字数组。
++
 +#include "toml_lite.h"
 +
-+#include <cctype>
 +#include <cstdlib>
 +#include <fstream>
 +#include <sstream>
++
++#include <rime/config.h>
++#include <rime/service.h>
 +
 +namespace rime {
 +
@@ -409,8 +431,85 @@ index 0000000..c1f2c31
 +  return true;
 +}
 +
++// 把 `["a", "b", "c"]` 解析成 ConfigList（只支持双引号字符串元素）。
++an<ConfigItem> ParseStringArray(const std::string& text) {
++  std::string v = Trim(text);
++  if (v.size() < 2 || v.front() != '[' || v.back() != ']')
++    return nullptr;
++  auto list = New<ConfigList>();
++  std::string body = v.substr(1, v.size() - 2);
++  std::string current;
++  bool in_quote = false;
++  bool escaped = false;
++  bool has_item = false;
++  auto flush = [&]() -> bool {
++    std::string item = Trim(current);
++    current.clear();
++    if (item.empty())
++      return true;
++    if (item.size() < 2 || item.front() != '"' || item.back() != '"')
++      return false;
++    std::string out;
++    if (!UnescapeInto(item.substr(1, item.size() - 2), &out))
++      return false;
++    list->Append(New<ConfigValue>(out));
++    has_item = true;
++    return true;
++  };
++  for (char c : body) {
++    if (escaped) {
++      current.push_back(c);
++      escaped = false;
++      continue;
++    }
++    if (in_quote && c == '\\') {
++      current.push_back(c);
++      escaped = true;
++      continue;
++    }
++    if (c == '"') {
++      in_quote = !in_quote;
++      current.push_back(c);
++      continue;
++    }
++    if (c == ',' && !in_quote) {
++      if (!flush())
++        return nullptr;
++      continue;
++    }
++    current.push_back(c);
++  }
++  if (in_quote || !flush())
++    return nullptr;
++  return has_item ? list : nullptr;
++}
++
++// 参数文本是否是一个尚未闭合的数组（跨行书写时用来继续读下一行）。
++bool ArrayIsOpen(const std::string& text) {
++  std::string v = Trim(text);
++  if (v.empty() || v.front() != '[')
++    return false;
++  bool in_quote = false;
++  bool escaped = false;
++  for (char c : v) {
++    if (escaped) {
++      escaped = false;
++      continue;
++    }
++    if (in_quote && c == '\\') {
++      escaped = true;
++      continue;
++    }
++    if (c == '"')
++      in_quote = !in_quote;
++  }
++  return in_quote || v.back() != ']';
++}
++
 +// 把右侧的值文本解析成 ConfigValue。
 +an<ConfigItem> ParseValue(const std::string& text) {
++  if (an<ConfigItem> array = ParseStringArray(text))
++    return array;
 +  std::string v = Trim(text);
 +  if (v.empty())
 +    return nullptr;
@@ -424,7 +523,13 @@ index 0000000..c1f2c31
 +    return New<ConfigValue>(true);
 +  if (v == "false")
 +    return New<ConfigValue>(false);
-+  // 整数 / 浮点
++  // 整数 / 浮点（含 0x 十六进制整数）
++  if (v.size() > 2 && v[0] == '0' && (v[1] == 'x' || v[1] == 'X')) {
++    char* end = nullptr;
++    long long value = std::strtoll(v.c_str() + 2, &end, 16);
++    if (end && *end == '\0')
++      return New<ConfigValue>(static_cast<int>(value));
++  }
 +  char* end = nullptr;
 +  double d = std::strtod(v.c_str(), &end);
 +  if (end && *end == '\0' && end != v.c_str()) {
@@ -462,9 +567,27 @@ index 0000000..c1f2c31
 +    if (eq == std::string::npos)
 +      return nullptr;
 +    std::string key = Trim(s.substr(0, eq));
++    if (key.size() >= 2 && key.front() == '"' && key.back() == '"')
++      key = key.substr(1, key.size() - 2);
 +    if (key.empty())
 +      return nullptr;
-+    an<ConfigItem> value = ParseValue(s.substr(eq + 1));
++    std::string raw = s.substr(eq + 1);
++    // 数组可以跨行：一直读到闭合为止
++    if (ArrayIsOpen(raw)) {
++      std::string joined = raw;
++      bool closed = false;
++      while (std::getline(stream, line)) {
++        joined += " " + Trim(StripComment(line));
++        if (!ArrayIsOpen(joined)) {
++          closed = true;
++          break;
++        }
++      }
++      if (!closed)
++        return nullptr;
++      raw = joined;
++    }
++    an<ConfigItem> value = ParseValue(raw);
 +    if (!value)
 +      return nullptr;
 +    current->Set(key, value);
@@ -481,71 +604,56 @@ index 0000000..c1f2c31
 +  an<ConfigItem> parsed = ParseTomlLite(buffer.str());
 +  if (!parsed)
 +    return false;
-warning: in the working copy of 'src/rime/toml_lite.h', LF will be replaced by CRLF the next time Git touches it
 +  if (out)
 +    *out = parsed;
 +  return true;
 +}
 +
-+std::string WriteTomlLite(const std::map<std::string, std::string>& flat) {
-+  std::string out;
-+  for (const auto& kv : flat) {
-+    out += kv.first;
-+    out += " = ";
-+    const std::string& v = kv.second;
-+    bool plain = (v == "true" || v == "false");
-+    if (!plain && !v.empty()) {
-+      char* end = nullptr;
-+      std::strtod(v.c_str(), &end);
-+      if (end && *end == '\0')
-+        plain = true;  // 数字不加引号
-+    }
-+    if (plain) {
-+      out += v;
-+    } else {
-+      out += '"';
-+      for (char c : v) {
-+        if (c == '"' || c == '\\')
-+          out.push_back('\\');
-+        out.push_back(c);
-+      }
-+      out += '"';
-+    }
-+    out += "\n";
++std::vector<std::string> LoadSchemaIdsFromToml() {
++  std::vector<std::string> ids;
++  path file =
++      Service::instance().deployer().user_data_dir / "schema" / "schema.toml";
++  an<ConfigItem> node;
++  if (!LoadTomlLite(file, &node) || !node)
++    return ids;
++  auto map = As<ConfigMap>(node);
++  // ⚠️ 必须用 Get + As<ConfigList>，**不能**用 GetValue：
++  //    ConfigMap::GetValue 实现是 `As<ConfigValue>(Get(key))`，而 schemas 是**数组**，
++  //    As<ConfigValue> 对 kList 一律返回 null ⇒ 明明 HasKey(schemas)=1、键总数=1，
++  //    这里却恒为 null ⇒ 整条 TOML 兼容链永远回退 default.yaml（2026-10-17 实测定位）。
++  auto list = map ? As<ConfigList>(map->Get("schemas")) : nullptr;
++  if (!list)
++    return ids;
++  for (auto it = list->begin(); it != list->end(); ++it) {
++    if (auto value = As<ConfigValue>(*it))
++      ids.push_back(value->str());
 +  }
-+  return out;
++  return ids;
 +}
 +
 +}  // namespace rime
-\ No newline at end of file
 diff --git a/src/rime/toml_lite.h b/src/rime/toml_lite.h
 new file mode 100644
-index 0000000..03a15bc
+index 0000000..ea6af41
 --- /dev/null
 +++ b/src/rime/toml_lite.h
-@@ -0,0 +1,37 @@
-+// toml_lite —— librime 用的平铺 TOML 子集解析/生成。
+@@ -0,0 +1,33 @@
++// [Weasel-Next] 方案清单读取（TOML）。
 +//
-+// 为什么要它：installation.yaml / user.yaml 这两个引擎状态文件要改成 .toml，
-+// 而 librime 的配置层是 yaml-cpp，读不了 TOML。这里实现**只覆盖我们用到的那点语法**：
++// 方案清单的唯一落点是 `<用户目录>/schema/schema.toml`：
++//   schemas = [ "luna_pinyin", "stroke" ]      # 多行亦可
 +//
-+//   key = "字串"        # 双引号字符串，支持 \" \\ \n \t 转义
-+//   key = 123           # 整数
-+//   key = 1.5           # 浮点
-+//   key = true / false  # 布尔
-+//   [section]           # 分段 → 嵌套 ConfigMap
-+//   # 注释、空行        忽略
-+//
-+// 不支持（也用不到）：数组、内联表、多行字符串、日期时间。
-+
++// librime 的配置层是 yaml-cpp ✓ 读不了 TOML，所以这里带一个**平铺 TOML 子集**解析器
++// （键值 + `[段]` + 字符串数组），只服务这一个用途。
 +#ifndef RIME_TOML_LITE_H_
 +#define RIME_TOML_LITE_H_
 +
 +#include <map>
 +#include <string>
++#include <vector>
 +
-+#include <rime/common.h>
 +#include <rime/config.h>
++#include <rime/common.h>
 +
 +namespace rime {
 +
@@ -555,10 +663,11 @@ index 0000000..03a15bc
 +/// 读文件并解析。文件不存在或解析失败返回 false。
 +bool LoadTomlLite(const path& file, an<ConfigItem>* out);
 +
-+/// 把一层的 键→值 写成 TOML（值按字串加引号；写 installation 那种文件用）。
-+std::string WriteTomlLite(const std::map<std::string, std::string>& flat);
++/// 读 `<用户目录>/schema/schema.toml` 的 `schemas = [...]`，返回方案 id（保持原顺序）。
++///
++/// 文件不存在或语法有错时返回空列表 —— 调用方据此回退 `default.yaml` 自带的 `schema_list`。
++std::vector<std::string> LoadSchemaIdsFromToml();
 +
 +}  // namespace rime
 +
 +#endif  // RIME_TOML_LITE_H_
-\ No newline at end of file
