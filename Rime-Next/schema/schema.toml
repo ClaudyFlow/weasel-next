@@ -1,22 +1,23 @@
-# 输入方案清单（出厂默认）—— 一行一个方案：键是方案 id，值表示是否勾选。
-# 顺序即界面顺序。
+# 输入方案清单（出厂默认）—— 一行一个方案：键是方案 id，值表示是否勾选。**按 a–z 排序**。
 #
-# 这是「方案选择」的唯一数据源：设置程序从这里读，改完写回同名文件。
-# 程序文件夹只读，所以用户改动写到用户目录下的同名文件：
-#     %APPDATA%\Rime-Next\schema\schema.toml
-# 读取时以用户那份为准（不存在就用这份出厂默认）。
+# 流程：
+#   1. 启动时扫描**两处** rime-next 的 schema 目录，得出全部可选方案：
+#        程序文件夹  <安装目录>\Rime-Next\schema\
+#        用户文件夹  %APPDATA%\Rime-Next\schema\
+#      两处同名以用户文件夹那份为准；本文件是出厂的那一份。
+#   2. 用户在「方案选单设定」里勾选 —— 勾选结果记录在这里（用户改动写用户目录同名文件：
+#        %APPDATA%\Rime-Next\schema\schema.toml）。
+#   3. 按下「中」后把结果总结回本文件（一律按 a–z 排序），再触发部署。
 #
-# 与 eassy/theme 一样用 TOML 作为项目内的统一形式；引擎需要的 Rime 原生
-# default.custom.yaml 由部署流程据此生成，不再各自维护一份。
-#
-# 未列出的方案视为未勾选（界面里排在已选之后）。
+# 未列出的方案视为未勾选。程序文件夹只读，所以只会写用户目录那一份；
+# 引擎需要的 Rime 原生 default.custom.yaml 由部署流程据此生成。
 
-luna_pinyin = true
-luna_pinyin_simp = true
-luna_pinyin_fluency = true
 bopomofo = true
 bopomofo_tw = true
 cangjie5 = true
+luna_pinyin = true
+luna_pinyin_fluency = true
+luna_pinyin_simp = true
 stroke = true
 terra_pinyin = true
 
