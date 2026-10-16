@@ -199,7 +199,7 @@ fn refresh_reloads_from_disk_without_publishing() {
         .pipe_name(&format!("settings-refresh-test-{}", std::process::id()))
         .unwrap();
     let paths = test_paths();
-    let custom = paths.user_data.join("weasel.custom.yaml");
+    let custom = paths.user_data.join("weasel.custom.toml");
     let _ = std::fs::remove_file(&custom);
     std::fs::create_dir_all(&paths.user_data).unwrap();
     let service = SettingsService::start_on(

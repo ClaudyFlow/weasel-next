@@ -158,16 +158,16 @@ pub(crate) struct Engine {
     allow_rime_in_secure_fields: bool,
     /// 哪些输入模式变化应请求主题显示提示。
     input_mode_indicator: InputModeIndicatorPolicy,
-    /// 方案信息（用户目录 `schema/schema.yaml`）：勾选清单 + 当前方案。
+    /// 方案信息（用户目录 `schema/schema.toml`）：勾选清单 + 当前方案。
     ///
     /// 用户在这个文件里选了什么，引擎就在新会话上选什么；运行中通过快捷键换了方案，
     /// 也写回这里 —— 这样"方案选择"只存一处，且不会因为重启而丢失。
     schemas: weasel_style::switcher::SchemaTable,
-    /// 写回 `schema.yaml` 的目标路径（用户目录那份）。
+    /// 写回 `schema.toml` 的目标路径（用户目录那份）。
     schema_path: std::path::PathBuf,
     /// 可选配置快照；缺省时使用每应用默认行为。
     settings: Option<weasel_common::settings::ConfigSnapshot>,
-    /// 主题决定的"编码画在哪"（`theme.yaml` 的 `style/inline_preedit`）：
+    /// 主题决定的"编码画在哪"（`theme.toml` 的 `style/inline_preedit`）：
     /// false = 组字串画进候选窗（官方出厂默认），true = 画在宿主应用里。
     /// `app_options.<应用>.inline_preedit` 可以逐应用覆盖它。
     theme_inline_preedit: bool,
@@ -376,7 +376,7 @@ fn trace_commit_reply(response: &KeyEventResponse) {
 /// 而服务端能看到全部按键与提交，一处即可覆盖所有应用。播放用
 /// `PlaySoundW(SND_ASYNC)` **异步**执行，绝不阻塞输入线程。
 ///
-/// 配置直接读运行目录下的 `weasel.yaml`（不经设置界面，改完即生效）：
+/// 配置直接读运行目录下的 `weasel.toml`（不经设置界面，改完即生效）：
 ///
 /// ```toml
 /// asset = "Rime-Next"
@@ -429,7 +429,7 @@ pub(crate) mod sound {
         }
     }
 
-    /// 运行目录：`weasel.yaml` 与数据文件夹所在处。
+    /// 运行目录：`weasel.toml` 与数据文件夹所在处。
     fn runtime_dir() -> Option<PathBuf> {
         let exe = std::env::current_exe().ok()?;
         exe.parent().map(PathBuf::from)
@@ -504,7 +504,7 @@ pub(crate) mod sound {
             }
         }
 
-        let Ok(host) = weasel_common::yaml::from_str::<Host>(text) else {
+        let Ok(host) = toml::from_str::<Host>(text) else {
             return Config::default();
         };
         let Some(sound) = host.sound else {
@@ -518,16 +518,16 @@ pub(crate) mod sound {
         }
     }
 
-    /// 读配置；`weasel.yaml` 未变化时复用缓存（按 mtime 判断）。
+    /// 读配置；`weasel.toml` 未变化时复用缓存（按 mtime 判断）。
     fn config() -> Config {
         static CACHE: OnceLock<Mutex<(Option<SystemTime>, Config)>> = OnceLock::new();
         let cell = CACHE.get_or_init(|| Mutex::new((None, Config::default())));
         let Some(dir) = runtime_dir() else {
             return Config::default();
         };
-        // 主文件名是 weasel.yaml；旧的 weasel.json 仍然读（升级兼容）
+        // 主文件名是 weasel.toml；旧的 weasel.json 仍然读（升级兼容）
         let path = {
-            let toml_path = dir.join("weasel.yaml");
+            let toml_path = dir.join("weasel.toml");
             if toml_path.is_file() {
                 toml_path
             } else {
@@ -1113,8 +1113,8 @@ impl Engine {
             }
             None => (None, false),
         };
-        // 方案信息：用户目录 schema/schema.yaml（出厂兜底在程序文件夹里）
-        let schema_path = paths.user_data.join("schema").join("schema.yaml");
+        // 方案信息：用户目录 schema/schema.toml（出厂兜底在程序文件夹里）
+        let schema_path = paths.user_data.join("schema").join("schema.toml");
         let schemas = weasel_style::switcher::read_schema_table(
             &paths.executable_directory.join("Rime-Next"),
             &paths.user_data,
@@ -1123,7 +1123,7 @@ impl Engine {
             tracing::info!(
                 active = schemas.active.as_deref().unwrap_or(""),
                 selected = schemas.selected_ids().len(),
-                "loaded schema preference from schema.yaml"
+                "loaded schema preference from schema.toml"
             );
         }
         Ok(Self {
@@ -1325,15 +1325,15 @@ impl Engine {
                 }) {
                     session.set_ascii_mode(ascii);
                 }
-                // 方案：用户目录 schema/schema.yaml 里记的当前方案优先。
+                // 方案：用户目录 schema/schema.toml 里记的当前方案优先。
                 //
                 // 两条都必须遵守，否则会**把输入打断**（实测：连字母都打不出来 ✗）：
                 //   1. 已经是这个方案就**不要**再选 —— 重复 select 会返回 false；
                 //   2. 选失败只是记日志，绝不改变会话状态（保留 librime 自己的选择）。
-                // 方案：用户目录 schema/schema.yaml 里记的当前方案优先。
+                // 方案：用户目录 schema/schema.toml 里记的当前方案优先。
                 // 选失败（方案被删/还没部署）就保留 librime 自己的选择，不影响输入。
                 //
-                // 注意：`schema.yaml` 里**先不要写 active**。实测过一次教训：
+                // 注意：`schema.toml` 里**先不要写 active**。实测过一次教训：
                 // 写了之后引擎每个会话都调 select_schema，一旦它返回 false，
                 // 会话就拿不到方案 —— 表现是**连英文字母都打不出来** ✗。
                 // 等把 select 的失败语义查清楚（false 是否真的会清空会话）再启用。
@@ -1341,14 +1341,14 @@ impl Engine {
                     if !session.select_schema(&active) {
                         tracing::warn!(
                             schema = %active,
-                            "schema.yaml 里的方案当前不可用，保留 librime 的选择"
+                            "schema.toml 里的方案当前不可用，保留 librime 的选择"
                         );
                     }
                 }
                 self.clients.insert(
                     client_id,
                     ClientSession {
-                        // 默认值来自主题（theme.yaml 的 style/inline_preedit）；
+                        // 默认值来自主题（theme.toml 的 style/inline_preedit）；
                         // app_options.<应用>.inline_preedit 仍然可以逐应用覆盖它。
                         inline_preedit: self
                             .settings
@@ -1476,16 +1476,16 @@ impl Engine {
                         {
                             self.global_ascii = Some(ascii);
                         }
-                        // 用户用快捷键/托盘换了方案：记进 schema.yaml，下次启动仍然用它。
+                        // 用户用快捷键/托盘换了方案：记进 schema.toml，下次启动仍然用它。
                         if let Some(current) = client.session.current_schema() {
                             if self.schemas.active.as_deref() != Some(current.as_str()) {
                                 self.schemas.set_active(current.clone());
                                 if let Err(error) =
                                     weasel_style::switcher::write_schema_table(&self.schema_path, &self.schemas)
                                 {
-                                    tracing::warn!(%error, "写回 schema.yaml 失败");
+                                    tracing::warn!(%error, "写回 schema.toml 失败");
                                 } else {
-                                    tracing::info!(schema = %current, "schema.yaml 已记录当前方案");
+                                    tracing::info!(schema = %current, "schema.toml 已记录当前方案");
                                 }
                             }
                         }

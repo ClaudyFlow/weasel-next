@@ -1,8 +1,8 @@
-//! 细胞词库（`*.eassy.yaml`）的读取与归并。
+//! 细胞词库（`*.eassy.toml`）的读取与归并。
 //!
 //! 约定（与用户目录分类一致）：
-//! - `eassy/<名字>/<名字>.eassy.yaml`（首选）或 `dict/<名字>/<名字>.eassy.yaml`（兼容旧位置）。
-//! - 也接受直接放在根目录的 `*.eassy.yaml`。
+//! - `eassy/<名字>/<名字>.eassy.toml`（首选）或 `dict/<名字>/<名字>.eassy.toml`（兼容旧位置）。
+//! - 也接受直接放在根目录的 `*.eassy.toml`。
 //! - 文件格式为 TOML 的 `[words]` 表：键是词，值是频次。
 //!
 //! ```toml
@@ -14,7 +14,7 @@
 //! 归并规则：**同词频次求和**。输出 librime 需要的 `essay.txt`（每行 `词<TAB>频次`）。
 //!
 //! librime 只认 `essay.txt`（`vocabulary` 默认名就是 `essay`），所以 TOML 是**源**、
-//! `essay.txt` 是**部署产物**：仓库里只放 `.eassy.yaml`，部署时生成 txt。
+//! `essay.txt` 是**部署产物**：仓库里只放 `.eassy.toml`，部署时生成 txt。
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 /// 词 → 频次（归并后的结果）。
 pub type Vocabulary = BTreeMap<String, u64>;
 
-/// 从一份 `*.eassy.yaml` 文本解析出词表。
+/// 从一份 `*.eassy.toml` 文本解析出词表。
 ///
 /// 只读取 `words:` 表，其余键忽略；值必须为正整数，非正整数条目跳过（不视为错误）。
 ///
@@ -32,13 +32,13 @@ pub type Vocabulary = BTreeMap<String, u64>;
 /// 分支基本不会再走到（只在 YAML 本身语法错误时兜底）。词库里原本有 5 处重复词
 /// （軟麪筋 / 鋪 / 𪡏 / 𪢮 / 𪻐），改成 YAML 后这些词的频次取**最后一条**而不是求和，
 /// 对 37 万条词库的整体排序没有实际影响。
-pub fn parse(text: &str) -> Result<Vocabulary, String> {
-    match crate::yaml::to_value(text) {
+pub fn parse(text: &str) -> Result<Vocabulary, toml::de::Error> {
+    match toml::from_str::<toml::Value>(text) {
         Ok(value) => {
             let mut out = Vocabulary::new();
-            if let Some(words) = value.get("words").and_then(|v| v.as_object()) {
+            if let Some(words) = value.get("words").and_then(|v| v.as_table()) {
                 for (word, entry) in words {
-                    if let Some(freq) = entry.as_i64() {
+                    if let Some(freq) = entry.as_integer() {
                         if freq > 0 {
                             *out.entry(word.clone()).or_insert(0) += freq as u64;
                         }
@@ -54,7 +54,7 @@ pub fn parse(text: &str) -> Result<Vocabulary, String> {
 
 /// 宽容解析：逐行认 `"词": 频次`（也认旧的 `"词" = 频次`），重复词频次**相加**；
 /// 注释与其它键忽略。
-fn parse_lenient(text: &str, _cause: String) -> Vocabulary {
+fn parse_lenient(text: &str, _cause: toml::de::Error) -> Vocabulary {
     let mut out = Vocabulary::new();
     let mut in_words = false;
     for raw in text.lines() {
@@ -93,13 +93,13 @@ fn parse_lenient(text: &str, _cause: String) -> Vocabulary {
     out
 }
 
-/// 读取一份 `*.eassy.yaml` 文件。
+/// 读取一份 `*.eassy.toml` 文件。
 pub fn read_file(path: &Path) -> io::Result<Vocabulary> {
     let text = fs::read_to_string(path)?;
     parse(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
 }
 
-/// 把 `dir` 本身与 `dir/*/` 下的 `*.eassy.yaml` 收进 `files`。
+/// 把 `dir` 本身与 `dir/*/` 下的 `*.eassy.toml` 收进 `files`。
 fn collect_into(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     if !dir.is_dir() {
         return Ok(());
@@ -120,7 +120,7 @@ fn collect_into(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     Ok(())
 }
 
-/// 扫描一份根下的全部 `*.eassy.yaml` 并按词归并求和。
+/// 扫描一份根下的全部 `*.eassy.toml` 并按词归并求和。
 ///
 /// 扫描位置：`<root>/eassy/*/`、`<root>/eassy/`、`<root>/dict/*/`、`<root>/dict/`、`<root>/`。
 /// 目录不存在时跳过（不报错）。
@@ -146,7 +146,7 @@ fn is_eassy(path: &Path) -> bool {
     path.is_file()
         && path
             .file_name()
-            .map(|n| n.to_string_lossy().ends_with(".eassy.yaml"))
+            .map(|n| n.to_string_lossy().ends_with(".eassy.toml"))
             .unwrap_or(false)
 }
 
@@ -243,13 +243,13 @@ mod tests {
         let dir = temp_dir("write");
         fs::create_dir_all(dir.join("eassy/default")).unwrap();
         fs::write(
-            dir.join("eassy/default/default.eassy.yaml"),
+            dir.join("eassy/default/default.eassy.toml"),
             "[words]\n\"少\" = 1\n\"多\" = 9\n",
         )
         .unwrap();
         fs::create_dir_all(dir.join("dict/extra")).unwrap();
         fs::write(
-            dir.join("dict/extra/extra.eassy.yaml"),
+            dir.join("dict/extra/extra.eassy.toml"),
             "[words]\n\"多\" = 1\n",
         )
         .unwrap();
@@ -267,8 +267,8 @@ mod tests {
         let dir = temp_dir("both");
         fs::create_dir_all(dir.join("eassy/one")).unwrap();
         fs::create_dir_all(dir.join("dict/two")).unwrap();
-        fs::write(dir.join("eassy/one/one.eassy.yaml"), "[words]\n\"甲\" = 1\n").unwrap();
-        fs::write(dir.join("dict/two/two.eassy.yaml"), "[words]\n\"乙\" = 2\n").unwrap();
+        fs::write(dir.join("eassy/one/one.eassy.toml"), "[words]\n\"甲\" = 1\n").unwrap();
+        fs::write(dir.join("dict/two/two.eassy.toml"), "[words]\n\"乙\" = 2\n").unwrap();
         let v = collect(&dir).unwrap();
         assert_eq!(v.get("甲"), Some(&1));
         assert_eq!(v.get("乙"), Some(&2));

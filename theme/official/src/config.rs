@@ -1,10 +1,10 @@
-//! 主题配置：读 `theme.yaml`（布局 + 用哪套皮肤）与 `<皮肤>/<皮肤>.theme.yaml`（配色），
+//! 主题配置：读 `theme.toml`（布局 + 用哪套皮肤）与 `<皮肤>/<皮肤>.theme.toml`（配色），
 //! 再按官方 `RimeWithWeasel.cpp` 的语义算成渲染用的数值。
 //!
 //! 三件事必须与官方逐条对齐，否则界面就是"像而不一样"：
 //!
-//! 1. **出厂默认值写在代码里**（官方 `output/data/weasel.yaml` 的 `style:` 段）。
-//!    出厂侧不再分发 `theme.yaml`，所以缺文件也要有官方观感。默认值由
+//! 1. **出厂默认值写在代码里**（官方 `output/data/weasel.toml` 的 `style:` 段）。
+//!    出厂侧不再分发 `theme.toml`，所以缺文件也要有官方观感。默认值由
 //!    [`weasel_style::UIStyle::default`]／[`weasel_style::Layout::default`] 提供。
 //! 2. **官方在读完配置后还会做一批夹取**（`RimeWithWeasel.cpp:1295-1341`）：
 //!    `spacing ≥ hilite_padding*2`、`candidate_spacing ≥ hilite_padding*2`、
@@ -16,7 +16,7 @@ use weasel_style::theme::load_theme;
 use weasel_style::{ColorScheme, UIStyle};
 use std::path::PathBuf;
 
-/// 出厂皮肤名（数据在 `<程序文件夹>\Rime-Next\theme\default\default.theme.yaml`）。
+/// 出厂皮肤名（数据在 `<程序文件夹>\Rime-Next\theme\default\default.theme.toml`）。
 pub const SKIN: &str = "default";
 
 /// 官方 `UIStyle::LayoutType`：六种布局。
@@ -74,7 +74,7 @@ pub fn dirs() -> Option<(PathBuf, PathBuf)> {
 
 /// 主题相关文件的"最后修改时间"（取最新的一份）。
 ///
-/// 设置界面换皮肤只是改 `theme.yaml` 的 `color_scheme` 一行，运行中的渲染器不会收到
+/// 设置界面换皮肤只是改 `theme.toml` 的 `color_scheme` 一行，运行中的渲染器不会收到
 /// 任何通知（主题只在系统深浅色变化时重载）。所以渲染前比一次时间戳，变了自己重载，
 /// 换皮肤才不用重启输入法。
 pub fn stamp(shared: &std::path::Path, user: &std::path::Path) -> Option<std::time::SystemTime> {
@@ -82,8 +82,8 @@ pub fn stamp(shared: &std::path::Path, user: &std::path::Path) -> Option<std::ti
     let paths = weasel_style::theme::theme_candidates(shared, user, SKIN)
         .into_iter()
         .chain([
-            user.join("theme").join("theme.yaml"),
-            shared.join("theme").join("theme.yaml"),
+            user.join("theme").join("theme.toml"),
+            shared.join("theme").join("theme.toml"),
         ]);
     for path in paths {
         if let Ok(modified) = std::fs::metadata(&path).and_then(|meta| meta.modified()) {
@@ -121,15 +121,15 @@ pub fn load(dark: bool) -> Loaded {
     match load_theme(&shared, &user, SKIN) {
         Ok(Some(config)) => {
             let scheme = config.active_scheme(dark);
-            // 说明布局取自哪一份（官方顺序：用户目录的 theme.yaml 优先，其次程序文件夹）
-            let user_main = user.join("theme").join("theme.yaml");
-            let shared_main = shared.join("theme").join("theme.yaml");
+            // 说明布局取自哪一份（官方顺序：用户目录的 theme.toml 优先，其次程序文件夹）
+            let user_main = user.join("theme").join("theme.toml");
+            let shared_main = shared.join("theme").join("theme.toml");
             let layout_from = if user_main.is_file() {
                 user_main.display().to_string()
             } else if shared_main.is_file() {
                 shared_main.display().to_string()
             } else {
-                format!("内置默认布局（{} 与 {} 都没有 theme.yaml）", user.display(), shared.display())
+                format!("内置默认布局（{} 与 {} 都没有 theme.toml）", user.display(), shared.display())
             };
             let source = format!(
                 "{layout_from} · 配色 {}（{}）",
@@ -150,7 +150,7 @@ pub fn load(dark: bool) -> Loaded {
             style: UIStyle::default(),
             scheme: ColorScheme::default().resolve(),
             source: format!(
-                "未找到 theme.yaml / {SKIN}.theme.yaml（用户 {} · 共享 {}），用官方内置默认值",
+                "未找到 theme.toml / {SKIN}.theme.toml（用户 {} · 共享 {}），用官方内置默认值",
                 user.display(),
                 shared.display()
             ),
@@ -187,7 +187,7 @@ pub fn layout_type(style: &UIStyle) -> LayoutType {
     } else {
         LayoutType::Vertical
     };
-    // style/layout/type：字符串名（官方 weasel.yaml 用这个）优先，其次是我们早先的整型
+    // style/layout/type：字符串名（官方 weasel.toml 用这个）优先，其次是我们早先的整型
     if let Some(named) = match l.layout_type.trim() {
         "vertical" => Some(LayoutType::Vertical),
         "horizontal" => Some(LayoutType::Horizontal),

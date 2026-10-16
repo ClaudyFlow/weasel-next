@@ -6,15 +6,15 @@
 //! <根>/
 //!   schema/<方案>/<方案>.schema.yaml    方案
 //!   schema/<方案>/<方案>.dict.yaml      词典
-//!   eassy/<名字>/<名字>.eassy.yaml      细胞词库（TOML 源）
+//!   eassy/<名字>/<名字>.eassy.toml      细胞词库（TOML 源）
 //!   eassy/essay.txt                     部署产物（由 TOML 归并生成）
 //!   model/<名字>.gram                   语言模型
-//!   theme/<名字>/<名字>.theme.yaml      主题
+//!   theme/<名字>/<名字>.theme.toml      主题
 //!   （其余扁平文件如 default.yaml / punctuation.yaml 属于全局配置，保持扁平）
 //! ```
 //!
 //! 本模块提供两件事：
-//! - [`normalize`]：把散落在根目录的 `*.schema.yaml` / `*.dict.yaml` / `*.eassy.yaml` / `*.gram`
+//! - [`normalize`]：把散落在根目录的 `*.schema.yaml` / `*.dict.yaml` / `*.eassy.toml` / `*.gram`
 //!   **搬进**上面的嵌套位置（只移动，不删除内容），并返回每一步动作供日志使用。
 //! - [`validate`]：校验 `schema_list` 中每个方案的源文件是否就位，缺什么就报什么。
 
@@ -49,7 +49,7 @@ pub enum Level {
     Error,
 }
 
-/// 把 `<name>.schema.yaml` / `<name>.dict.yaml` / `<name>.eassy.yaml` / `<name>.gram`
+/// 把 `<name>.schema.yaml` / `<name>.dict.yaml` / `<name>.eassy.toml` / `<name>.gram`
 /// 从根目录搬进嵌套位置。返回已执行的搬迁清单。
 ///
 /// 只做移动：目标已存在时不覆盖（视为已整理），源为符号链接/目录时跳过。
@@ -70,11 +70,11 @@ pub fn normalize(root: &Path) -> io::Result<Vec<Move>> {
             ("schema", stem.to_string())
         } else if let Some(stem) = name.strip_suffix(".dict.yaml") {
             ("schema", stem.to_string())
-        } else if let Some(stem) = name.strip_suffix(".eassy.yaml") {
+        } else if let Some(stem) = name.strip_suffix(".eassy.toml") {
             ("eassy", stem.to_string())
         } else if let Some(stem) = name.strip_suffix(".gram") {
             ("model", stem.to_string())
-        } else if let Some(stem) = name.strip_suffix(".theme.yaml") {
+        } else if let Some(stem) = name.strip_suffix(".theme.toml") {
             ("theme", stem.to_string())
         } else if let Some(stem) = name.strip_suffix(".lua") {
             ("plugin", stem.to_string())
@@ -188,7 +188,7 @@ mod tests {
         let root = temp("normalize");
         fs::write(root.join("sancang.schema.yaml"), "schema_version: 1\n").unwrap();
         fs::write(root.join("sancang.dict.yaml"), "name: sancang\n").unwrap();
-        fs::write(root.join("default.eassy.yaml"), "[words]\n\"甲\" = 1\n").unwrap();
+        fs::write(root.join("default.eassy.toml"), "[words]\n\"甲\" = 1\n").unwrap();
         fs::write(root.join("zh-hans.gram"), b"x").unwrap();
         fs::write(root.join("default.yaml"), "config_version: 1\n").unwrap();
 
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(moves.len(), 4, "四个分类文件应被搬走");
         assert!(root.join("schema/sancang/sancang.schema.yaml").exists());
         assert!(root.join("schema/sancang/sancang.dict.yaml").exists());
-        assert!(root.join("eassy/default/default.eassy.yaml").exists());
+        assert!(root.join("eassy/default/default.eassy.toml").exists());
         assert!(root.join("model/zh-hans/zh-hans.gram").exists());
         // 全局配置保持扁平
         assert!(root.join("default.yaml").exists());
@@ -230,7 +230,7 @@ mod tests {
         fs::write(root.join("default.yaml"), b"global").unwrap();
 
         let moves = classify_staging(&root).unwrap();
-        assert_eq!(moves.len(), 3, "schema.yaml 摊平 + prism/table 归目录");
+        assert_eq!(moves.len(), 3, "schema.toml 摊平 + prism/table 归目录");
         assert!(root.join("luna_pinyin.schema.yaml").exists(), "配置是唯一扁平的那个");
         assert!(
             root.join("luna_pinyin_simp").join("luna_pinyin_simp.prism.bin").exists(),
@@ -260,7 +260,7 @@ mod tests {
         fs::write(root.join("missing.dict.yaml"), "x").unwrap();
 
         let issues = validate(&root, &["ok".into(), "missing".into(), "absent".into()]);
-        // ok 无问题；missing 缺 schema.yaml（且在扁平位置有 dict.yaml → 两条）；absent 两个都缺
+        // ok 无问题；missing 缺 schema.toml（且在扁平位置有 dict.yaml → 两条）；absent 两个都缺
         assert!(issues.iter().any(|i| i.level == Level::Error && i.message.contains("absent")));
         assert!(issues.iter().any(|i| i.message.contains("missing.schema.yaml")));
         assert!(issues.iter().any(|i| i.level == Level::Warning && i.message.contains("扁平位置")));

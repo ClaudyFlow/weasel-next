@@ -209,7 +209,7 @@ fn normalized_renderer_settings(
     let Some(mut root) = config.query(".").ok().flatten().cloned() else {
         return config.clone();
     };
-    let defaults: serde_json::Value = weasel_common::yaml::to_value(include_str!("../../weasel.yaml"))
+    let defaults: serde_json::Value = toml::from_str(include_str!("../../weasel.toml"))
         .expect("embedded settings must be valid JSON");
     let Some(root_object) = root.as_object_mut() else {
         return weasel_common::settings::ConfigSnapshot::new(defaults);
@@ -622,7 +622,7 @@ fn run_ui(
             crate::notifications::report(registration.name(), notice);
         }
         let backend = creation.backend?;
-        // 预编辑画在哪由主题决定（theme.yaml 的 style/inline_preedit）：引擎只在需要
+        // 预编辑画在哪由主题决定（theme.toml 的 style/inline_preedit）：引擎只在需要
         // 外置预编辑时才把 preedit 放进快照；主题不支持外置时这里记一条便于排查。
         if !registration.capabilities().preedit {
             crate::diagnostics::record(format_args!(

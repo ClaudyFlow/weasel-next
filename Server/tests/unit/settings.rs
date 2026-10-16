@@ -19,7 +19,7 @@ fn temporary_directory() -> std::path::PathBuf {
 fn apply_patch(base: &mut Value, patch: &Value) -> Result<(), String> {
     let directory = temporary_directory();
     std::fs::create_dir(&directory).unwrap();
-    let path = directory.join("weasel.custom.yaml");
+    let path = directory.join("weasel.custom.toml");
     std::fs::write(&path, weasel_common::yaml::to_string_pretty(&patch)).unwrap();
     let result = overlay_file(base, &path);
     std::fs::remove_dir_all(directory).unwrap();
@@ -89,21 +89,21 @@ fn files_follow_precedence_and_missing_files_are_optional() {
     };
     paths.ensure().unwrap();
     let mut warnings = Vec::new();
-    // 没有任何配置文件时用内嵌默认值（weasel.yaml 里的 theme = "official"）
+    // 没有任何配置文件时用内嵌默认值（weasel.toml 里的 theme = "official"）
     assert_eq!(
         load(&paths, |w| warnings.push(w))
             .required::<String>(".theme")
             .unwrap(),
         "official"
     );
-    std::fs::write(directory.join("weasel.yaml"), b"theme: ten\n").unwrap();
+    std::fs::write(directory.join("weasel.toml"), b"theme: ten\n").unwrap();
     assert_eq!(
         load(&paths, |w| warnings.push(w))
             .required::<String>(".theme")
             .unwrap(),
         "ten"
     );
-    let custom = paths.user_data.join("weasel.custom.yaml");
+    let custom = paths.user_data.join("weasel.custom.toml");
     std::fs::write(&custom, b"\xef\xbb\xbftheme: eleven\n").unwrap();
     assert_eq!(
         load(&paths, |w| warnings.push(w))

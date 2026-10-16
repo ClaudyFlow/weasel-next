@@ -9,8 +9,8 @@
 C:\Program Files\Weasel-Next\
   Weasel-Next-Renderer.exe            渲染器宿主：进程、消息循环、设置下发
   weasel_theme_official.dll           本主题（渲染器从**自身目录**加载；也兼容 themes\ 子目录）
-  Rime-Next\theme\default\default.theme.yaml   出厂皮肤（36 套配色）
-%APPDATA%\Rime-Next\theme\theme.yaml  用户布局 + `color_scheme`（用哪套皮肤；可选）
+  Rime-Next\theme\default\default.theme.toml   出厂皮肤（36 套配色）
+%APPDATA%\Rime-Next\theme\theme.toml  用户布局 + `color_scheme`（用哪套皮肤；可选）
 ```
 
 渲染器按 `.theme` 找 `weasel_theme_<名字>.dll`；主题的 `create()` 走 UI 线程，窗口与图形资源
@@ -28,8 +28,8 @@ C:\Program Files\Weasel-Next\
 
 ## 三、"和官方一样"靠这六条
 
-1. **出厂默认值写在代码里**（`UIStyle::default` / `Layout::default` = 官方 `weasel.yaml`
-   的 `style:` 段）。出厂侧不再分发 `theme.yaml`，所以"没有配置文件"也必须画出官方观感。
+1. **出厂默认值写在代码里**（`UIStyle::default` / `Layout::default` = 官方 `weasel.toml`
+   的 `style:` 段）。出厂侧不再分发 `theme.toml`，所以"没有配置文件"也必须画出官方观感。
 2. **颜色语义照官方**（`style\src\color.rs`）：
    * 位数决定 alpha —— `0x000000` 是**不透明黑**，`0x00000000` 是**全透明**；
    * 通道顺序由 `color_format` 决定，**默认 `abgr`**（文本是 `AABBGGRR`）。

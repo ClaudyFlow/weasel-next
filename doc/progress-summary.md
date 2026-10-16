@@ -39,7 +39,7 @@ SHA256：`0ae29a29c8722f8d8dfa36f734d74850b5385f23204da0abb46c00e2a2902ee4`
 
 **`/style` 界面风格设定**——唯一数据完整的功能。36 套配色（碧水／Aqua、安卓／Android、
 青天／Azure…）、自绘颜色列表（带色块）、切换即写
-`%APPDATA%\Rime-Next\weasel.custom.yaml` 的 `patch: style/color_scheme`。
+`%APPDATA%\Rime-Next\weasel.custom.toml` 的 `patch: style/color_scheme`。
 数据层在 `style\src\settings.rs`，22 个单元测试全过。
 
 **`/switcher` 方案选单设定**——**本轮修好**（提交 `8f7fb30`）。12 个方案能进列表、
@@ -385,7 +385,7 @@ patch:
 
 我们的 `dialogs.rs` **只填了左边**（`COLOR_KEYS`），右侧 `IDC_STYLE_LIST` 从未填过任何内容，
 所以打开是空白。官方在 `UIStyleSettings.h` 里有一张样式键表，要照着搬过来、
-按当前 `weasel.yaml` 的 `style:` 段取值，并用 `WM_MEASUREITEM`/`WM_DRAWITEM` 自绘。
+按当前 `weasel.toml` 的 `style:` 段取值，并用 `WM_MEASUREITEM`/`WM_DRAWITEM` 自绘。
 
 ### 3. 候选窗/打字（最影响使用）
 

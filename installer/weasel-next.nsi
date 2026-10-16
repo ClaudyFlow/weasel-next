@@ -332,7 +332,7 @@ Section "Weasel-Next" SEC_MAIN
   !insertmacro ManagedFile "${RELEASE_DIR}\Weasel-Next-Renderer.exe" "Weasel-Next-Renderer.exe"
   !insertmacro ManagedFile "${PROJECT_ROOT}\Engine\src\styles-LICENSE.txt" "styles-LICENSE.txt"
   !insertmacro ManagedFile "${PROJECT_ROOT}\LICENSE" "LICENSE"
-  !insertmacro ManagedFile "${PROJECT_ROOT}\weasel.yaml" "weasel.yaml"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\weasel.toml" "weasel.toml"
   ; 配置统一为 TOML：把上一版留下的 weasel.json 清掉
   Delete /REBOOTOK "$INSTDIR\weasel.json"
   !insertmacro ManagedFile "${PROJECT_ROOT}\THIRD-PARTY-LICENSES.txt" "THIRD-PARTY-LICENSES.txt"

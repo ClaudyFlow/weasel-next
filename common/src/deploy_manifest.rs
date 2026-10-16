@@ -1,10 +1,10 @@
-//! 部署记录：`<用户目录>/deploy.yaml`。
+//! 部署记录：`<用户目录>/deploy.toml`。
 //!
-//! 文件是 `<用户目录>/deploy.yaml`（rime 自己的状态另用 `installation.yaml` / `user.yaml`）。
+//! 文件是 `<用户目录>/deploy.toml`（rime 自己的状态另用 `installation.yaml` / `user.yaml`）。
 //!
 //! 职责是"这次要不要部署"以及"哪些文件夹变了"，为**增量部署**提供依据：
 //!
-//! * 只统计**勾选中的**方案（清单来自 `schema/schema.yaml`）——用户上次勾选、这次取消的
+//! * 只统计**勾选中的**方案（清单来自 `schema/schema.toml`）——用户上次勾选、这次取消的
 //!   方案完全不参与检查，改它也不会触发部署，单次部署量因此小一截；
 //! * 一行一个文件夹：`"<文件夹>" = "<部署时间> <sha256>"`，首行是整体的部署时间；
 //! * **只有部署成功才写入**（失败一律不动），所以文件里的时间就是"最后一次成功部署"；
@@ -21,9 +21,9 @@ use sha2::{Digest, Sha256};
 
 /// 文件名固定放在用户目录根下。
 ///
-/// 叫 `deploy.yaml` 而不是 `user.yaml`：`user.*` 是 **rime 自己**的运行时状态
+/// 叫 `deploy.toml` 而不是 `user.yaml`：`user.*` 是 **rime 自己**的运行时状态
 /// （上次选的方案、方案访问时间），重名会互相覆盖 ✗ —— rime 的归 rime，这份归我们。
-pub const STATE_FILE: &str = "deploy.yaml";
+pub const STATE_FILE: &str = "deploy.toml";
 
 /// 参与部署的源文件后缀（方案、词典、补丁、主题、方案清单）。
 const SOURCE_EXTENSIONS: [&str; 3] = ["yaml", "yml", "toml"];
@@ -82,7 +82,7 @@ fn hash_of(value: &str) -> &str {
     value.split_whitespace().last().unwrap_or("")
 }
 
-/// `<用户目录>/deploy.yaml`。
+/// `<用户目录>/deploy.toml`。
 pub fn state_path(user_data_dir: &Path) -> PathBuf {
     user_data_dir.join(STATE_FILE)
 }
@@ -126,11 +126,11 @@ pub fn load(path: &Path) -> Option<Manifest> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if line == "folders:" {
+        if line == "[folders]" {
             in_folders = true;
             continue;
         }
-        let Some((key, value)) = line.split_once(':') else {
+        let Some((key, value)) = line.split_once('=') else {
             continue;
         };
         let key = key.trim().trim_matches('"').to_string();
@@ -160,11 +160,11 @@ pub fn store(path: &Path, current: &Manifest) -> io::Result<()> {
          # 内容没变就不重新部署；部署失败不会改写这个文件。\n",
     );
     text.push_str(&format!(
-        "deployed_at: {}\n\nfolders:\n",
+        "deployed_at = \"{}\"\n\n[folders]\n",
         merged.deployed_at.clone().unwrap_or_default()
     ));
     for (key, value) in &merged.folders {
-        text.push_str(&format!("  \"{key}\": \"{value}\"\n"));
+        text.push_str(&format!("\"{key}\" = \"{value}\"\n"));
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -218,7 +218,7 @@ pub fn collect(shared_dir: &Path, user_data_dir: &Path) -> io::Result<Manifest> 
     }
 
     // 用户目录根下的两个散文件（不在上面任何目录里，各记一条）
-    for name in ["schema/schema.yaml", "weasel.custom.yaml"] {
+    for name in ["schema/schema.toml", "weasel.custom.toml"] {
         let path = user_data_dir.join(name.replace('/', std::path::MAIN_SEPARATOR_STR));
         if path.is_file() {
             manifest.record(
@@ -232,7 +232,7 @@ pub fn collect(shared_dir: &Path, user_data_dir: &Path) -> io::Result<Manifest> 
     Ok(manifest)
 }
 
-/// 读勾选清单（`schema/schema.yaml` 的 `schemas` 列表，用户目录优先）。
+/// 读勾选清单（`schema/schema.toml` 的 `schemas` 列表，用户目录优先）。
 fn checked_schemas(shared_dir: &Path, user_data_dir: &Path) -> Vec<String> {
     #[derive(serde::Deserialize, Default)]
     #[serde(default)]
@@ -245,17 +245,17 @@ fn checked_schemas(shared_dir: &Path, user_data_dir: &Path) -> Vec<String> {
         schemas: BTreeMap<String, bool>,
     }
     for root in [user_data_dir, shared_dir] {
-        let path = root.join("schema").join("schema.yaml");
+        let path = root.join("schema").join("schema.toml");
         let Ok(text) = fs::read_to_string(&path) else {
             continue;
         };
-        if let Ok(table) = crate::yaml::from_str::<Table>(&text) {
+        if let Ok(table) = toml::from_str::<Table>(&text) {
             if !table.schemas.is_empty() {
                 return table.schemas;
             }
         }
         // 兼容最早的写法：`[schemas]` 表（键 = 方案，值 = 是否勾选）
-        if let Ok(legacy) = crate::yaml::from_str::<Legacy>(&text) {
+        if let Ok(legacy) = toml::from_str::<Legacy>(&text) {
             let mut ids: Vec<String> = legacy
                 .schemas
                 .iter()
@@ -361,12 +361,12 @@ mod tests {
         fs::create_dir_all(user.join("schema").join("luna_pinyin")).unwrap();
         fs::write(
             user.join("schema").join("luna_pinyin").join("luna_pinyin.dict.yaml"),
-            b"name: luna_pinyin\n",
+            b"name = \"luna_pinyin\"\n",
         )
         .unwrap();
         fs::write(
-            user.join("schema").join("schema.yaml"),
-            "schemas:\n  - luna_pinyin\n  - stroke\n",
+            user.join("schema").join("schema.toml"),
+            "schemas = [\"luna_pinyin\", \"stroke\"]\n",
         )
         .unwrap();
         // stroke 勾选着但没有文件 → 不产生条目；没勾选的方案不检查
@@ -379,11 +379,11 @@ mod tests {
 
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.starts_with('#'), "首行是注释说明");
-        assert!(text.contains("\ndeployed_at: "), "要有部署时间");
-        assert!(text.contains("\"user/schema/luna_pinyin\":"), "勾选的方案要有一行");
+        assert!(text.contains("\ndeployed_at = \""), "要有部署时间");
+        assert!(text.contains("\"user/schema/luna_pinyin\" = \""), "勾选的方案要有一行");
         assert!(!text.contains("cangjie5"), "没勾选的方案不参与");
         assert!(path.starts_with(&user), "记录只放在用户目录");
-        assert_eq!(path, user.join("deploy.yaml"));
+        assert_eq!(path, user.join("deploy.toml"));
         let _ = fs::remove_dir_all(&user);
         let _ = fs::remove_dir_all(&shared);
     }
@@ -393,35 +393,35 @@ mod tests {
     fn entries_are_prefixed_deduplicated_and_skip_empty_folders() {
         let user = temp("naming");
         let shared = temp("naming-shared");
-        // 用户主题目录里只有一个 theme.yaml：应当只出现 "user/theme" 一行
+        // 用户主题目录里只有一个 theme.toml：应当只出现 "user/theme" 一行
         fs::create_dir_all(user.join("theme")).unwrap();
-        fs::write(user.join("theme").join("theme.yaml"), b"color_scheme: aqua\n").unwrap();
+        fs::write(user.join("theme").join("theme.toml"), b"color_scheme = \"aqua\"\n").unwrap();
         // 空目录：不该出现任何行
         fs::create_dir_all(user.join("eassy")).unwrap();
         // 勾选的方案 + 清单 + 宿主配置
         fs::create_dir_all(user.join("schema").join("luna_pinyin")).unwrap();
         fs::write(
             user.join("schema").join("luna_pinyin").join("luna_pinyin.dict.yaml"),
-            b"name: luna_pinyin\n",
+            b"name = \"luna_pinyin\"\n",
         )
         .unwrap();
         fs::write(
-            user.join("schema").join("schema.yaml"),
-            "schemas:\n  - luna_pinyin\n",
+            user.join("schema").join("schema.toml"),
+            "schemas = [\"luna_pinyin\"]\n",
         )
         .unwrap();
-        fs::write(user.join("weasel.custom.yaml"), b"theme: official\n").unwrap();
+        fs::write(user.join("weasel.custom.toml"), b"theme = \"official\"\n").unwrap();
 
         let manifest = collect(&shared, &user).unwrap();
         let keys: Vec<&str> = manifest.folders.keys().map(String::as_str).collect();
         assert!(keys.iter().all(|k| k.starts_with("shared/") || k.starts_with("user/")),
                 "所有条目都必须带 shared/ 或 user/ 前缀：{keys:?}");
         assert!(keys.contains(&"user/theme"), "主题按目录记一行");
-        assert!(!keys.iter().any(|k| k.ends_with("theme/theme.yaml")), "目录里的文件不再单独记");
+        assert!(!keys.iter().any(|k| k.ends_with("theme/theme.toml")), "目录里的文件不再单独记");
         assert!(!keys.iter().any(|k| k.contains("eassy")), "空目录不记：{keys:?}");
         assert!(keys.contains(&"user/schema/luna_pinyin"), "勾选的方案记一行");
-        assert!(keys.contains(&"user/schema/schema.yaml"), "清单文件带前缀");
-        assert!(keys.contains(&"user/weasel.custom.yaml"), "宿主配置带前缀");
+        assert!(keys.contains(&"user/schema/schema.toml"), "清单文件带前缀");
+        assert!(keys.contains(&"user/weasel.custom.toml"), "宿主配置带前缀");
         // 哈希都不是空内容哈希
         assert!(
             manifest.folders.values().all(|v| !v.contains("e3b0c442")),
@@ -439,10 +439,10 @@ mod tests {
         let shared = temp("compare-shared");
         fs::create_dir_all(user.join("schema").join("luna_pinyin")).unwrap();
         let dict = user.join("schema").join("luna_pinyin").join("luna_pinyin.dict.yaml");
-        fs::write(&dict, b"a: 1\n").unwrap();
+        fs::write(&dict, b"a = 1\n").unwrap();
         fs::write(
-            user.join("schema").join("schema.yaml"),
-            "schemas:\n  - luna_pinyin\n",
+            user.join("schema").join("schema.toml"),
+            "schemas = [\"luna_pinyin\"]\n",
         )
         .unwrap();
 
@@ -453,7 +453,7 @@ mod tests {
         assert!(is_unchanged(stored.as_ref(), &first), "内容没变应判定为无需部署");
 
         // 只改内容：哈希必须变
-        fs::write(&dict, b"a: 2\n").unwrap();
+        fs::write(&dict, b"a = 2\n").unwrap();
         let changed = collect(&shared, &user).unwrap();
         assert!(!is_unchanged(stored.as_ref(), &changed), "内容变了应判定为要部署");
         let _ = fs::remove_dir_all(&user);
@@ -467,14 +467,14 @@ mod tests {
         let shared = temp("missing-shared");
         fs::create_dir_all(user.join("schema")).unwrap();
         fs::write(
-            user.join("schema").join("schema.yaml"),
-            "schemas:\n  - luna_pinyin\n",
+            user.join("schema").join("schema.toml"),
+            "schemas = [\"luna_pinyin\"]\n",
         )
         .unwrap();
         fs::create_dir_all(user.join("schema").join("luna_pinyin")).unwrap();
         fs::write(
             user.join("schema").join("luna_pinyin").join("luna_pinyin.dict.yaml"),
-            b"a: 1\n",
+            b"a = 1\n",
         )
         .unwrap();
         let current = collect(&shared, &user).unwrap();
@@ -490,7 +490,7 @@ mod tests {
         let user = temp("stamp");
         let shared = temp("stamp-shared");
         fs::create_dir_all(user.join("schema")).unwrap();
-        fs::write(user.join("weasel.custom.yaml"), b"theme: official\n").unwrap();
+        fs::write(user.join("weasel.custom.toml"), b"theme = \"official\"\n").unwrap();
         let current = collect(&shared, &user).unwrap();
         let path = state_path(&user);
         store(&path, &current).unwrap();

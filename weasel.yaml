@@ -2,11 +2,11 @@
 #
 # 这份是**程序级**设置：用哪个主题、声音、按应用的默认输入状态等。
 # 候选窗长什么样（字体/边距/圆角/配色）在主题文件里，不在这里：
-#   用户：%APPDATA%\Rime-Next\theme\theme.yaml
-#   出厂：<程序文件夹>\Rime-Next\theme\default\default.theme.yaml（只有配色）
+#   用户：%APPDATA%\Rime-Next\theme\theme.toml
+#   出厂：<程序文件夹>\Rime-Next\theme\default\default.theme.toml（只有配色）
 #
-# 用户覆盖：%APPDATA%\Rime-Next\weasel.custom.yaml（设置界面写出，优先于本文件）
-# 优先级：内嵌出厂默认 → <程序文件夹>\weasel.yaml → 用户 weasel.custom.yaml
+# 用户覆盖：%APPDATA%\Rime-Next\weasel.custom.toml（设置界面写出，优先于本文件）
+# 优先级：内嵌出厂默认 → <程序文件夹>\weasel.toml → 用户 weasel.custom.toml
 
 # 用哪个主题（对应 weasel_theme_<名字>.dll）
 theme: official

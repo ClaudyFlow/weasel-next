@@ -71,7 +71,7 @@ impl ConfigSnapshot {
     /// 只查 `app_options.<应用>` 里的布尔选项，不看全局值。
     ///
     /// 给"全局值来自主题文件"的选项用（例如 `inline_preedit` —— 它是
-    /// `theme.yaml` 的 `style/inline_preedit`，不是宿主配置的全局键）。
+    /// `theme.toml` 的 `style/inline_preedit`，不是宿主配置的全局键）。
     pub fn app_option_bool(&self, executable: &str, option: &str) -> Result<Option<bool>, String> {
         let Some(value) = self.application_value(executable, option)? else {
             return Ok(None);
@@ -84,7 +84,7 @@ impl ConfigSnapshot {
 
     /// 判断是否有任何应用需要外置 preedit 能力。
     ///
-    /// `theme_inline_preedit` 是主题文件（`theme.yaml` 的 `style/inline_preedit`）的值：
+    /// `theme_inline_preedit` 是主题文件（`theme.toml` 的 `style/inline_preedit`）的值：
     /// 它为 false 时组字串要画进候选窗，必须提前协商外置预编辑能力；此外只要任一应用
     /// 通过 `app_options.<应用>.inline_preedit` 显式关闭，也同样需要协商。
     pub fn needs_external_preedit(&self, theme_inline_preedit: bool) -> Result<bool, String> {
@@ -255,7 +255,7 @@ pub fn query<'a>(root: &'a Value, path: &str) -> Result<Option<&'a Value>, Strin
 mod tests {
     #[test]
     fn application_preedit_overrides_theme_default_and_enables_early_negotiation() {
-        // 全局值来自主题（theme.yaml 的 style/inline_preedit），json 里只留逐应用覆盖
+        // 全局值来自主题（theme.toml 的 style/inline_preedit），json 里只留逐应用覆盖
         let config = super::ConfigSnapshot::new(serde_json::json!({
             "app_options": {
                 "cmd.exe": {"inline_preedit": false},

@@ -34,7 +34,7 @@
        Weasel-Next-Setting.exe             不带参数进主设置界面
 
    `/style` 里下拉框应列出 36 套配色（碧水／Aqua、安卓／Android、青天／Azure…），
-   选一套后立刻生效，改动写入 `%APPDATA%\Rime-Next\weasel.custom.yaml`。
+   选一套后立刻生效，改动写入 `%APPDATA%\Rime-Next\weasel.custom.toml`。
 5. **卸载**：控制面板卸载后程序目录与开始菜单项应清干净。
 
 ## 已知未完成
@@ -57,7 +57,7 @@
 
     %APPDATA%\Rime-Next\                用户目录
     %APPDATA%\Rime-Next\build\<方案>\   各方案的编译产物
-    %APPDATA%\Rime-Next\weasel.custom.yaml  设置程序写入的补丁
+    %APPDATA%\Rime-Next\weasel.custom.toml  设置程序写入的补丁
 
 ## 干净机器与升级安装的差别
 

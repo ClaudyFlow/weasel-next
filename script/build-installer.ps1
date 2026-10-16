@@ -27,7 +27,7 @@ try {
     Copy-Item 'target\release\weasel_tip.dll' 'target\release\Weasel-Next.dll' -Force
 
     $requiredFiles = @(
-        'weasel.yaml',
+        'weasel.toml',
         'target\release\Weasel-Next-Server.exe',
         'target\release\Weasel-Next-Engine.exe',
         'target\release\Weasel-Next-Renderer.exe',
@@ -46,7 +46,7 @@ try {
         'THIRD-PARTY-LICENSES.txt',
         'THIRD-PARTY-GPL-3.0.txt',
         'setting\LICENSE-NOTICE.txt',
-        'installer\weasel-rs.nsi',
+        'installer\weasel-next.nsi',
         'script\launch-broker.ps1'
     )
     foreach ($theme in @('official')) {   # ★ 只打我们现在构建的主题 ✓ 旧主题已归档 ✓
@@ -86,7 +86,7 @@ try {
     $payloadRemovalPaths = [Collections.Generic.List[string]]::new()
     $payloadDestinations = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($payload in @(
-        # 整个 Rime-Next（含 theme\ 皮肤、eassy、schema、weasel.yaml 等）
+        # 整个 Rime-Next（含 theme\ 皮肤、eassy、schema、weasel.toml 等）
         @{ Macro = 'RimePayload'; RemoveMacro = 'RemoveRimePayload'; ValidateMacro = 'ValidateRimePayloadRemoval'; Source = 'Rime-Next'; Target = 'Rime-Next' },
         @{ Macro = 'WasmPayload'; RemoveMacro = 'RemoveWasmPayload'; ValidateMacro = 'ValidateWasmPayloadRemoval'; Source = 'artifact\theme-wasm'; Target = 'theme-wasm' }
     )) {
@@ -167,7 +167,7 @@ try {
         "/DPRODUCT_VERSION=$version",
         "/DOUTPUT_FILE=$outputFile",
         "/DPAYLOAD_INCLUDE=$payloadInclude",
-        (Join-Path $projectRoot 'installer\weasel-rs.nsi')
+        (Join-Path $projectRoot 'installer\weasel-next.nsi')
     )
     $buildDefinitions = @()
     if ($Mini) { $buildDefinitions += '/DMINI_INSTALLER' }

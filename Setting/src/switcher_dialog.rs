@@ -186,6 +186,15 @@ fn wide(text: &str) -> Vec<u16> {
 pub fn show(shared: &Path, user: &Path) -> Result<(), String> {
     let rows = switcher::list_schemas(shared, &user.to_path_buf())
         .map_err(|error| format!("读取方案列表失败：{error}"))?;
+    // 诊断：列不出方案时，先把"扫了哪两个目录、各扫到几个"记下来 ——
+    // 之前只看到列表空，分不清是目录不对还是文件没读到。
+    diag(&format!(
+        "OPEN shared={} user={} 方案数={} 勾选={:?}",
+        shared.display(),
+        user.display(),
+        rows.len(),
+        rows.iter().filter(|r| r.selected).map(|r| r.id.clone()).collect::<Vec<_>>()
+    ));
     STATE.with(|slot| {
         *slot.borrow_mut() = Some(SwitcherDialog {
             shared: shared.to_path_buf(),
@@ -352,6 +361,36 @@ unsafe fn insert_row(hwnd: HWND, index: i32, name: &str, checked: bool) -> (isiz
     (inserted, text_result, state_result)
 }
 
+/// 取报表模式列表项里存的方案 id（`LVIF_PARAM`）。
+///
+/// ⚠️ 必须用 `LVM_GETITEM` 配 `LVIF_PARAM`，**不能用 `LVM_GETITEMDATA`**：
+/// MSDN 明确写着 `LVM_SETITEMDATA`/`LVM_GETITEMDATA` 对**报表模式**（有表头）的
+/// ListView 无效 —— 它们是给图标/列表模式的宏。我们的方案列表正是报表模式，
+/// 用 `GETITEMDATA` 读回来**恒为 0**，于是保存时每一行都被跳过、最终写出**空列表**
+/// （用户看到的就是"勾选改了也不生效"）。写入端已经是 `LVM_SETITEM`，这里必须配对。
+unsafe fn item_param(list: HWND, index: i32) -> isize {
+    let mut item = LvItemParam {
+        mask: LVIF_PARAM_,
+        i_item: index,
+        i_sub_item: 0,
+        state: 0,
+        state_mask: 0,
+        text: std::ptr::null_mut(),
+        text_max: 0,
+        image: 0,
+        param: 0,
+    };
+    let _ = unsafe {
+        SendMessageW(
+            list,
+            LVM_GETITEM,
+            WPARAM(0),
+            LPARAM(&mut item as *mut LvItemParam as isize),
+        )
+    };
+    item.param
+}
+
 /// 右侧简介：显示名、作者、简介，与官方 `ShowDetails` 的三段一致。
 unsafe fn show_details(hwnd: HWND, row: &SchemaInfo) {
     let mut text = format!("{}\n\n{}", row.name, row.author);
@@ -452,6 +491,9 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                 eprintln!("Weasel-Next-Setting: 插入列 → {}", added.0);
             }
             let mut first_selected: Option<usize> = None;
+            // 诊断：要插几行（state.rows 若为 0 说明 list_schemas 没读到方案）。
+            let want = with_state(|state| state.rows.len()).unwrap_or(0);
+            diag(&format!("FILL 准备插入 {want} 行"));
             with_state(|state| {
                 for (index, row) in state.rows.iter().enumerate() {
                     let (ins, txt, st) = unsafe { insert_row(hwnd, index as i32, &row.name, row.selected) };
@@ -493,6 +535,7 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
             let rows = unsafe {
                 SendDlgItemMessageW(hwnd, IDC_SCHEMA_LIST, 0x1004, WPARAM(0), LPARAM(0))
             };
+            diag(&format!("FILL 插完 控件行数={}", rows.0));
             eprintln!("Weasel-Next-Setting: 插完 LVM_GETITEMCOUNT={}", rows.0);
             // 勾选框样式放在插入之后设置：实测先设它会导致 LVM_INSERTITEM 返回 -1。
             unsafe {
@@ -595,13 +638,13 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
             0
         }
         WM_COMMAND_ => {
-            // 诊断：打印命令来源，确认是谁触发了 IDOK（"自动确认覆盖补丁"的排查）。
-            eprintln!(
-                "weasel-settings: COMMAND id={} code={}",
-                wparam.0 & 0xffff,
-                (wparam.0 >> 16) & 0xffff
-            );
             let id = (wparam.0 & 0xffff) as i32;
+            // 诊断：确认命令真的到了、以及 IDOK 是谁触发的（"点确定没反应"的排查）。
+            diag(&format!(
+                "COMMAND id={} code={} IDOK={IDOK}",
+                id,
+                (wparam.0 >> 16) & 0xffff
+            ));
             if id == IDOK {
                 let list = unsafe { GetDlgItem(Some(hwnd), IDC_SCHEMA_LIST) };
                 // 照官方 SwitcherSettingsDialog::OnOK 的写法：按**控件的行数**循环，
@@ -622,6 +665,11 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                     let image = ((value.0 as u32) & LVIS_STATEIMAGEMASK) >> 12;
                     checked.push(image == 2);
                 }
+                // 诊断：读到几行、几行是勾上的（确认"点确定"有没有走到保存）。
+                diag(&format!(
+                    "IDOK count={count} checked={:?}",
+                    checked.iter().enumerate().filter(|(_, on)| **on).map(|(i, _)| i).collect::<Vec<_>>()
+                ));
                 // 官方：一项都没选就报错退出，不写文件。
                 if !checked.iter().any(|on| *on) {
                     let text = wide("至少要选用一项。");
@@ -643,7 +691,9 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                         if !checked.get(index).copied().unwrap_or(false) {
                             continue;
                         }
-                        let raw = unsafe { SendMessageW(list, LVM_GETITEMDATA, WPARAM(index), LPARAM(0)).0 } as *const u16;
+                        // 报表模式必须走 LVM_GETITEM + LVIF_PARAM（见 `item_param`），
+                        // 用 LVM_GETITEMDATA 会恒读到 0 → 勾了也写不出去。
+                        let raw = unsafe { item_param(list, index as i32) } as *const u16;
                         if raw.is_null() {
                             continue;
                         }
@@ -654,7 +704,15 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                         let slice = unsafe { std::slice::from_raw_parts(raw, len) };
                         selected.push(String::from_utf16_lossy(slice));
                     }
-                    let path = state.user.join("schema").join("schema.yaml");
+                    let path = state.user.join("schema").join("schema.toml");
+                    // 诊断：勾选行数 / 成功取回 id 的行数 / 最终要写的清单。
+                    // 这三者不一致就说明"取 id"这一步还在失败（例如又用回了
+                    // 报表模式下无效的 LVM_GETITEMDATA），别只看文件有没有变。
+                    diag(&format!(
+                        "SAVE count={count} checked={} 取回id={} 写入={selected:?}",
+                        checked.iter().filter(|on| **on).count(),
+                        selected.len()
+                    ));
                     switcher::write_schema_toml(&path, &selected)
                 });
                 match outcome {

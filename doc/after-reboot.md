@@ -11,7 +11,7 @@
 2. 主题是否加载
    - 打字后看 `%LOCALAPPDATA%\Rime-Next\Logs\renderer.<日期>.log`，应出现
      `using renderer theme official`；
-   - 首帧绘制时还应出现 `皮肤已加载: <路径>\Rime-Next\theme\default.theme.yaml · 配色 aqua（碧水／Aqua）· 底色 #eceeee · 文字 #000000`。
+   - 首帧绘制时还应出现 `皮肤已加载: <路径>\Rime-Next\theme\default.theme.toml · 配色 aqua（碧水／Aqua）· 底色 #eceeee · 文字 #000000`。
 
 3. 候选窗外观
    - 底色应为 #eceeee（官方 aqua 的 back_color），文字 #000000，选中块 #fa3a0a；
@@ -19,9 +19,9 @@
 
 4. 如果主题没加载
    - 先看 renderer 日志里的 `theme notice`；
-   - 再确认 `C:\Program Files\Weasel-Next\weasel.yaml` 里 `theme` 是 `official`；
+   - 再确认 `C:\Program Files\Weasel-Next\weasel.toml` 里 `theme` 是 `official`；
    - 确认 `weasel_theme_official.dll` 在程序文件夹根目录。
 
 未做的两件事（与本次安装无关）：
-- librime 重建（`.theme.yaml → theme/` 规则要重建 rime.dll 才生效，上次卡在 leveldb）；
+- librime 重建（`.theme.toml → theme/` 规则要重建 rime.dll 才生效，上次卡在 leveldb）；
 - 用户目录 `%APPDATA%\Rime-Next` 已被上次安装清空，语言模型（约 452 MB）与自定义配置需要重新获取或重建。

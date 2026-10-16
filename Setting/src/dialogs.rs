@@ -19,6 +19,10 @@ use std::rc::Rc;
 
 use weasel_style::settings as style_settings;
 
+/// 出厂皮肤名（与渲染器 `theme/official/src/config.rs::SKIN` 一致）：
+/// 配色在 `Rime-Next\theme\default\default.theme.toml`，共 36 套。
+const SKIN: &str = "default";
+
 use weasel_common::bindings::*;
 use windows_core::PCWSTR;
 
@@ -76,14 +80,14 @@ const IDC_SET_STYLE: i32 = 1009;
 
 /// 用户补丁里这条样式键的当前值。
 ///
-/// `weasel.custom.yaml` 用的是**斜杠键**（`style/color_scheme: aqua`），
-/// 与 `weasel.yaml` 的嵌套写法不同，所以这里按单层 map 直接查 —— 官方在
+/// `weasel.custom.toml` 用的是**斜杠键**（`style/color_scheme: aqua`），
+/// 与 `weasel.toml` 的嵌套写法不同，所以这里按单层 map 直接查 —— 官方在
 /// `UIStyleSettingsDialog` 里也是这么取的（`settings_->GetStyleValue(info, &current)`）。
 /// 文件里没写、但官方有内置默认值的样式键。
 ///
 /// 官方 `UIStyleSettingsDialog` 读的是**内存里的设置对象**（`settings_->GetStyleValue`），
 /// 那个对象带着内置默认值，所以文件里没写的键它照样有值；我们读文件，
-/// 出厂 `weasel.yaml` 没写这几项就会空着 —— 这里按官方默认补齐。
+/// 出厂 `weasel.toml` 没写这几项就会空着 —— 这里按官方默认补齐。
 fn builtin_style_default(key: &str) -> Option<&'static str> {
     match key {
         "style/enhanced_position" => Some("false"),
@@ -99,30 +103,30 @@ fn builtin_style_default(key: &str) -> Option<&'static str> {
     }
 }
 
-/// 当前配色：用户目录 `theme/theme.yaml` 的 `color_scheme`。
+/// 当前配色：用户目录 `theme/theme.toml` 的 `color_scheme`。
 ///
 /// 皮肤选择现在的落点就是这一行（设置界面写它、主题 DLL 读它）。对话框如果继续从
-/// 旧的 `weasel.yaml` / `weasel.custom.yaml` 取值，就会一直显示上一次之前的那套。
+/// 旧的 `weasel.toml` / `weasel.custom.toml` 取值，就会一直显示上一次之前的那套。
 pub(crate) fn theme_color_scheme(user: &std::path::Path) -> Option<String> {
-    let path = user.join("theme").join("theme.yaml");
+    let path = user.join("theme").join("theme.toml");
     let text = std::fs::read_to_string(path).ok()?;
-    let table = weasel_common::yaml::to_value(&text).ok()?;
+    let table: toml::Value = toml::from_str(&text).ok()?;
     table
         .get("color_scheme")
-        .and_then(serde_json::Value::as_str)
+        .and_then(toml::Value::as_str)
         .filter(|id| !id.is_empty())
         .map(str::to_owned)
 }
 
 fn style_value(shared: &std::path::Path, user: &std::path::Path, key: &str) -> Option<String> {
-    // 0) 配色这一项的唯一落点是用户 theme.yaml，先看它（其余键仍走官方 YAML 链）。
+    // 0) 配色这一项的唯一落点是用户 theme.toml，先看它（其余键仍走官方 YAML 链）。
     if key == "style/color_scheme" {
         if let Some(id) = theme_color_scheme(user) {
             return Some(id);
         }
     }
-    // 1) 用户补丁：weasel.custom.yaml 里是**斜杠键**（style/color_scheme: aqua），单层 map 直接查。
-    if let Ok(text) = std::fs::read_to_string(user.join("weasel.custom.yaml")) {
+    // 1) 用户补丁：weasel.custom.toml 里是**斜杠键**（style/color_scheme: aqua），单层 map 直接查。
+    if let Ok(text) = std::fs::read_to_string(user.join("weasel.custom.toml")) {
         if let Ok(yaml) = weasel_style::parse_yaml(&text) {
             if let Some(found) = yaml.get("patch").and_then(|patch| patch.get(key)) {
                 if let Some(value) = found.as_str() {
@@ -131,8 +135,8 @@ fn style_value(shared: &std::path::Path, user: &std::path::Path, key: &str) -> O
             }
         }
     }
-    // 2) 出厂 weasel.yaml：**嵌套**结构（style: → layout: → type:），按 / 逐层走。
-    let base = std::fs::read_to_string(shared.join("weasel.yaml")).ok()?;
+    // 2) 出厂 weasel.toml：**嵌套**结构（style: → layout: → type:），按 / 逐层走。
+    let base = std::fs::read_to_string(shared.join("weasel.toml")).ok()?;
     let yaml = weasel_style::parse_yaml(&base).ok()?;
     let mut node = &yaml;
     let mut resolved = true;
@@ -199,11 +203,17 @@ struct StyleDialog {
 impl StyleDialog {
     /// 从磁盘读配置并算出界面要显示的内容。
     fn reload(&mut self) {
-        let base_text = std::fs::read_to_string(self.shared.join("weasel.yaml")).ok();
-        let custom_text = std::fs::read_to_string(self.user.join("weasel.custom.yaml")).ok();
-        self.config = base_text.and_then(|base| {
-            weasel_style::parse_with_patch(&base, custom_text.as_deref()).ok()
-        });
+        // 配色来自**主题链**（TOML），与渲染器同源：
+        //   theme\theme.toml（用户布局 + color_scheme）叠加 theme\<皮肤>\<皮肤>.theme.toml（配色）
+        //
+        // ⚠️ 这里原来读的是 `Rime-Next\weasel.toml`（YAML 时代的出厂皮肤）——那个文件在
+        // TOML 化改造后**已不在该位置**，于是 `config` 恒为 `None`：
+        // 配色下拉框全空（`CB_GETCOUNT=0`）、左侧颜色列表也空，用户根本没法换配色。
+        // 症状与"数据坏了"一模一样，其实只是找错文件。改走 `theme::load_theme`，
+        // 与 `skins.rs` 共用同一条读取路径，设置界面看到的配色就是渲染器会画的配色。
+        self.config = weasel_style::theme::load_theme(&self.shared, &self.user, SKIN)
+            .ok()
+            .flatten();
         self.schemes = self
             .config
             .as_ref()
@@ -214,7 +224,7 @@ impl StyleDialog {
                     .collect()
             })
             .unwrap_or_default();
-        // 当前配色优先取用户 theme.yaml（那才是皮肤选择的落点），取不到再退回 YAML
+        // 当前配色优先取用户 theme.toml（那才是皮肤选择的落点），取不到再退回 YAML
         let active = theme_color_scheme(&self.user).unwrap_or_else(|| {
             self.config
                 .as_ref()
@@ -409,8 +419,8 @@ unsafe extern "system" fn style_proc(
                     state.selected = index;
                     let id = state.schemes[index].0.clone();
                     // 写用户补丁：等价于官方 customize_string("style/color_scheme", id)
-                    // 皮肤改动将写入 theme\<皮肤>\<皮肤>.theme.yaml，不再写 weasel.custom.yaml。
-            let path = state.user.join("theme").join("theme.yaml");
+                    // 皮肤改动将写入 theme\<皮肤>\<皮肤>.theme.toml，不再写 weasel.custom.toml。
+            let path = state.user.join("theme").join("theme.toml");
                     match style_settings::set_active_scheme(&path, &id) {
                         Ok(()) => {
                             state.reload();
@@ -493,7 +503,7 @@ unsafe extern "system" fn style_proc(
                             key.choices.get(sel as usize).map(|choice| choice.value)
                         };
                         if let Some(value) = value {
-                            // 不再写 weasel.custom.yaml（全部去 YAML）：等接线到 theme TOML 后再恢复写入。
+                            // 不再写 weasel.custom.toml（全部去 YAML）：等接线到 theme TOML 后再恢复写入。
                             let _ = (key.key, value);
                         }
                     }

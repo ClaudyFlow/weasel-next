@@ -78,12 +78,12 @@ pub fn wasm_metadata(bytes: &[u8]) -> Result<Option<Metadata>, String> {
 /// 解析仓库/程序内嵌的默认值和扩展 Schema，并执行与外部元数据相同的验证。
 /// 由内嵌默认值与描述构造元数据。
 ///
-/// `defaults_are_toml` 区分两种来源：宿主配置是 TOML（`weasel.yaml`），
+/// `defaults_are_toml` 区分两种来源：宿主配置是 TOML（`weasel.toml`），
 /// 各主题自己的 `config.json` 仍然是 JSON。
 fn embedded(defaults: &[u8], rich: &[u8], defaults_are_toml: bool) -> Result<Metadata, String> {
     let text = std::str::from_utf8(defaults).map_err(|e| e.to_string())?;
     let defaults = if defaults_are_toml {
-        weasel_common::yaml::to_value(text).map_err(|e| e.to_string())?
+        toml::from_str(text).map_err(|e| e.to_string())?
     } else {
         serde_json::from_str(text).map_err(|e| e.to_string())?
     };
@@ -104,7 +104,7 @@ pub fn load(paths: &RuntimePaths, document: &Document) -> Result<Catalog, String
         title: "常规".into(),
         mount: vec![],
         metadata: embedded(
-            include_bytes!("../../weasel.yaml"),
+            include_bytes!("../../weasel.toml"),
             include_bytes!("../../weasel.richschema.json"),
             true,
         )?,

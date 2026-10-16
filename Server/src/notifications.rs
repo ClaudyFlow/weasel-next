@@ -32,7 +32,7 @@ struct State {
 /// broker 允许用户从通知中确认执行的受控动作。
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum NotificationAction {
-    /// 打开 Rime 用户数据目录，以便修复 `weasel.custom.yaml`。
+    /// 打开 Rime 用户数据目录，以便修复 `weasel.custom.toml`。
     OpenUserDirectory,
 }
 
@@ -95,7 +95,7 @@ impl NotificationCenter {
                 code: "settings.load_failed".into(),
                 severity: weasel_common::message::UserNotificationSeverity::Warning as i32,
                 title: "小狼毫Next：配置加载失败".into(),
-                message: "配置文件存在错误。请检查 weasel.custom.yaml。".into(),
+                message: "配置文件存在错误。请检查 weasel.custom.toml。".into(),
                 details: warnings.join("\n"),
             },
             Some(NotificationAction::OpenUserDirectory),

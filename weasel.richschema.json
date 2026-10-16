@@ -63,7 +63,7 @@
               "title": "默认英文模式"
             },
             "inline_preedit": {
-              "description": "是否在该宿主编辑框内联显示预编辑文本；未指定时用主题的值（theme.yaml 的 style/inline_preedit），主题不支持外部预编辑时仍回退内联",
+              "description": "是否在该宿主编辑框内联显示预编辑文本；未指定时用主题的值（theme.toml 的 style/inline_preedit），主题不支持外部预编辑时仍回退内联",
               "type": "boolean",
               "title": "内联预编辑"
             }

@@ -769,7 +769,7 @@ mod tests {
         for (name, defaults, richschema) in [
             (
                 "main",
-                include_str!("../../weasel.yaml"),
+                include_str!("../../weasel.toml"),
                 include_str!("../../weasel.richschema.json"),
             ),
             (
@@ -785,7 +785,7 @@ mod tests {
         ] {
             // 宿主配置是 TOML；各主题自己的 config.json 仍是 JSON（随主题包分发）
             let defaults: Value = if name == "main" {
-                weasel_common::yaml::to_value(defaults).unwrap()
+                toml::from_str(defaults).unwrap()
             } else {
                 serde_json::from_str(defaults).unwrap()
             };

@@ -46,7 +46,7 @@ fn object(text: &str, name: &str) -> Result<Value, String> {
     let value: Value = if name.ends_with(".json") {
         serde_json::from_str(text).map_err(|e| e.to_string())?
     } else {
-        weasel_common::yaml::to_value(text).map_err(|e| e.to_string())?
+        toml::from_str(text).map_err(|e| e.to_string())?
     };
     if !value.is_object() {
         return Err("配置必须为对象".into());
@@ -56,7 +56,7 @@ fn object(text: &str, name: &str) -> Result<Value, String> {
 
 /// 内嵌出厂默认值（TOML）→ 对象。
 fn toml_object(text: &str) -> Result<Value, String> {
-    object(text, "weasel.yaml")
+    object(text, "weasel.toml")
 }
 impl Document {
     /// 返回基底与用户补丁合并后的新配置值，不修改文档自身。
@@ -67,20 +67,20 @@ impl Document {
     }
     /// 加载内嵌默认配置、可选程序目录覆盖和用户自定义补丁。
     ///
-    /// 合并顺序为内嵌默认值、程序目录 `weasel.yaml`、用户补丁 `weasel.custom.yaml`。
+    /// 合并顺序为内嵌默认值、程序目录 `weasel.toml`、用户补丁 `weasel.custom.toml`。
     /// 缺少用户文件时补丁为空对象且原始快照为 `None`；任何存在但无效的配置或读取错误都会失败。
     pub fn load(paths: &RuntimePaths) -> Result<Self, String> {
-        let mut base = toml_object(include_str!("../../weasel.yaml"))?;
+        let mut base = toml_object(include_str!("../../weasel.toml"))?;
         // 兼容期：程序目录里可能还留着上一版的 weasel.json
-        for name in ["weasel.yaml", "weasel.json"] {
+        for name in ["weasel.toml", "weasel.json"] {
             if let Some(text) = read(&paths.executable_directory.join(name))? {
                 merge(&mut base, object(&text, name)?);
             }
         }
-        let path = paths.user_data.join("weasel.custom.yaml");
+        let path = paths.user_data.join("weasel.custom.toml");
         let original = read(&path)?;
         let patch = match &original {
-            Some(text) => object(&text, "weasel.custom.yaml")?,
+            Some(text) => object(&text, "weasel.custom.toml")?,
             None => serde_json::json!({}),
         };
         Ok(Self {
@@ -98,7 +98,7 @@ impl Document {
     pub fn save(&mut self) -> Result<(), String> {
         let parent = self.path.parent().ok_or("配置路径无父目录")?;
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        let mut text = weasel_common::yaml::to_string_pretty(&self.patch);
+        let mut text = toml::to_string_pretty(&self.patch).map_err(|e| e.to_string())?;
         if !text.ends_with('\n') {
             text.push('\n');
         }
@@ -129,7 +129,7 @@ mod tests {
             logs: directory.path().join("logs"),
         };
         fs::create_dir_all(&paths.user_data).unwrap();
-        let path = paths.user_data.join("weasel.custom.yaml");
+        let path = paths.user_data.join("weasel.custom.toml");
         fs::write(
             &path,
             b"ascii_mode: true\nthemeSettings:\n  future:\n    value: 42\n",
@@ -138,8 +138,7 @@ mod tests {
         let mut doc = Document::load(&paths).unwrap();
         doc.patch.as_object_mut().unwrap().remove("ascii_mode");
         doc.save().unwrap();
-        let saved: Value =
-            weasel_common::yaml::to_value(&fs::read_to_string(&path).unwrap()).unwrap();
+        let saved: Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["themeSettings"]["future"]["value"], 42);
         assert!(saved.get("ascii_mode").is_none());
         fs::write(&path, b"").unwrap();

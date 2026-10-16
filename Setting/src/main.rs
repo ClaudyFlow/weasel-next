@@ -218,10 +218,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             raw
         }
     };
-        let shared = std::env::current_exe()
+        let script_dir = std::env::current_exe()
             .ok()
-            .and_then(|exe| exe.parent().map(|dir| dir.join("Rime-Next")))
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
             .unwrap_or_default();
+        // 三个官方对话框（/switcher、/style、/dict）都用它找出厂数据；
+        // 与皮肤页共用同一套查找，避免"从这里跑有数据、从那里跑没数据"。
+        let probe = script_dir.join("theme").join("default").join("default.theme.toml");
+        let shared = skins::resolve_shared_dir(&script_dir, &probe);
         let user = std::env::var_os("APPDATA")
             .map(|appdata| std::path::PathBuf::from(appdata).join("Rime-Next"))
             .unwrap_or_default();
@@ -258,7 +262,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_config_path(
         paths
             .user_data
-            .join("weasel.custom.yaml")
+            .join("weasel.custom.toml")
             .display()
             .to_string()
             .into(),
@@ -633,16 +637,20 @@ fn finish_app_edit(state: &mut State, ui: &SettingsWindow, result: Result<(), St
 
 /// 皮肤页与数据层的接线：读官方皮肤文件、把配色喂给界面、把选择写回补丁。
 ///
-/// 路径约定与 librime 一致：出厂文件在程序文件夹的 `Rime-Next\weasel.yaml`，
-/// 用户补丁在 `%APPDATA%\Rime-Next\weasel.custom.yaml`。界面只负责显示与回调。
+/// 路径约定与 librime 一致：出厂文件在程序文件夹的 `Rime-Next\weasel.toml`，
+/// 用户补丁在 `%APPDATA%\Rime-Next\weasel.custom.toml`。界面只负责显示与回调。
 fn wire_skins(ui: &SettingsWindow) {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    let shared = std::env::current_exe()
+    let script_dir = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("Rime-Next")))
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
         .unwrap_or_default();
+    // 共用同一套查找：exe 旁边 → 上溯找 Rime-Next → %ProgramFiles%。
+    // 只看 exe 旁边的话，从构建目录跑会全部落空（列表空得和故障一样）。
+    let probe = script_dir.join("theme").join("default").join("default.theme.toml");
+    let shared = skins::resolve_shared_dir(&script_dir, &probe);
     let user = std::env::var_os("APPDATA")
         .map(|appdata| std::path::PathBuf::from(appdata).join("Rime-Next"))
         .unwrap_or_default();

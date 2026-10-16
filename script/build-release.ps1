@@ -90,7 +90,7 @@ try {
         }
     }
 
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'weasel.yaml') -Destination (Join-Path $targetDirectory 'x86_64-pc-windows-msvc\release\weasel.yaml')
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'weasel.toml') -Destination (Join-Path $targetDirectory 'x86_64-pc-windows-msvc\release\weasel.toml')
     # Match the installed/portable DLL layout next to the renderer.
     $releaseDirectory = Join-Path $targetDirectory 'x86_64-pc-windows-msvc\release'
     # Keep Cargo's primary output ordinary. Build the opt-in variant first, copy

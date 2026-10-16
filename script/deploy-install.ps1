@@ -74,11 +74,14 @@ if (-not $SkipBuild) {
 
 # 1.5) 先停栈：安装目录里的 exe/dll 被运行中的进程锁着，robocopy 会静默跳过它们
 Write-Step '停止运行中的组件（否则文件被占用，复制会静默失败）'
-$running = @(Get-Process -Name 'Weasel-Next-Server', 'Weasel-Next-Engine', 'Weasel-Next-Renderer' -ErrorAction SilentlyContinue)
+# ⚠️ 设置界面也要停：`Weasel-Next-Setting.exe` 同样来自安装目录，
+# 开着它部署 → robocopy 对**被占用的**文件只报 ERROR 32 就跳过，
+# 结果是"部署显示成功、设置界面还是旧版"（2026-10-17 实际踩到：/style 页面白改一场）。
+$running = @(Get-Process -Name 'Weasel-Next-Server', 'Weasel-Next-Engine', 'Weasel-Next-Renderer', 'Weasel-Next-Setting' -ErrorAction SilentlyContinue)
 if ($running.Count -gt 0) {
     $running | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
     for ($i = 0; $i -lt 40; $i++) {
-        $left = @(Get-Process -Name 'Weasel-Next-Server', 'Weasel-Next-Engine', 'Weasel-Next-Renderer' -ErrorAction SilentlyContinue)
+        $left = @(Get-Process -Name 'Weasel-Next-Server', 'Weasel-Next-Engine', 'Weasel-Next-Renderer', 'Weasel-Next-Setting' -ErrorAction SilentlyContinue)
         if ($left.Count -eq 0) { break }
         Start-Sleep -Milliseconds 250
     }
@@ -104,7 +107,7 @@ $elevated = @(
     ('robocopy "{0}\tool\7z" "{1}\7z" /E /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
     ('robocopy "{0}\target\release" "{1}\themes" weasel_theme_*.dll /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
     ('robocopy "{0}\Rime-Next\sound" "{1}\Rime-Next\sound" /E /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
-    # 方案清单已改成 librime 直读 schema.yaml：清掉老机器上生成的这份中转 YAML
+    # 方案清单已改成 librime 直读 schema.toml：清掉老机器上生成的这份中转 YAML
     ('del /f /q "%APPDATA%\Rime-Next\default.custom.yaml" 2>nul'),
     # TIP 的 cargo 产物叫 weasel_tip.dll，对外/注册的名字是 Weasel-Next.dll。
     # 必须在这里刷新对外名，否则注册表指向的那个 DLL 永远是上一版的（改动看着"没生效"）。
@@ -117,13 +120,13 @@ $elevated = @(
     ('copy /y "{0}\artifact\smoke\rime.dll" "{1}\rime.dll"' -f $root, $InstallDir),
     # punctuation.yaml 已并入 symbols.yaml：把安装目录里那份也清掉
     ('del /f /q "{1}\Rime-Next\punctuation.yaml" 2>nul' -f $root, $InstallDir),
-    # 宿主配置已改回 YAML（同名换后缀）：装 weasel.yaml，清掉 weasel.json 与上一版的 weasel.toml
-    ('copy /y "{0}\weasel.yaml" "{1}\weasel.yaml"' -f $root, $InstallDir),
-    ('del /f /q "{1}\weasel.toml" 2>nul' -f $root, $InstallDir),
-    ('del /f /q "{1}\Rime-Next\theme\default\default.theme.toml" 2>nul' -f $root, $InstallDir),
-    ('del /f /q "{1}\Rime-Next\eassy\default\default.eassy.toml" 2>nul' -f $root, $InstallDir),
-    ('del /f /q "{1}\Rime-Next\schema\schema.toml" 2>nul' -f $root, $InstallDir),
+    # 宿主配置：装 weasel.toml，清掉 weasel.json（以及 YAML 时代可能留下的 weasel.yaml）
+    ('copy /y "{0}\weasel.toml" "{1}\weasel.toml"' -f $root, $InstallDir),
     ('del /f /q "{1}\weasel.json" 2>nul' -f $root, $InstallDir),
+    ('del /f /q "{1}\weasel.yaml" 2>nul' -f $root, $InstallDir),
+    # 清掉 YAML 时代留下的同名换后缀文件（现在的正式格式是 .toml）
+    ('del /f /q "{1}\Rime-Next\theme\default\default.theme.yaml" 2>nul' -f $root, $InstallDir),
+    ('del /f /q "{1}\Rime-Next\eassy\default\default.eassy.yaml" 2>nul' -f $root, $InstallDir),
     # 清理已迁移的旧扁平 yaml：源已放进 schema\<方案>\，目标里残留的扁平副本要删掉
     ('for %%F in ("{1}\Rime-Next\*.schema.yaml" "{1}\Rime-Next\*.dict.yaml") do if exist "%%F" del /f /q "%%F"' -f $root, $InstallDir),
     # 清掉早先留下的旧文件（安装目录里不该有它们）

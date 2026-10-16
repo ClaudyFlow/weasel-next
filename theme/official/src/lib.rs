@@ -1,6 +1,6 @@
 //! official 主题 DLL 入口 —— 照 fxliang/weasel 的 `WeaselUI`：D3D11 + DXGI 组合交换链 +
-//! DirectComposition + Direct2D 1.1，配置读 `theme\theme.yaml` 与
-//! `theme\<皮肤>\<皮肤>.theme.yaml`（出厂皮肤是官方 `weasel.yaml` 的 36 套配色）。
+//! DirectComposition + Direct2D 1.1，配置读 `theme\theme.toml` 与
+//! `theme\<皮肤>\<皮肤>.theme.toml`（出厂皮肤是官方 `weasel.toml` 的 36 套配色）。
 //!
 //! 模块分工：`config` 负责官方 style 语义（默认值、夹取、DPI 缩放、配色），`layout`
 //! 是官方 `DoLayout` 的移植，`paint` 是官方 `DoPaint`/`_HighlightRect` 的移植，

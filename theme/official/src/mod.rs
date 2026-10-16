@@ -1008,9 +1008,12 @@ fn draw_mode_indicator(
     ascii: bool,
 ) {
     // 和候选窗同款的圆角底 + 描边（用户要的"边框"）：内容就是那个方形面板
+    // 圆角：**面板边长 × 0.125**（用户要求）。
+    // 提示窗是图标大小的方窗，跟主题的固定 4px 不成比例，按边长取比例更顺眼。
+    let indicator_radius = layout.content.width().max(1.0) * 0.125;
     painter.highlight_rect(
         &layout.content,
-        painter.m.round_corner_ex,
+        indicator_radius,
         painter.m.border,
         painter.scheme.back_color,
         painter.scheme.shadow_color,
