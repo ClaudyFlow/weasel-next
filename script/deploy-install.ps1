@@ -7,7 +7,7 @@
 # 行为：
 #   1. 从工作区根做 release 编译（可用 -SkipBuild 跳过）；
 #   2. 把运行所需文件同步到安装目录 C:\Program Files\Weasel-Next\；
-#   3. 重启栈（broker/server/renderer），从安装目录启动；
+#   3. 重启栈（weasel-next-Engine/Engine/renderer），从安装目录启动；
 #   4. 校验 TIP 注册表指向安装目录，不对则修正（sudo）；
 #   5. 打印关键文件清单。
 #

@@ -330,7 +330,7 @@ Section "Weasel-Next" SEC_MAIN
   !insertmacro ManagedFile "${RELEASE_DIR}\Weasel-Next-Server.exe" "Weasel-Next-Server.exe"
   !insertmacro ManagedFile "${RELEASE_DIR}\Weasel-Next-Engine.exe" "Weasel-Next-Engine.exe"
   !insertmacro ManagedFile "${RELEASE_DIR}\Weasel-Next-Renderer.exe" "Weasel-Next-Renderer.exe"
-  !insertmacro ManagedFile "${PROJECT_ROOT}\server\src\styles-LICENSE.txt" "styles-LICENSE.txt"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\Engine\src\styles-LICENSE.txt" "styles-LICENSE.txt"
   !insertmacro ManagedFile "${PROJECT_ROOT}\LICENSE" "LICENSE"
   !insertmacro ManagedFile "${PROJECT_ROOT}\weasel.json" "weasel.json"
   !insertmacro ManagedFile "${PROJECT_ROOT}\THIRD-PARTY-LICENSES.txt" "THIRD-PARTY-LICENSES.txt"
@@ -366,7 +366,7 @@ Section "设置应用" SEC_SETTINGS
   ClearErrors
   SetOutPath "$INSTDIR"
   !insertmacro ManagedFile "${RELEASE_DIR}\Weasel-Next-Setting.exe" "Weasel-Next-Setting.exe"
-  !insertmacro ManagedFile "${PROJECT_ROOT}\setting\LICENSE-NOTICE.txt" "SETTINGS-LICENSE.txt"
+  !insertmacro ManagedFile "${PROJECT_ROOT}\Setting\LICENSE-NOTICE.txt" "SETTINGS-LICENSE.txt"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "无法安装设置应用，请检查磁盘空间和文件权限。" /SD IDOK
     SetErrorLevel 1

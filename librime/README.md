@@ -34,7 +34,7 @@ weasel-next 用的不是官方发布版 librime，而是从 master 自行构建�
 构建
 ----
   pwsh .\librime\build-librime-mingw.ps1
-  产物落在 artifact\smoke\rime.dll；构建前请先停掉 Weasel-Next-Server/server/renderer。
+  产物落在 artifact\smoke\rime.dll；构建前请先停掉 Weasel-Next-Server/Engine/renderer。
 
 注意
 ----

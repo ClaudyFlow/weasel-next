@@ -7,7 +7,7 @@
 
     A) 共享数据：<官方安装目录>\data  →  <weasel-next 程序目录>\Rime-Next
        weasel-next 的 librime 把共享数据目录设为 <程序目录>\Rime-Next（见
-       server/src/rime/mod.rs），官方那 96 个文件（方案、词典、opencc、preview）里的
+       Engine/src/rime/mod.rs），官方那 96 个文件（方案、词典、opencc、preview）里的
        缺失项就在这里补上——例如 sancang/cangjie5 需要的 cangjie5.*.dict.yaml。
 
     B) 用户数据：%APPDATA%\Rime  →  %APPDATA%\Weasel-Next\Rime
@@ -36,7 +36,7 @@
 
 .PARAMETER Deploy
     合并后自动重新部署方案。注意：server 常驻时会持有单实例锁，此时直接运行
-    `Weasel-Next-Engine.exe --deploy` 会失败（这是 server/src/main.rs 的设计）。本开关按
+    `Weasel-Next-Engine.exe --deploy` 会失败（这是 Engine/src/main.rs 的设计）。本开关按
     应用自己的顺序执行：先 `Weasel-Next-Server.exe --shutdown` 停服务，再 `--deploy --silent`，
     最后重新启动 broker（它会拉起 server 与 renderer）。
 
@@ -209,5 +209,5 @@ if ($Deploy) {
     Write-Host "下一步：加 -Deploy 自动重新部署，或手动执行 ——"
     Write-Host "    1) & '$TargetExeDir\Weasel-Next-Server.exe' --shutdown      # server 在跑时必须先停，否则 --deploy 会因单实例锁失败"
     Write-Host "    2) & '$TargetExeDir\Weasel-Next-Engine.exe' --deploy --silent"
-    Write-Host "    3) & '$TargetExeDir\Weasel-Next-Server.exe'                # 重新拉起 server/renderer"
+    Write-Host "    3) & '$TargetExeDir\Weasel-Next-Server.exe'                # 重新拉起 Engine/renderer"
 }

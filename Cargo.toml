@@ -2,13 +2,13 @@
 resolver = "2"
 members = [
     "plugin/core",
-    "tip",
-    "broker",
-    "server",
-    "renderer",
+    "Tip",
+    "Server",
+    "Engine",
+    "Renderer",
     # 设置界面（Slint 版）
     # experimental panel. Keep both buildable so either can be launched.
-    "setting",
+    "Setting",
     "common",
     "theme/api",
     "style",
