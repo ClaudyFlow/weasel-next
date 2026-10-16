@@ -17,10 +17,10 @@
 ## 用户文件夹分类（`%APPDATA%\Rime-Next\`）
 
 ```
-theme/<名字>/<名字>.theme.toml      主题        （TOML，我们自己解析，不转换）
-schema/<名字>/<名字>.schema.toml    方案        （部署时转成 <名字>.schema.yaml 给 librime）
+theme/<名字>/<名字>.theme.yaml      主题        （TOML，我们自己解析，不转换）
+schema/<名字>/<名字>.schema.yaml    方案        （部署时转成 <名字>.schema.yaml 给 librime）
 schema/<名字>/<名字>.dict.toml      词典        （部署时转成 <名字>.dict.yaml 给 librime）
-dict/<名字>/<名字>.eassy.toml       细胞词库    （按词归并求和 → essay.txt / <名字>.txt）
+dict/<名字>/<名字>.eassy.yaml       细胞词库    （按词归并求和 → essay.txt / <名字>.txt）
 model/<名字>.gram                   语言模型    （直接放好，librime 原生）
 ```
 
@@ -71,7 +71,7 @@ model/<名字>.gram                   语言模型    （直接放好，librime 
 ```
 asset\                     仓库里（出厂默认与程序资源）
   Rime-Next\               ← 出厂默认配置（编译时整个搬到程序文件夹）
-      default.eassy.toml   ← 原 essay.txt（细胞词库/语言模型词表，TOML 格式）
+      default.eassy.yaml   ← 原 essay.txt（细胞词库/语言模型词表，TOML 格式）
       …（schema / dict / theme / model 的默认内容）
   icon\                    ← 程序图标（11 个 .ico，各组件共用 weasel.ico）
   sound\                   ← 键声/上屏声（typewriter-key.wav / typewriter-bell.wav）
@@ -84,7 +84,7 @@ asset\                     仓库里（出厂默认与程序资源）
 - 于是不必再考虑"多个配置文件夹"的问题。
 
 文件格式：
-- 细胞词库统一叫 `*.eassy.toml`（注意拼写是 **eassy**），出厂默认那份叫 **`default.eassy.toml`**；
+- 细胞词库统一叫 `*.eassy.yaml`（注意拼写是 **eassy**），出厂默认那份叫 **`default.eassy.yaml`**；
 - 多份 eassy 由部署流程按词归并（频次求和）后生成 librime 需要的 `essay.txt`（或 `<名字>.txt` + `vocabulary:`）。
 
 安装路径（首字母大写）：`C:\Program Files\Weasel-Next\`；代码目录 `C:\code\Weasel-Next\`。
@@ -94,7 +94,7 @@ asset\                         仓库里（出厂默认 + 程序资源）
   Rime-Next\                   ← ★ 出厂默认的整棵配置树（编译时整个搬到程序文件夹）
       sound\                   ← 键声 / 上屏声（typewriter-key.wav / typewriter-bell.wav）
       model\                   ← 语言模型（*.gram，如 zh-hans-t-essay-bgw.gram）
-      default.eassy.toml       ← 原 essay.txt（细胞词库词表，TOML 格式）
+      default.eassy.yaml       ← 原 essay.txt（细胞词库词表，TOML 格式）
       （历史设计，已废弃：见上）
       …（schema / dict / theme 的默认内容，均为 TOML）
   icon\                        ← 程序图标（11 个 .ico，各组件共用 weasel.ico；构建脚本要用，留在 asset 根）
@@ -304,22 +304,22 @@ Lua 插件的落位（按官方约定 ✓）：
 约定：
 - 这两件**互相独立**，可同时进行，不依赖用户配置、不依赖方案、不依赖对方先完成。
 - 部署本身会在 librime 初始化前由 `server\librime\mod.rs` 的 `generate_essay_txt()` 从
-  `eassy\**\*.eassy.toml` 归并生成 `eassy\essay.txt`，因此不需要预先准备 txt。
+  `eassy\**\*.eassy.yaml` 归并生成 `eassy\essay.txt`，因此不需要预先准备 txt。
 - 若解压尚未完成，部署会照常进行（模型缺失只影响语言模型打分，不阻断方案编译）。
 
 ## eassy 的位置（已定）
 
-- **代码目录与程序文件夹**各有 `Rime-Next\eassy\<名字>\<名字>.eassy.toml`（出厂源）。
+- **代码目录与程序文件夹**各有 `Rime-Next\eassy\<名字>\<名字>.eassy.yaml`（出厂源）。
 - **用户目录不建 `eassy\`**；`essay.txt` 是**程序文件夹里的部署产物**
   （`<程序>\Rime-Next\eassy\essay.txt`），由部署/初始化时从 TOML 归并生成。
-- 用户若想扩展，可自行在 `<用户目录>\eassy\` 放 `*.eassy.toml`，会被一并归并（可选）。
+- 用户若想扩展，可自行在 `<用户目录>\eassy\` 放 `*.eassy.yaml`，会被一并归并（可选）。
 - librime 的 `*.txt` 资源规则指向 `<root>/eassy/`。
 ## 以后可下载"用户词库"（已记录，不急）
 
 设想：
 - 将来支持从网络**下载用户词库/细胞词库**，下载后**同样按 eassy 的分类**放好：
-  `eassy\<名字>\<名字>.eassy.toml`（与出厂词库同一套格式与目录约定）。
-- 因为归并器已经把 `eassy\**\*.eassy.toml` 全部按词求和并生成 `essay.txt`，
+  `eassy\<名字>\<名字>.eassy.yaml`（与出厂词库同一套格式与目录约定）。
+- 因为归并器已经把 `eassy\**\*.eassy.yaml` 全部按词求和并生成 `essay.txt`，
   **下载来的词库不需要额外接入**：放进 eassy\ 即被并入，重新部署/初始化即生效。
 - 下载器用程序文件夹里的 `aria2-next\aria2-next.exe`；压缩包用 `7z\7z.exe` 解压
   （与安装期解压模型同一套工具）。

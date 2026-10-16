@@ -24,21 +24,35 @@ pub fn parse_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<
     match args.as_slice() {
         [] => Ok(UiMode::Live),
         [arg] if arg == "--preview" => Ok(UiMode::Preview),
-        _ => Err("usage: Weasel-Next-Renderer.exe [--preview]".into()),
+        [arg] if arg == "--preview-indicator" => {
+            INDICATOR_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(UiMode::Preview)
+        }
+        _ => Err(
+            "usage: Weasel-Next-Renderer.exe [--preview|--preview-indicator]".into(),
+        ),
     }
 }
 
+/// 预览是否只显示中英模式提示窗（`--preview-indicator`）。
+///
+/// 模式提示平时只闪现 800 毫秒，没法截图核对；这个开关让预览直接停在提示窗上。
+static INDICATOR_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// 构造用于展示主题各部分的合成候选快照。
 ///
-/// 快照包含带注释的候选行，并模拟非首页且前后均可翻页的状态，以便主题同时呈现翻页
-/// 控件和表情快捷操作面板。锚点仅提供满足可见性校验的有效矩形；预览窗口自行定位，
-/// 不依赖该坐标。调用方可将结果交给常规快照校验及展示适配逻辑。
+/// 内容刻意与官方候选窗的观感对照：首屏、第一个候选高亮、其中几条带注释，
+/// 这样"我们的候选窗长什么样"可以和官方截图逐像素比（见 `script\measure-candidate.py`）。
 pub fn synthetic_snapshot() -> RenderSnapshot {
+    if INDICATOR_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
+        return mode_indicator_snapshot();
+    }
     let samples = [
-        ("你好", "nihao"),
-        ("小狼毫", "xiaolanghao"),
-        ("Rime", ""),
-        ("中州韻", ""),
+        ("界面", "jiemian"),
+        ("解谜", "jiemi"),
+        ("节目", "jiemu"),
+        ("姐妹", "jiemei"),
+        ("解密", "jiemi"),
     ];
     let items = samples
         .into_iter()
@@ -69,9 +83,9 @@ pub fn synthetic_snapshot() -> RenderSnapshot {
         }),
         items,
         selected_index: 0,
-        page_start: 10,
-        total_item_count: Some(30),
-        can_page_previous: true,
+        page_start: 0,
+        total_item_count: Some(20),
+        can_page_previous: false,
         can_page_next: true,
         token: None,
     }
@@ -86,6 +100,20 @@ pub fn synthetic_snapshot() -> RenderSnapshot {
 /// 窗口类、窗口控件或工作线程初始化失败时返回错误文本。
 pub fn run(_mode: UiMode) -> Result<(), String> {
     crate::preview_window::run()
+}
+
+/// 只含模式提示的合成快照：走主题的 `Layout::mode_indicator` 那条路。
+fn mode_indicator_snapshot() -> RenderSnapshot {
+    let mut snapshot = synthetic_snapshot();
+    snapshot.items.clear();
+    snapshot.preedit = None;
+    snapshot.selected_index = 0;
+    snapshot.mode_indicator = Some(weasel_common::message::ModeIndicator {
+        id: 1,
+        ascii_mode: true,
+        reason: weasel_common::message::ModeIndicatorReason::UserSwitch as i32,
+    });
+    snapshot
 }
 
 #[cfg(test)]
@@ -110,7 +138,9 @@ mod tests {
         assert!(crate::presentation::is_visible(
             &crate::theme_adapter::view(&snapshot, 1)
         ));
-        assert!(snapshot.can_page_previous && snapshot.can_page_next);
+        // 预览样本是"第一页"：上一页不可用、下一页可用（与官方候选窗观感一致）
+        assert!(!snapshot.can_page_previous && snapshot.can_page_next);
+        assert_eq!(snapshot.page_start, 0, "第一页的序号从 1 开始");
         assert_eq!(snapshot.selected_index, 0);
         assert!((snapshot.selected_index as usize) < snapshot.items.len());
     }

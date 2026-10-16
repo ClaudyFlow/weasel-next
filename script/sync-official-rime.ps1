@@ -13,7 +13,7 @@
     B) 用户数据：%APPDATA%\Rime  →  %APPDATA%\Weasel-Next\Rime
        补齐 default.custom.yaml（决定启用哪些方案）、weasel.custom.yaml、images\、
        可选的 *.userdb（用户词典）；installation.yaml / user.yaml 会**先备份**再覆盖。
-       weasel-next 自己的文件（weasel.custom.json、.weasel.lock、build\）不会被改动。
+       weasel-next 自己的文件（weasel.custom.yaml、.weasel.lock、build\）不会被改动。
 
     合并完成后需要重新部署才会生效：
         <weasel-next 程序目录>\Weasel-Next-Engine.exe --deploy --silent

@@ -32,6 +32,14 @@ const COMMAND_TIMEOUT: Duration = Duration::from_millis(80);
 /// "前几个字没进入输入法"。首键给更宽的预算：它已被输入法吞下，不会漏给应用，
 /// 只是可能晚几十毫秒出现在输入框里。
 const CONNECT_KEY_TIMEOUT: Duration = Duration::from_millis(500);
+/// 后端**可能正在忙**时的按键预算（引擎刚重启、刚切上下文/页面、刚切中英）。
+///
+/// 这些时刻 RPC 连接还在，走不到上面的 `CONNECT_KEY_TIMEOUT` 分支；但后端要重建会话
+/// 或等一次布局往返，80ms 常常不够 → 前几个字母被英文直通给应用。按键已经被输入法
+/// 吞下，多等一会儿只是晚几十毫秒出现，不会漏给应用，所以这里统一放宽。
+const BUSY_KEY_TIMEOUT: Duration = Duration::from_millis(600);
+/// 宿主线程等待按键结果时比预算多留的余量，避免在边界上误判超时。
+const HOST_WAIT_MARGIN: Duration = Duration::from_millis(60);
 /// 停止工作线程时等待原生线程退出的最长毫秒数。
 const STOP_TIMEOUT_MS: u32 = 100;
 
@@ -80,6 +88,11 @@ struct PushTarget {
     updates: Mutex<Vec<KeyEventResponse>>,
     /// 主动推送通道发生不可恢复故障时置位，按键处理据此停止。
     failed: AtomicBool,
+    /// 后端可能正在忙（连接失效、刚切上下文/页面/模式、上一次按键超时）。
+    ///
+    /// 置位时按键改用 [`BUSY_KEY_TIMEOUT`]；不设这个标志就会出现"引擎刚重启或刚切
+    /// 上下文时前几个字母被英文直通"的老问题。任意一次按键成功应答即清除。
+    slow: AtomicBool,
     /// 当前 RPC 连接不可用；可在下一次需要后端时重新连接。
     connection_failed: AtomicBool,
     /// 已完成握手的连接编号；0 表示当前没有有效连接。
@@ -128,6 +141,8 @@ impl PushTarget {
         self.cancellation.fetch_add(1, Ordering::AcqRel);
         self.epoch.store(0, Ordering::Release);
         self.connection_failed.store(true, Ordering::Release);
+        // 连接刚刚作废（超时/断开）→ 后端接下来多半还要重建会话，按键放宽预算
+        self.slow.store(true, Ordering::Release);
         if let Some(mut updates) = crate::boundary::try_teardown(&self.updates) {
             updates.clear();
         }
@@ -469,8 +484,10 @@ impl WorkerState {
             // 建立连接时的首键：放宽预算，避免这一键被英文回退吞掉；
             // 连接就绪后仍按常规预算，Await 串行以保证按键回复与上下文命令的顺序。
             let establishing = self.client.is_none();
-            let dispatch_deadline = if establishing {
-                Instant::now() + CONNECT_KEY_TIMEOUT
+            // 注意：入队时可能还没置位 slow（例如刚切上下文那一瞬），所以这里再兜一层
+            let busy = self.push.slow.load(Ordering::Acquire);
+            let dispatch_deadline = if establishing || busy {
+                Instant::now() + CONNECT_KEY_TIMEOUT.max(BUSY_KEY_TIMEOUT)
             } else {
                 deadline
             };
@@ -781,11 +798,14 @@ impl RpcWorker {
             return None;
         };
         let (response, receiver) = mpsc::channel();
+        // 后端忙（刚重启/刚切上下文/上次超时）时给更宽的预算，避免这一键被英文直通
+        let busy = self.push.slow.load(Ordering::Acquire);
+        let budget = if busy { BUSY_KEY_TIMEOUT } else { COMMAND_TIMEOUT };
         if commands
             .try_send(RpcCommand::KeyEvent {
                 event,
                 response,
-                deadline: Instant::now() + COMMAND_TIMEOUT,
+                deadline: Instant::now() + budget,
             })
             .inspect_err(|error| report("key-queue", None, error))
             .is_err()
@@ -793,8 +813,12 @@ impl RpcWorker {
             return None;
         }
 
-        match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(Some(value)) => Some(value),
+        match receiver.recv_timeout(budget + HOST_WAIT_MARGIN) {
+            Ok(Some(value)) => {
+                // 这一次往返是通的 → 后端恢复正常，后续按键回到常规预算
+                self.push.slow.store(false, Ordering::Release);
+                Some(value)
+            }
             result => {
                 if let Err(error) = result {
                     report("host-wait", None, error);
@@ -823,6 +847,9 @@ impl RpcWorker {
     ///
     /// 入队失败会使连接状态失效，以免调用方继续依赖可能不同步的上下文。
     pub fn context_command(&self, command: ContextCommand) -> Result<(), CommandError> {
+        // 焦点/上下文变化（切窗口、切页面、开关输入上下文）后，引擎往往要重建会话，
+        // 紧接着的几个按键最容易超时 → 先置位，等一次成功应答再恢复。
+        self.push.slow.store(true, Ordering::Release);
         self.reset_layout();
         let result = match &self.commands {
             None => Err(CommandError::NotStarted),

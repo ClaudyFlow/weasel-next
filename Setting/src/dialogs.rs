@@ -99,7 +99,28 @@ fn builtin_style_default(key: &str) -> Option<&'static str> {
     }
 }
 
+/// 当前配色：用户目录 `theme/theme.yaml` 的 `color_scheme`。
+///
+/// 皮肤选择现在的落点就是这一行（设置界面写它、主题 DLL 读它）。对话框如果继续从
+/// 旧的 `weasel.yaml` / `weasel.custom.yaml` 取值，就会一直显示上一次之前的那套。
+pub(crate) fn theme_color_scheme(user: &std::path::Path) -> Option<String> {
+    let path = user.join("theme").join("theme.yaml");
+    let text = std::fs::read_to_string(path).ok()?;
+    let table = weasel_common::yaml::to_value(&text).ok()?;
+    table
+        .get("color_scheme")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
 fn style_value(shared: &std::path::Path, user: &std::path::Path, key: &str) -> Option<String> {
+    // 0) 配色这一项的唯一落点是用户 theme.yaml，先看它（其余键仍走官方 YAML 链）。
+    if key == "style/color_scheme" {
+        if let Some(id) = theme_color_scheme(user) {
+            return Some(id);
+        }
+    }
     // 1) 用户补丁：weasel.custom.yaml 里是**斜杠键**（style/color_scheme: aqua），单层 map 直接查。
     if let Ok(text) = std::fs::read_to_string(user.join("weasel.custom.yaml")) {
         if let Ok(yaml) = weasel_style::parse_yaml(&text) {
@@ -193,11 +214,13 @@ impl StyleDialog {
                     .collect()
             })
             .unwrap_or_default();
-        let active = self
-            .config
-            .as_ref()
-            .map(|config| config.style.color_scheme.clone())
-            .unwrap_or_default();
+        // 当前配色优先取用户 theme.yaml（那才是皮肤选择的落点），取不到再退回 YAML
+        let active = theme_color_scheme(&self.user).unwrap_or_else(|| {
+            self.config
+                .as_ref()
+                .map(|config| config.style.color_scheme.clone())
+                .unwrap_or_default()
+        });
         self.selected = self
             .schemes
             .iter()
@@ -386,8 +409,8 @@ unsafe extern "system" fn style_proc(
                     state.selected = index;
                     let id = state.schemes[index].0.clone();
                     // 写用户补丁：等价于官方 customize_string("style/color_scheme", id)
-                    // 皮肤改动将写入 theme\<皮肤>\<皮肤>.theme.toml，不再写 weasel.custom.yaml。
-            let path = state.user.join("theme").join("theme.toml");
+                    // 皮肤改动将写入 theme\<皮肤>\<皮肤>.theme.yaml，不再写 weasel.custom.yaml。
+            let path = state.user.join("theme").join("theme.yaml");
                     match style_settings::set_active_scheme(&path, &id) {
                         Ok(()) => {
                             state.reload();
@@ -573,8 +596,11 @@ unsafe extern "system" fn style_proc(
                 let mut frame = swatch;
                 FrameRect(item.hDC, &frame, GetSysColorBrush(COLOR_WINDOWTEXT));
 
-                // 文字：颜色键名 + 取值
-                let text = wide(&format!("{key}   0x{value:08x}"));
+                // 文字：颜色键名 + 取值（按官方写法显示：不透明 6 位、带 alpha 8 位）
+                let text = wide(&format!(
+                    "{key}   {}",
+                    weasel_style::color::format_text(*value, weasel_style::ColorFormat::Abgr)
+                ));
                 let mut text_area = item.rcItem;
                 text_area.left = swatch.right + 6;
                 SetBkMode(item.hDC, TRANSPARENT_);

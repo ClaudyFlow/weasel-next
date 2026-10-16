@@ -1,11 +1,16 @@
 //! 管理 librime 动态库、引擎实例与输入会话，并将宿主事件和引擎状态相互转换。
 
 /// 把 `<shared>/eassy/**/*.eassy.toml` 与 `<user>/eassy/**/*.eassy.toml`（若存在）归并成
-/// `<shared>/eassy/essay.txt`（librime 的 preset vocabulary 只认这个 txt）。
+/// `essay.txt`（librime 的 preset vocabulary 只认这个 txt）。
 ///
-/// 布局约定：`eassy\` 只存在于**代码目录与程序文件夹**，用户目录不建这个文件夹；
-/// 因此 TOML 是出厂源、`essay.txt` 是**程序文件夹里的部署产物**，每次初始化/部署前重新生成。
-/// 用户目录若自行放了 `eassy\`（可选扩展），其词条也会被一并归并进来。
+/// 布局约定：`eassy\` 里放 TOML 源；`essay.txt` 是**部署产物**。安装后程序文件夹是
+/// 只读的（普通用户写会得到"拒绝访问"），所以先试程序文件夹、写不动就落到**用户目录**
+/// `<user>/eassy/essay.txt` —— librime 解析资源时用户目录优先，两处都能被认到。
+///
+/// **内容没变绝不重写**：librime 只按 mtime 决定要不要重编词典，而 `essay.txt` 参与
+/// 每个词典的编译（`use_preset_vocabulary: true`）。以前每次部署都无条件重写它，
+/// 于是 luna(11 MB)/stroke/terra(350 万条) 全被判定为"源文件变新"→ 每次部署都要
+/// 分钟级全量重建。改成先归并到内存、和目标逐字节比对，一致就直接返回。
 fn generate_essay_txt(shared_dir: &std::path::Path, user_dir: &std::path::Path) {
     let mut merged = std::collections::BTreeMap::new();
     for root in [shared_dir, user_dir] {
@@ -24,10 +29,34 @@ fn generate_essay_txt(shared_dir: &std::path::Path, user_dir: &std::path::Path) 
         tracing::warn!("eassy: 没有找到任何 *.eassy.toml，essay.txt 未生成");
         return;
     }
-    let target = shared_dir.join("eassy").join("essay.txt");
-    match weasel_common::eassy::write_essay_txt(&target, &merged) {
-        Ok(count) => tracing::info!("eassy: 已由 TOML 归并生成 {}（{count} 条）", target.display()),
-        Err(error) => tracing::warn!("eassy: 写出 {} 失败: {error}", target.display()),
+    let rendered = weasel_common::eassy::render_essay_txt(&merged);
+    let mut last_error = None;
+    for target in [
+        shared_dir.join("eassy").join("essay.txt"),
+        user_dir.join("eassy").join("essay.txt"),
+    ] {
+        // 内容一致就不动文件：改 mtime 会连带触发所有词典重编
+        if std::fs::read(&target).is_ok_and(|existing| existing == rendered) {
+            tracing::debug!("eassy: {} 内容未变，跳过重写", target.display());
+            return;
+        }
+        match weasel_common::eassy::write_essay_bytes(&target, &rendered) {
+            Ok(()) => {
+                tracing::info!(
+                    "eassy: 已由 TOML 归并生成 {}（{} 条）",
+                    target.display(),
+                    merged.len()
+                );
+                return;
+            }
+            Err(error) => {
+                tracing::debug!("eassy: 写出 {} 失败: {error}", target.display());
+                last_error = Some((target, error));
+            }
+        }
+    }
+    if let Some((target, error)) = last_error {
+        tracing::warn!("eassy: 写出 {} 失败: {error}", target.display());
     }
 }
 
@@ -135,6 +164,16 @@ impl Librime {
     pub fn load(base_dir: &Path, user_data_dir: &Path) -> Result<Self, String> {
         // 由 eassy/**/*.eassy.toml 归并生成 essay.txt（仓库只放 TOML，txt 是部署产物）
         generate_essay_txt(&base_dir.join("Rime-Next"), user_data_dir);
+        // 顺手清掉用户根目录里遗留的扁平 yaml/编译产物（分类副本存在时才算重复品）
+        match weasel_common::rime_layout::cleanup_flat_sources(user_data_dir) {
+            Ok(removed) if !removed.is_empty() => {
+                for path in &removed {
+                    tracing::info!("rime_layout: 清理旧的扁平文件 {}", path.display());
+                }
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!("rime_layout: 清理旧扁平文件失败: {error}"),
+        }
         for root in [base_dir.join("Rime-Next"), user_data_dir.to_path_buf()] {
             match weasel_common::rime_layout::normalize(&root) {
                 Ok(moves) if !moves.is_empty() => {
@@ -280,6 +319,34 @@ impl RimeSession {
         }
         self.set_ascii_mode(ascii);
         self.read_response(false, String::new())
+    }
+
+    /// 切换本会话使用的输入方案（librime `select_schema`）。
+    ///
+    /// 方案 id 不存在或引擎未提供该 API 时返回 `false`，调用方据此保留原方案。
+    pub fn select_schema(&mut self, schema_id: &str) -> bool {
+        let Ok(id) = CString::new(schema_id) else {
+            return false;
+        };
+        unsafe {
+            let Some(select) = (*self.api.api).select_schema else {
+                return false;
+            };
+            select(self.id, id.as_ptr()) != 0
+        }
+    }
+
+    /// 读当前会话正在用的方案 id（librime `get_current_schema`）。
+    pub fn current_schema(&self) -> Option<String> {
+        unsafe {
+            let get = (*self.api.api).get_current_schema?;
+            let mut buffer = [0i8; 256];
+            if get(self.id, buffer.as_mut_ptr(), buffer.len()) == 0 {
+                return None;
+            }
+            let text = std::ffi::CStr::from_ptr(buffer.as_ptr()).to_string_lossy();
+            Some(text.into_owned())
+        }
     }
 
     /// 执行宿主上下文操作，并按操作语义提交、清除或读取会话状态。

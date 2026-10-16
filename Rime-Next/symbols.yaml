@@ -1,4 +1,10 @@
 # Rime's punctuation and symbols
+#
+# 标点 + 符号**唯一的一份数据**：
+#   punctuator.full_shape / half_shape  —— 全角/半角标点（原 punctuation.yaml 的内容，
+#                                          键集合一致且候选是本文件更全）
+#   punctuator.symbols                  —— /fh /sx 这类符号表
+# default.yaml 与各方案都从这里取，punctuation.yaml 已删除。
 # encoding: utf-8
 #
 # Usage: patch your Rime schema to enable /X symbols

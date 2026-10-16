@@ -3,7 +3,7 @@
 # 做三件事：
 #   1. 编译 Weasel-Next-Engine 并复制进程序文件夹；
 #   2. 跑一次部署（新 server 会在初始化/部署前调用 rime_layout::normalize，
-#      自动把根目录扁平的 *.schema.yaml / *.dict.yaml / *.eassy.toml / *.gram 归类）；
+#      自动把根目录扁平的 *.schema.yaml / *.dict.yaml / *.eassy.yaml / *.gram 归类）；
 #   3. 安全删除残留的扁平 yaml：**仅当嵌套位置已存在同名文件时**才删（绝不误删）。
 #
 # 用法：

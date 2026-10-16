@@ -179,6 +179,10 @@ fn notify_deploy(main: &str, content: String) {
 
 /// 执行部署 UI 工作流，并在部署方释放数据后恢复普通 server。
 fn deploy(services: &mut OperationServices) -> OperationOutcome {
+    // 部署期间键声自然静音：流程会停掉引擎，而引擎是唯一播声音的地方。
+    // 内容没变而整段跳过时置位：提示只由最后返回的 outcome 弹一次（分支里再弹就成两个对话框 ✗）
+    let mut skipped = false;
+    let mut skipped_items = 0usize;
     let result = (|| -> Result<(), String> {
 
         // 源文件内容哈希未变时整段跳过部署：不关 server、零停机、零耗时。
@@ -186,9 +190,10 @@ fn deploy(services: &mut OperationServices) -> OperationOutcome {
         {
             use std::io::Write as _;
             let manifest_path =
-                weasel_common::deploy_manifest::manifest_path(&services.paths.user_data);
+                weasel_common::deploy_manifest::state_path(&services.paths.user_data);
+            let shared = services.paths.executable_directory.join("Rime-Next");
             if let Ok(current) =
-                weasel_common::deploy_manifest::collect(&services.paths.user_data)
+                weasel_common::deploy_manifest::collect(&shared, &services.paths.user_data)
             {
                 let stored = weasel_common::deploy_manifest::load(&manifest_path);
                 if weasel_common::deploy_manifest::is_unchanged(stored.as_ref(), &current) {
@@ -200,13 +205,8 @@ fn deploy(services: &mut OperationServices) -> OperationOutcome {
                         current.len()
                     );
                     let _ = log.flush();
-                    notify_deploy(
-                        "无需部署",
-                        format!(
-                            "源文件内容未变化（{} 项哈希一致），已跳过部署 ✓",
-                            current.len()
-                        ),
-                    );
+                    skipped = true;
+                    skipped_items = current.len();
                     return Ok(());
                 }
             }
@@ -264,18 +264,25 @@ fn deploy(services: &mut OperationServices) -> OperationOutcome {
         Ok(())
     })();
 
-    // 部署成功后记录源文件清单：下次内容未变即可整段跳过。
+    // 部署**成功**才记录（失败一律不动）：下次这些文件夹内容未变即可整段跳过。
     if result.is_ok() {
-        if let Ok(current) = weasel_common::deploy_manifest::collect(&services.paths.user_data) {
-            let path = weasel_common::deploy_manifest::manifest_path(&services.paths.user_data);
+        let shared = services.paths.executable_directory.join("Rime-Next");
+        if let Ok(current) =
+            weasel_common::deploy_manifest::collect(&shared, &services.paths.user_data)
+        {
+            let path = weasel_common::deploy_manifest::state_path(&services.paths.user_data);
             let _ = weasel_common::deploy_manifest::store(&path, &current);
+            // 记录已搬到用户根目录，build\ 里那份旧清单不再需要
+            weasel_common::deploy_manifest::remove_legacy(&services.paths.user_data);
         }
     }
 
-    // 用户可见的结果提示：完成 / 失败（失败带原因，便于自助排查）。
-    match &result {
-        Ok(()) => notify_deploy("部署完成", "方案部署完成 ✓".to_string()),
-        Err(error) => notify_deploy("部署失败", error.clone()),
+    // 用户可见的结果提示：**每次操作只留一个**。
+    //   * 成功：部署界面窗口自己会显示"Rime 数据部署完成"，这里再弹一个就成了两个对话框 ✗
+    //   * 失败：必须留（带原因，便于自助排查）
+    //   * 内容没变而跳过：由返回的 outcome 弹一次"无需部署…"
+    if let Err(error) = &result {
+        notify_deploy("部署失败", error.clone());
     }
 
     let mut restoration = Ok(());
@@ -352,6 +359,10 @@ fn deploy(services: &mut OperationServices) -> OperationOutcome {
             service_supervisor::diagnostic(&format!("deployment workflow failed: {error}"));
             OperationOutcome::error(format!("部署流程异常：\n{error}"))
         }
+        Ok(()) if skipped => OperationOutcome {
+            message: format!("无需部署：源文件内容未变化（{skipped_items} 项哈希一致）✓"),
+            failed: false,
+        },
         Ok(()) => OperationOutcome::success(),
     }
 }

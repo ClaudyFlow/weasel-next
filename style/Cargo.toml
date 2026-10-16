@@ -5,6 +5,7 @@ edition = "2021"
 description = "官方 weasel.yaml 皮肤文件的解析与 UIStyle（照 fxliang/weasel 的 UIStyle 与 WeaselStyleKeys 对齐）"
 
 [dependencies]
+weasel-common = { path = "../common" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1"

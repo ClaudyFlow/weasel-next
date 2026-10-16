@@ -1,7 +1,8 @@
 //! 加载并合并由 broker 管理的启动配置。
 //!
-//! 配置文件按顺序叠加：对象会递归合并，数组和标量会替换已有值；单个文件无效时保留
-//! 该文件应用前的配置。这里只检查文件、JSON 和传输大小；具体选项由消费组件校验。
+//! 配置文件是 **TOML**（`weasel.yaml` / 用户 `weasel.custom.yaml`），按顺序叠加：
+//! 对象会递归合并，数组和标量会替换已有值；单个文件无效时保留该文件应用前的配置。
+//! 这里只检查文件、格式和传输大小；具体选项由消费组件校验。
 use serde_json::Value;
 use std::{
     io::{self, Read},
@@ -21,10 +22,14 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 /// 并继续使用此前有效的值。
 pub fn load(paths: &RuntimePaths, mut warn: impl FnMut(String)) -> ConfigSnapshot {
     // Also keep packaged defaults available to standalone cargo builds.
-    let mut value: Value = serde_json::from_str(include_str!("../../weasel.json"))
-        .expect("packaged settings must be valid JSON");
+    let mut value: Value = weasel_common::yaml::to_value(include_str!("../../weasel.yaml"))
+        .expect("packaged settings must be valid TOML");
+    // 配置一律 TOML：程序文件夹一份出厂值、用户目录一份覆盖。
+    // 旧的 *.json 名字继续读（老机器升级上来不会突然丢配置），TOML 优先。
     for path in [
+        paths.executable_directory.join("weasel.yaml"),
         paths.executable_directory.join("weasel.json"),
+        paths.user_data.join("weasel.custom.yaml"),
         paths.user_data.join("weasel.custom.json"),
     ] {
         if let Err(error) = overlay_file(&mut value, &path) {
@@ -55,7 +60,13 @@ fn overlay_file(base: &mut Value, path: &Path) -> Result<(), String> {
         return Err("configuration exceeds 1 MiB".into());
     }
     let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
-    let patch: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+    // 兼容期：旧的 *.json 覆盖文件仍然按 JSON 解析
+    let patch: Value = if path.extension().is_some_and(|ext| ext == "json") {
+        serde_json::from_str(text).map_err(|e| e.to_string())?
+    } else {
+        weasel_common::yaml::to_value(text).map_err(|e| e.to_string())?
+    };
     if !patch.is_object() {
         return Err("configuration must be a JSON object".into());
     }

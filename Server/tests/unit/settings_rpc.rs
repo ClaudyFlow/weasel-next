@@ -199,7 +199,7 @@ fn refresh_reloads_from_disk_without_publishing() {
         .pipe_name(&format!("settings-refresh-test-{}", std::process::id()))
         .unwrap();
     let paths = test_paths();
-    let custom = paths.user_data.join("weasel.custom.json");
+    let custom = paths.user_data.join("weasel.custom.yaml");
     let _ = std::fs::remove_file(&custom);
     std::fs::create_dir_all(&paths.user_data).unwrap();
     let service = SettingsService::start_on(
@@ -218,7 +218,7 @@ fn refresh_reloads_from_disk_without_publishing() {
                 "ten"
             );
             // The user edits the configuration on disk.
-            std::fs::write(&custom, br#"{"theme":"eleven","seven", "preview":true}"#).unwrap();
+            std::fs::write(&custom, b"theme: eleven\npreview: true\n").unwrap();
             // A refresh re-reads the fresh disk state and returns the complete merged object.
             let fresh = client.query_config(".", true).await.unwrap().unwrap();
             assert_eq!(fresh["theme"], "eleven");
@@ -230,7 +230,7 @@ fn refresh_reloads_from_disk_without_publishing() {
             );
             std::fs::write(
                 &custom,
-                br#"{"theme":"ten","themeSettings":{"ten":{"color":"red"}}}"#,
+                b"theme: ten\nthemeSettings:\n  ten:\n    color: red\n",
             )
             .unwrap();
             let fresh = client.query_config(".", true).await.unwrap().unwrap();
@@ -240,7 +240,7 @@ fn refresh_reloads_from_disk_without_publishing() {
                 client.query_config(".", false).await.unwrap().unwrap()["theme"],
                 "ten"
             );
-            std::fs::write(&custom, b"{invalid").unwrap();
+            std::fs::write(&custom, b"invalid = ").unwrap();
             assert!(matches!(
                 client.query_config(".", true).await,
                 Err(RpcError::Remote { .. })

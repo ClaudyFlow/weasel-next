@@ -258,7 +258,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_config_path(
         paths
             .user_data
-            .join("weasel.custom.json")
+            .join("weasel.custom.yaml")
             .display()
             .to_string()
             .into(),

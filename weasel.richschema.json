@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "schema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "$id": "weasel.schema.json",
+    "$id": "weasel.richschema.json",
     "title": "Weasel User Settings",
     "description": "Weasel-Next 用户设置文件",
     "type": "object",
@@ -12,14 +12,10 @@
         "type": "string"
       },
       "theme": {
-        "description": "主题名称",
+        "description": "主题名称（对应程序文件夹里的 weasel_theme_<名字>.dll；当前只有 official）",
         "type": "string",
         "enum": [
-          "eleven",
-          "ten",
-          "abc",
-          "void",
-          "wasm"
+          "official"
         ],
         "title": "主题"
       },
@@ -55,20 +51,6 @@
         "type": "boolean",
         "title": "允许 Rime 处理安全输入区域"
       },
-      "inline_preedit": {
-        "description": "是否在宿主编辑框内联显示预编辑文本",
-        "type": "boolean",
-        "title": "内联预编辑"
-      },
-      "preedit_type": {
-        "description": "外部预编辑显示内容：composition 为编码，preview 为当前有效候选文本",
-        "type": "string",
-        "enum": [
-          "composition",
-          "preview"
-        ],
-        "title": "预编辑内容"
-      },
       "app_options": {
         "description": "按宿主程序文件名配置新输入会话的默认选项",
         "type": "object",
@@ -81,7 +63,7 @@
               "title": "默认英文模式"
             },
             "inline_preedit": {
-              "description": "是否在该宿主编辑框内联显示预编辑文本；未指定时继承全局 inline_preedit，主题不支持外部预编辑时仍回退内联",
+              "description": "是否在该宿主编辑框内联显示预编辑文本；未指定时用主题的值（theme.yaml 的 style/inline_preedit），主题不支持外部预编辑时仍回退内联",
               "type": "boolean",
               "title": "内联预编辑"
             }
@@ -143,13 +125,40 @@
         "additionalProperties": {
           "type": "object"
         }
+      },
+      "asset": {
+        "description": "数据文件夹名（相对程序文件夹），存放 Rime-Next 的数据树。",
+        "type": "string",
+        "title": "数据文件夹名"
+      },
+      "sound": {
+        "description": "键声与上屏音；路径相对数据文件夹（asset）。",
+        "type": "object",
+        "title": "声音",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "是否播放按键/上屏音",
+            "type": "boolean",
+            "title": "启用声音"
+          },
+          "key": {
+            "description": "按键音 wav（相对数据文件夹）",
+            "type": "string",
+            "title": "按键音"
+          },
+          "commit": {
+            "description": "上屏音 wav（相对数据文件夹）",
+            "type": "string",
+            "title": "上屏音"
+          }
+        }
       }
     },
     "additionalProperties": false,
     "examples": [
       {
         "theme": "eleven",
-        "inline_preedit": true,
         "themeSettings": {
           "abc": {}
         }
@@ -180,12 +189,6 @@
       },
       "/allow_rime_in_secure_fields": {
         "order": 25
-      },
-      "/inline_preedit": {
-        "order": 30
-      },
-      "/preedit_type": {
-        "order": 40
       },
       "/app_options": {
         "order": 50

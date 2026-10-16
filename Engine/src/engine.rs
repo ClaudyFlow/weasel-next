@@ -158,8 +158,19 @@ pub(crate) struct Engine {
     allow_rime_in_secure_fields: bool,
     /// 哪些输入模式变化应请求主题显示提示。
     input_mode_indicator: InputModeIndicatorPolicy,
+    /// 方案信息（用户目录 `schema/schema.yaml`）：勾选清单 + 当前方案。
+    ///
+    /// 用户在这个文件里选了什么，引擎就在新会话上选什么；运行中通过快捷键换了方案，
+    /// 也写回这里 —— 这样"方案选择"只存一处，且不会因为重启而丢失。
+    schemas: weasel_style::switcher::SchemaTable,
+    /// 写回 `schema.yaml` 的目标路径（用户目录那份）。
+    schema_path: std::path::PathBuf,
     /// 可选配置快照；缺省时使用每应用默认行为。
     settings: Option<weasel_common::settings::ConfigSnapshot>,
+    /// 主题决定的"编码画在哪"（`theme.yaml` 的 `style/inline_preedit`）：
+    /// false = 组字串画进候选窗（官方出厂默认），true = 画在宿主应用里。
+    /// `app_options.<应用>.inline_preedit` 可以逐应用覆盖它。
+    theme_inline_preedit: bool,
     // Field order is intentional: destroy every session before dropping the engine.
     /// 以引擎内单调递增的会话标识索引活动输入会话。
     clients: HashMap<u64, ClientSession>,
@@ -365,12 +376,14 @@ fn trace_commit_reply(response: &KeyEventResponse) {
 /// 而服务端能看到全部按键与提交，一处即可覆盖所有应用。播放用
 /// `PlaySoundW(SND_ASYNC)` **异步**执行，绝不阻塞输入线程。
 ///
-/// 配置直接读运行目录下的 `weasel.json`（不经设置界面的 schema，改完即生效）：
+/// 配置直接读运行目录下的 `weasel.yaml`（不经设置界面，改完即生效）：
 ///
-/// ```json
-/// { "sound": { "enabled": true,
-///              "key": "sounds/typewriter-key.wav",
-///              "commit": "sounds/typewriter-bell.wav" } }
+/// ```toml
+/// asset = "Rime-Next"
+/// [sound]
+/// enabled = true
+/// key = "sound/typewriter-key.wav"
+/// commit = "sound/typewriter-bell.wav"
 /// ```
 ///
 /// 默认关闭；文件缺失或播放失败一律静默。
@@ -416,7 +429,7 @@ pub(crate) mod sound {
         }
     }
 
-    /// 运行目录：`weasel.json` 与 `sounds/` 所在处。
+    /// 运行目录：`weasel.yaml` 与数据文件夹所在处。
     fn runtime_dir() -> Option<PathBuf> {
         let exe = std::env::current_exe().ok()?;
         exe.parent().map(PathBuf::from)
@@ -432,101 +445,95 @@ pub(crate) mod sound {
         (config.enabled, config.key.clone(), config.commit.clone())
     }
 
-    /// 从 JSON 文本里取 `"sound"` 对象下的字段。
+    /// 从 TOML 文本里取 `sound` 表（`asset` 决定相对路径的基准目录）。
     ///
-    /// 手写解析是为了不引入新依赖、也不动设置界面的 schema：只认这几个键，其余忽略；
-    /// 任何异常都退化为"未开启"。
+    /// 只认这几个键，其余忽略；解析失败一律退化为"未开启"。
     fn parse(text: &str, dir: Option<&PathBuf>) -> Config {
-        let mut config = Config::default();
-        let Some(anchor) = text.find("\"sound\"") else {
-            return config;
-        };
-        let Some(open) = text[anchor..].find('{').map(|i| anchor + i) else {
-            return config;
-        };
-        let Some(close) = text[open..].find('}').map(|i| open + i) else {
-            return config;
-        };
-        // `asset` 指定资源根目录（如 C:/code/weasel-next/asset），key/commit 等子路径相对它解析；
-        // 未配置时退回 exe 所在目录 —— 安装后的布局（$INSTDIR\sound\…）正是这种情况。
-        let base: Option<PathBuf> = {
-            let mut found = None;
-            if let Some(at) = text.find("\"asset\"") {
-                if let Some(colon) = text[at..].find(':') {
-                    let rest = text[at + colon + 1..].trim_start();
-                    if let Some(stripped) = rest.strip_prefix('"') {
-                        if let Some(end) = stripped.find('"') {
-                            found = Some(stripped[..end].to_string());
-                        }
-                    }
-                }
-            }
-            match found {
-                Some(raw) => {
-                    let path = PathBuf::from(raw.replace('\\', "/"));
-                    if path.is_absolute() {
-                        Some(path)
-                    } else {
-                        // 相对 asset 以"根目录"为准：从 exe 目录起逐级向上找同名目录。
-                        // 开发运行时（artifact\smoke\）会找到 <仓库根>\asset，
-                        // 安装后 asset 与 exe 同级（或未配置时退回 exe 目录）。
-                        dir.map(|start| {
-                            let mut here = Some(start.clone());
-                            while let Some(base) = here {
-                                let candidate = base.join(&path);
-                                if candidate.is_dir() {
-                                    return candidate;
-                                }
-                                here = base.parent().map(PathBuf::from);
-                            }
-                            start.join(&path)
-                        })
-                    }
-                }
-                None => dir.cloned(),
-            }
-        };
-        for field in text[open + 1..close].split(',') {            let Some(colon) = field.find(':') else {
-                continue;
+        #[derive(serde::Deserialize)]
+        struct Host {
+            #[serde(default)]
+            sound: Option<HostSound>,
+            #[serde(default)]
+            asset: Option<String>,
+        }
+        #[derive(serde::Deserialize)]
+        struct HostSound {
+            #[serde(default)]
+            enabled: bool,
+            #[serde(default)]
+            key: Option<String>,
+            #[serde(default)]
+            commit: Option<String>,
+        }
+
+        /// `asset` 指定资源根目录：相对路径从 exe 目录起逐级向上找同名目录
+        /// （开发时能找到 <仓库根>\asset；安装后 asset 与 exe 同级，或未配置时用 exe 目录）。
+        fn resolve_base(asset: Option<&str>, dir: Option<&PathBuf>) -> Option<PathBuf> {
+            let Some(raw) = asset else {
+                return dir.cloned();
             };
-            let name = field[..colon].trim().trim_matches('"');
-            let value = field[colon + 1..].trim();
-            match name {
-                "enabled" => config.enabled = value.starts_with("true"),
-                "key" | "commit" => {
-                    let raw = value.trim_matches(|c| c == '"' || c == '\'' || c == ' ');
-                    if raw.is_empty() {
-                        continue;
+            let path = PathBuf::from(raw.replace('\\', "/"));
+            if path.is_absolute() {
+                return Some(path);
+            }
+            dir.map(|start| {
+                let mut here = Some(start.clone());
+                while let Some(base) = here {
+                    let candidate = base.join(&path);
+                    if candidate.is_dir() {
+                        return candidate;
                     }
-                    let raw_path = PathBuf::from(raw.replace('\\', "/"));
-                    let path = if raw_path.is_absolute() {
-                        raw_path
-                    } else {
-                        match &base {
-                            Some(base) => base.join(raw_path),
-                            None => raw_path,
-                        }
-                    };
-                    if name == "key" {
-                        config.key = Some(path);
-                    } else {
-                        config.commit = Some(path);
-                    }
+                    here = base.parent().map(PathBuf::from);
                 }
-                _ => {}
+                start.join(&path)
+            })
+        }
+
+        fn resolve_path(raw: Option<&String>, base: &Option<PathBuf>) -> Option<PathBuf> {
+            let raw = raw?.trim();
+            if raw.is_empty() {
+                return None;
+            }
+            let path = PathBuf::from(raw.replace('\\', "/"));
+            if path.is_absolute() {
+                return Some(path);
+            }
+            match base {
+                Some(base) => Some(base.join(path)),
+                None => Some(path),
             }
         }
-        config
+
+        let Ok(host) = weasel_common::yaml::from_str::<Host>(text) else {
+            return Config::default();
+        };
+        let Some(sound) = host.sound else {
+            return Config::default();
+        };
+        let base = resolve_base(host.asset.as_deref(), dir);
+        Config {
+            enabled: sound.enabled,
+            key: resolve_path(sound.key.as_ref(), &base),
+            commit: resolve_path(sound.commit.as_ref(), &base),
+        }
     }
 
-    /// 读配置；`weasel.json` 未变化时复用缓存（按 mtime 判断）。
+    /// 读配置；`weasel.yaml` 未变化时复用缓存（按 mtime 判断）。
     fn config() -> Config {
         static CACHE: OnceLock<Mutex<(Option<SystemTime>, Config)>> = OnceLock::new();
         let cell = CACHE.get_or_init(|| Mutex::new((None, Config::default())));
         let Some(dir) = runtime_dir() else {
             return Config::default();
         };
-        let path = dir.join("weasel.json");
+        // 主文件名是 weasel.yaml；旧的 weasel.json 仍然读（升级兼容）
+        let path = {
+            let toml_path = dir.join("weasel.yaml");
+            if toml_path.is_file() {
+                toml_path
+            } else {
+                dir.join("weasel.json")
+            }
+        };
         let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         let Ok(mut cache) = cell.lock() else {
             return Config::default();
@@ -1089,6 +1096,7 @@ impl Engine {
         paths: RuntimePaths,
         renderer: RendererPublisher,
         settings: Option<weasel_common::settings::ConfigSnapshot>,
+        theme_inline_preedit: bool,
     ) -> Result<Self, String> {
         let data_lock = crate::data_lock::DataLock::acquire(&paths.user_data)?;
         crate::init_logging(&paths, "server")?;
@@ -1105,11 +1113,27 @@ impl Engine {
             }
             None => (None, false),
         };
+        // 方案信息：用户目录 schema/schema.yaml（出厂兜底在程序文件夹里）
+        let schema_path = paths.user_data.join("schema").join("schema.yaml");
+        let schemas = weasel_style::switcher::read_schema_table(
+            &paths.executable_directory.join("Rime-Next"),
+            &paths.user_data,
+        );
+        if schemas.active.is_some() || !schemas.schemas.is_empty() {
+            tracing::info!(
+                active = schemas.active.as_deref().unwrap_or(""),
+                selected = schemas.selected_ids().len(),
+                "loaded schema preference from schema.yaml"
+            );
+        }
         Ok(Self {
             global_ascii,
             allow_rime_in_secure_fields,
             input_mode_indicator,
             settings,
+            theme_inline_preedit,
+            schemas,
+            schema_path,
             clients: HashMap::new(),
             rime,
             _data_lock: data_lock,
@@ -1151,14 +1175,25 @@ impl Engine {
             return;
         }
         let context_id = context.unwrap().context_id;
+        // [Weasel-Next] 会话按**输入上下文**复用，而不是按连接。
+        //
+        // TIP 在等待超时后会重建 RPC 连接（每条连接都是新的 client_id ✗）；若这里用
+        // connection_id 查找，同一个输入框就会"每按一个键新建一个 rime 会话"，
+        // 结果是 rime 永远只看到一个孤立字母、组合串积累不起来、候选窗一闪就没 ✓✓
+        // （实测：同一个键 j 两次分别得到 `composition='j' 候选=5` 与 `空` ✗）。
+        //
+        // 因此只看上下文号（外加宿主程序名，避免不同程序串台）；命中旧会话后，
+        // 下面会把它的响应通道重新绑定到当前连接。
+        let client_executable = connection.client_executable().unwrap_or("").to_owned();
         let existing = self.clients.iter().find_map(|(id, client)| {
-            (client.connection_id == connection_id
-                && client
-                    .route
-                    .token
-                    .as_ref()
-                    .is_some_and(|t| t.context_id == context_id))
-            .then_some(*id)
+            let same_context = client
+                .route
+                .token
+                .as_ref()
+                .is_some_and(|t| t.context_id == context_id);
+            let same_client =
+                client.connection.client_executable().unwrap_or("") == client_executable;
+            (same_context && same_client).then_some(*id)
         });
         let client_id = match existing {
             Some(id) => id,
@@ -1290,20 +1325,46 @@ impl Engine {
                 }) {
                     session.set_ascii_mode(ascii);
                 }
+                // 方案：用户目录 schema/schema.yaml 里记的当前方案优先。
+                //
+                // 两条都必须遵守，否则会**把输入打断**（实测：连字母都打不出来 ✗）：
+                //   1. 已经是这个方案就**不要**再选 —— 重复 select 会返回 false；
+                //   2. 选失败只是记日志，绝不改变会话状态（保留 librime 自己的选择）。
+                // 方案：用户目录 schema/schema.yaml 里记的当前方案优先。
+                // 选失败（方案被删/还没部署）就保留 librime 自己的选择，不影响输入。
+                //
+                // 注意：`schema.yaml` 里**先不要写 active**。实测过一次教训：
+                // 写了之后引擎每个会话都调 select_schema，一旦它返回 false，
+                // 会话就拿不到方案 —— 表现是**连英文字母都打不出来** ✗。
+                // 等把 select 的失败语义查清楚（false 是否真的会清空会话）再启用。
+                if let Some(active) = self.schemas.active.clone() {
+                    if !session.select_schema(&active) {
+                        tracing::warn!(
+                            schema = %active,
+                            "schema.yaml 里的方案当前不可用，保留 librime 的选择"
+                        );
+                    }
+                }
                 self.clients.insert(
                     client_id,
                     ClientSession {
-                        inline_preedit: self.settings.as_ref().is_none_or(|settings| {
-                            settings
-                                .app_bool(
-                                    connection.client_executable().unwrap_or(""),
-                                    "inline_preedit",
-                                )
-                                .unwrap_or_else(|error| {
-                                    tracing::error!(%error, "invalid application setting");
-                                    true
-                                })
-                        }),
+                        // 默认值来自主题（theme.yaml 的 style/inline_preedit）；
+                        // app_options.<应用>.inline_preedit 仍然可以逐应用覆盖它。
+                        inline_preedit: self
+                            .settings
+                            .as_ref()
+                            .and_then(|settings| {
+                                settings
+                                    .app_option_bool(
+                                        connection.client_executable().unwrap_or(""),
+                                        "inline_preedit",
+                                    )
+                                    .unwrap_or_else(|error| {
+                                        tracing::error!(%error, "invalid application setting");
+                                        None
+                                    })
+                            })
+                            .unwrap_or(self.theme_inline_preedit),
                         connection_id,
                         connection: connection.clone(),
                         alive,
@@ -1357,6 +1418,20 @@ impl Engine {
             );
             return;
         }
+        // 复用到的会话可能属于上一条（已失效的）连接：把响应通道换到当前连接，
+        // 否则 rime 的返回会写进一条没人读的管道 ✗（表现是"按键过去了、什么都没回来"）。
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            if client.connection_id != connection_id {
+                tracing::info!(
+                    client = client_id,
+                    old = client.connection_id,
+                    "会话按上下文复用：响应通道已切到当前连接"
+                );
+                client.connection_id = connection_id;
+                client.connection = Arc::clone(&connection);
+                client.route.rebind();
+            }
+        }
         match envelope.payload {
             Some(Payload::KeyEvent(key_event)) => {
                 let (response, snapshot) = {
@@ -1380,11 +1455,39 @@ impl Engine {
                         if let Some(ascii) = self.global_ascii {
                             client.session.set_ascii_mode(ascii);
                         }
+                        // [排障] 按键入口：有这行说明按键到了引擎
+                        tracing::info!(
+                            keycode = key_event.keycode,
+                                                    client = %client_id,
+                            "诊断: 收到按键"
+                        );
                         let mut response = client.session.process_key(&key_event);
+                        tracing::info!(
+                            eaten = response.eaten,
+                            composing = response.composing,
+                            commit = %response.commit_text,
+                            composition = %response.composition,
+                            candidates = response.candidates.len(),
+                            ascii = ?response.ascii_mode,
+                            "诊断: rime 返回"
+                        );
                         if self.global_ascii.is_some()
                             && let Some(ascii) = response.ascii_mode
                         {
                             self.global_ascii = Some(ascii);
+                        }
+                        // 用户用快捷键/托盘换了方案：记进 schema.yaml，下次启动仍然用它。
+                        if let Some(current) = client.session.current_schema() {
+                            if self.schemas.active.as_deref() != Some(current.as_str()) {
+                                self.schemas.set_active(current.clone());
+                                if let Err(error) =
+                                    weasel_style::switcher::write_schema_table(&self.schema_path, &self.schemas)
+                                {
+                                    tracing::warn!(%error, "写回 schema.yaml 失败");
+                                } else {
+                                    tracing::info!(schema = %current, "schema.yaml 已记录当前方案");
+                                }
+                            }
                         }
                         response.external_preedit = response.composing
                             && self.renderer.supports_preedit()
@@ -1852,8 +1955,15 @@ mod sound_parse_tests {
         fs::write(sound_dir.join("typewriter-bell.wav"), b"x").unwrap();
         fs::write(sound_dir.join("typewriter-key.wav"), b"x").unwrap();
 
-        let json = r#"{ "asset": "Rime-Next", "sound": { "enabled": true, "key": "sound/typewriter-key.wav", "commit": "sound/typewriter-bell.wav" } }"#;
-        let (enabled, key, commit) = parse_for_test(json, &exe_dir);
+        let yaml = r#"
+asset: Rime-Next
+
+sound:
+  enabled: true
+  key: sound/typewriter-key.wav
+  commit: sound/typewriter-bell.wav
+"#;
+        let (enabled, key, commit) = parse_for_test(yaml, &exe_dir);
         assert!(enabled, "enabled 应为 true");
         let key = key.expect("key 应解析出路径");
         let commit = commit.expect("commit 应解析出路径");
@@ -1869,8 +1979,13 @@ mod sound_parse_tests {
         let exe_dir = std::env::temp_dir().join(format!("weasel-noasset-{}", std::process::id()));
         let _ = fs::remove_dir_all(&exe_dir);
         fs::create_dir_all(exe_dir.join("sound")).unwrap();
-        let json = r#"{ "sound": { "enabled": true, "key": "sound/k.wav", "commit": "sound/b.wav" } }"#;
-        let (_, key, commit) = parse_for_test(json, &exe_dir);
+        let yaml = r#"
+sound:
+  enabled: true
+  key: sound/k.wav
+  commit: sound/b.wav
+"#;
+        let (_, key, commit) = parse_for_test(yaml, &exe_dir);
         assert_eq!(key.unwrap(), exe_dir.join("sound").join("k.wav"));
         assert_eq!(commit.unwrap(), exe_dir.join("sound").join("b.wav"));
         let _ = fs::remove_dir_all(&exe_dir);

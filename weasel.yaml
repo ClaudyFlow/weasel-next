@@ -1,0 +1,54 @@
+# Weasel-Next 宿主配置（出厂默认值）
+#
+# 这份是**程序级**设置：用哪个主题、声音、按应用的默认输入状态等。
+# 候选窗长什么样（字体/边距/圆角/配色）在主题文件里，不在这里：
+#   用户：%APPDATA%\Rime-Next\theme\theme.yaml
+#   出厂：<程序文件夹>\Rime-Next\theme\default\default.theme.yaml（只有配色）
+#
+# 用户覆盖：%APPDATA%\Rime-Next\weasel.custom.yaml（设置界面写出，优先于本文件）
+# 优先级：内嵌出厂默认 → <程序文件夹>\weasel.yaml → 用户 weasel.custom.yaml
+
+# 用哪个主题（对应 weasel_theme_<名字>.dll）
+theme: official
+# 新会话默认中英状态；global_ascii_status 为 true 时全局共享同一个状态
+ascii_mode: false
+global_ascii_status: false
+# 中英模式提示：switch_only / focus_and_switch
+input_mode_indicator: switch_only
+input_mode_indicator_duration_ms: 800
+# 关闭时，密码等安全输入区域绕过输入法，直接交给应用
+allow_rime_in_secure_fields: false
+# 数据文件夹名（相对程序文件夹）
+asset: Rime-Next
+
+sound:
+  enabled: true
+  key: sound/typewriter-key.wav
+  commit: sound/typewriter-bell.wav
+
+# 各主题自己的设置；键名是主题名，内容由主题定义
+themeSettings:
+  abc: {}
+  eleven: {}
+  seven: {}
+  test: {}
+  wasm:
+    theme: weaselui
+    modules:
+      weaselui:
+        name: 旧版 Weasel UI
+      glass:
+        name: Glass
+      orbit:
+        name: Orbit · 月轨
+      statusbar:
+        name: 经典桌面状态栏
+
+# 按宿主程序文件名给新输入会话定默认状态；未指定时继承上面的全局值
+app_options:
+  cmd.exe:
+    ascii_mode: true
+  conhost.exe:
+    ascii_mode: true
+  WindowsTerminal.exe:
+    ascii_mode: true

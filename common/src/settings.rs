@@ -68,12 +68,27 @@ impl ConfigSnapshot {
             .ok_or_else(|| format!("configuration value {option} must be a boolean"))
     }
 
+    /// 只查 `app_options.<应用>` 里的布尔选项，不看全局值。
+    ///
+    /// 给"全局值来自主题文件"的选项用（例如 `inline_preedit` —— 它是
+    /// `theme.yaml` 的 `style/inline_preedit`，不是宿主配置的全局键）。
+    pub fn app_option_bool(&self, executable: &str, option: &str) -> Result<Option<bool>, String> {
+        let Some(value) = self.application_value(executable, option)? else {
+            return Ok(None);
+        };
+        value
+            .as_bool()
+            .map(Some)
+            .ok_or_else(|| format!("app_options.{executable}.{option} must be a boolean"))
+    }
+
     /// 判断是否有任何应用需要外置 preedit 能力。
     ///
-    /// 除全局设置外，也检查所有 `app_options` 覆盖；只要任一应用显式关闭
-    /// `inline_preedit`，就必须提前协商该能力。
-    pub fn needs_external_preedit(&self) -> Result<bool, String> {
-        if !self.required::<bool>(".inline_preedit")? {
+    /// `theme_inline_preedit` 是主题文件（`theme.yaml` 的 `style/inline_preedit`）的值：
+    /// 它为 false 时组字串要画进候选窗，必须提前协商外置预编辑能力；此外只要任一应用
+    /// 通过 `app_options.<应用>.inline_preedit` 显式关闭，也同样需要协商。
+    pub fn needs_external_preedit(&self, theme_inline_preedit: bool) -> Result<bool, String> {
+        if !theme_inline_preedit {
             return Ok(true);
         }
         let apps = self
@@ -239,34 +254,42 @@ pub fn query<'a>(root: &'a Value, path: &str) -> Result<Option<&'a Value>, Strin
 #[cfg(test)]
 mod tests {
     #[test]
-    fn application_preedit_overrides_global_and_enables_early_negotiation() {
-        for global in [true, false] {
-            let config = super::ConfigSnapshot::new(serde_json::json!({
-                "inline_preedit": global,
-                "app_options": {
-                    "cmd.exe": {"inline_preedit": false},
-                    "editor.exe": {"inline_preedit": true},
-                    "other.exe": {"ascii_mode": true}
-                }
-            }));
-            assert!(!config.app_bool("CMD.EXE", "inline_preedit").unwrap());
-            assert!(config.app_bool("editor.exe", "inline_preedit").unwrap());
-            assert_eq!(
-                config.app_bool("other.exe", "inline_preedit").unwrap(),
-                global
-            );
-            assert_eq!(
-                config.app_bool("unknown.exe", "inline_preedit").unwrap(),
-                global
-            );
-            assert!(config.needs_external_preedit().unwrap());
-        }
-        let defaults = super::ConfigSnapshot::new(serde_json::json!({
-            "inline_preedit": true,
-            "app_options": {}
+    fn application_preedit_overrides_theme_default_and_enables_early_negotiation() {
+        // 全局值来自主题（theme.yaml 的 style/inline_preedit），json 里只留逐应用覆盖
+        let config = super::ConfigSnapshot::new(serde_json::json!({
+            "app_options": {
+                "cmd.exe": {"inline_preedit": false},
+                "editor.exe": {"inline_preedit": true},
+                "other.exe": {"ascii_mode": true}
+            }
         }));
-        assert!(defaults.app_bool("cmd.exe", "inline_preedit").unwrap());
-        assert!(!defaults.needs_external_preedit().unwrap());
+        assert_eq!(
+            config.app_option_bool("CMD.EXE", "inline_preedit").unwrap(),
+            Some(false)
+        );
+        assert_eq!(
+            config.app_option_bool("editor.exe", "inline_preedit").unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            config.app_option_bool("other.exe", "inline_preedit").unwrap(),
+            None
+        );
+        assert_eq!(
+            config.app_option_bool("unknown.exe", "inline_preedit").unwrap(),
+            None
+        );
+        // 主题要求画在窗里 → 需要外置预编辑
+        assert!(config.needs_external_preedit(false).unwrap());
+        // 主题说画在应用里，但有应用把它关掉 → 仍然要协商
+        assert!(config.needs_external_preedit(true).unwrap());
+
+        let defaults = super::ConfigSnapshot::new(serde_json::json!({"app_options": {}}));
+        assert_eq!(
+            defaults.app_option_bool("cmd.exe", "inline_preedit").unwrap(),
+            None
+        );
+        assert!(!defaults.needs_external_preedit(true).unwrap());
     }
     #[test]
     fn application_defaults_distinguish_false_from_missing() {
@@ -277,33 +300,38 @@ mod tests {
         assert!(!config.app_bool("editor.exe", "ascii_mode").unwrap());
         assert!(config.app_bool("unknown.exe", "ascii_mode").is_err());
         let config = super::ConfigSnapshot::new(serde_json::json!({
-            "ascii_mode": true, "inline_preedit": false,
+            "ascii_mode": true,
             "app_options": {"editor.exe": {"ascii_mode": false}}
         }));
         assert!(config.app_bool("unknown.exe", "ascii_mode").unwrap());
         assert!(!config.app_bool("EDITOR.EXE", "ascii_mode").unwrap());
-        assert!(!config.required::<bool>(".inline_preedit").unwrap());
         for global in [false, true] {
             let config = super::ConfigSnapshot::new(serde_json::json!({
-                "ascii_mode": global, "inline_preedit": global,
+                "ascii_mode": global,
                 "app_options": {"empty.exe": {}, "explicit.exe": {
                     "ascii_mode": false, "inline_preedit": false
                 }}
             }));
             assert_eq!(config.app_bool("EMPTY.EXE", "ascii_mode").unwrap(), global);
+            // inline_preedit 没有全局键：没覆盖就是 None（由主题决定）
             assert_eq!(
-                config.app_bool("EMPTY.EXE", "inline_preedit").unwrap(),
-                global
+                config.app_option_bool("EMPTY.EXE", "inline_preedit").unwrap(),
+                None
             );
             assert!(!config.app_bool("explicit.exe", "ascii_mode").unwrap());
-            assert!(!config.app_bool("explicit.exe", "inline_preedit").unwrap());
+            assert_eq!(
+                config
+                    .app_option_bool("explicit.exe", "inline_preedit")
+                    .unwrap(),
+                Some(false)
+            );
         }
     }
     use super::*;
     #[test]
     fn theme_defaults_are_overlaid_without_changing_the_source() {
         let source = ConfigSnapshot::new(serde_json::json!({
-            "inline_preedit": true,
+            "ascii_mode": true,
             "themeSettings": {"abc": {"antialiasing": false, "nested": {"b": 3}}}
         }));
         let merged = source
@@ -334,7 +362,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert_eq!(merged.get::<bool>(".inline_preedit").unwrap(), Some(true));
+        assert_eq!(merged.get::<bool>(".ascii_mode").unwrap(), Some(true));
         let fallback = source
             .with_theme_defaults("ten", serde_json::json!({"size": 12}))
             .unwrap();

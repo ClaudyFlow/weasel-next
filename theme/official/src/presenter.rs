@@ -36,6 +36,11 @@ pub(crate) struct Presenter {
     dxgi_device: IDXGIDevice,
     factory: IDXGIFactory2,
     swap_chain: IDXGISwapChain1,
+    /// 创建本窗口设备的 Direct2D 工厂。
+    ///
+    /// **必须**用它创建路径几何：D2D 要求同一次绘制里用到的资源（画刷、几何、位图）
+    /// 出自同一个工厂，否则 `EndDraw` 报 `D2DERR_WRONG_FACTORY (0x88990012)`。
+    d2d_factory: ID2D1Factory1,
     d2d_device: ID2D1Device1,
     context: ID2D1DeviceContext1,
     target_bitmap: Option<ID2D1Bitmap1>,
@@ -171,6 +176,7 @@ impl Presenter {
             dxgi_device,
             factory,
             swap_chain,
+            d2d_factory,
             d2d_device,
             context,
             target_bitmap: Some(target_bitmap),
@@ -181,6 +187,11 @@ impl Presenter {
             width,
             height,
         })
+    }
+
+    /// 本窗口的 Direct2D 工厂：路径几何等资源必须由它创建。
+    pub(crate) fn d2d_factory(&self) -> &ID2D1Factory1 {
+        &self.d2d_factory
     }
 
     /// 取后缓冲并建成 D2D 位图目标（官方 GetBuffer → CreateBitmapFromDxgiSurface）。

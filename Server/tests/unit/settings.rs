@@ -19,8 +19,8 @@ fn temporary_directory() -> std::path::PathBuf {
 fn apply_patch(base: &mut Value, patch: &Value) -> Result<(), String> {
     let directory = temporary_directory();
     std::fs::create_dir(&directory).unwrap();
-    let path = directory.join("weasel.custom.json");
-    std::fs::write(&path, serde_json::to_vec(patch).unwrap()).unwrap();
+    let path = directory.join("weasel.custom.yaml");
+    std::fs::write(&path, weasel_common::yaml::to_string_pretty(&patch)).unwrap();
     let result = overlay_file(base, &path);
     std::fs::remove_dir_all(directory).unwrap();
     result
@@ -42,7 +42,7 @@ fn merged_size_limit_is_atomic() {
 
 #[test]
 fn merges_objects_and_replaces_arrays() {
-    let mut base = json!({"theme":"eleven", "seven", "nested":{"a":1,"b":2}, "list":[1,2]});
+    let mut base = json!({"theme":"eleven", "nested":{"a":1,"b":2}, "list":[1,2]});
     apply_patch(
         &mut base,
         &json!({"theme":"ten","nested":{"b":3},"list":[4]}),
@@ -89,21 +89,22 @@ fn files_follow_precedence_and_missing_files_are_optional() {
     };
     paths.ensure().unwrap();
     let mut warnings = Vec::new();
+    // 没有任何配置文件时用内嵌默认值（weasel.yaml 里的 theme = "official"）
     assert_eq!(
         load(&paths, |w| warnings.push(w))
             .required::<String>(".theme")
             .unwrap(),
-        "eleven"
+        "official"
     );
-    std::fs::write(directory.join("weasel.json"), br#"{"theme":"ten"}"#).unwrap();
+    std::fs::write(directory.join("weasel.yaml"), b"theme: ten\n").unwrap();
     assert_eq!(
         load(&paths, |w| warnings.push(w))
             .required::<String>(".theme")
             .unwrap(),
         "ten"
     );
-    let custom = paths.user_data.join("weasel.custom.json");
-    std::fs::write(&custom, b"\xef\xbb\xbf{\"theme\":\"eleven\"}").unwrap();
+    let custom = paths.user_data.join("weasel.custom.yaml");
+    std::fs::write(&custom, b"\xef\xbb\xbftheme: eleven\n").unwrap();
     assert_eq!(
         load(&paths, |w| warnings.push(w))
             .required::<String>(".theme")

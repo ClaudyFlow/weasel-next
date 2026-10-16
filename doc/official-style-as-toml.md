@@ -4,13 +4,13 @@
 （已逐键逐值核对：**0 处值差异**；仅同义键命名不同，两个名字都认）
 
 ```toml
-# theme.toml —— 主题主文件：布局 + **当前使用哪套皮肤**。
+# theme.yaml —— 主题主文件：布局 + **当前使用哪套皮肤**。
 #
 # 拆分布局：
-#   theme\theme.toml                    布局（[style] / [style.layout]）+ color_scheme 指定用哪套皮肤
-#   theme\<皮肤名>\<皮肤名>.theme.toml     只有配色（[schemes."名字"] 各段的颜色值）
+#   theme\theme.yaml                    布局（[style] / [style.layout]）+ color_scheme 指定用哪套皮肤
+#   theme\<皮肤名>\<皮肤名>.theme.yaml     只有配色（[schemes."名字"] 各段的颜色值）
 #
-# 用户覆盖：%APPDATA%\Rime-Next\theme\theme.toml（可选，优先）
+# 用户覆盖：%APPDATA%\Rime-Next\theme\theme.yaml（可选，优先）
 
 config_version = "0.23"
 color_scheme = "aqua"

@@ -10,7 +10,7 @@ fn deployment_observation_has_a_deadline() {
         std::future::pending::<Result<(), String>>(),
         Duration::ZERO,
     ));
-    assert!(result.unwrap_err().contains("timed out"));
+    assert!(result.unwrap_err().contains("超时"));
 }
 
 #[test]

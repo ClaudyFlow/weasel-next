@@ -76,11 +76,18 @@ pub fn wasm_metadata(bytes: &[u8]) -> Result<Option<Metadata>, String> {
         .transpose()
 }
 /// 解析仓库/程序内嵌的默认值和扩展 Schema，并执行与外部元数据相同的验证。
-fn embedded(defaults: &[u8], rich: &[u8]) -> Result<Metadata, String> {
-    Metadata::from_parts(
-        serde_json::from_slice(defaults).map_err(|e| e.to_string())?,
-        serde_json::from_slice(rich).map_err(|e| e.to_string())?,
-    )
+/// 由内嵌默认值与描述构造元数据。
+///
+/// `defaults_are_toml` 区分两种来源：宿主配置是 TOML（`weasel.yaml`），
+/// 各主题自己的 `config.json` 仍然是 JSON。
+fn embedded(defaults: &[u8], rich: &[u8], defaults_are_toml: bool) -> Result<Metadata, String> {
+    let text = std::str::from_utf8(defaults).map_err(|e| e.to_string())?;
+    let defaults = if defaults_are_toml {
+        weasel_common::yaml::to_value(text).map_err(|e| e.to_string())?
+    } else {
+        serde_json::from_str(text).map_err(|e| e.to_string())?
+    };
+    Metadata::from_parts(defaults, serde_json::from_slice(rich).map_err(|e| e.to_string())?)
 }
 /// 根据运行时目录和当前有效配置构造设置目录。
 ///
@@ -97,8 +104,9 @@ pub fn load(paths: &RuntimePaths, document: &Document) -> Result<Catalog, String
         title: "常规".into(),
         mount: vec![],
         metadata: embedded(
-            include_bytes!("../../weasel.json"),
+            include_bytes!("../../weasel.yaml"),
             include_bytes!("../../weasel.richschema.json"),
+            true,
         )?,
     });
     let mut budget = 64 * 1024 * 1024;
@@ -122,7 +130,7 @@ pub fn load(paths: &RuntimePaths, document: &Document) -> Result<Catalog, String
         let metadata = if path.exists() {
             Metadata::parse(&read(&path, 1024 * 1024, &mut budget)?)?
         } else {
-            embedded(defaults, rich)?
+            embedded(defaults, rich, false)?
         };
         catalog.sections.push(Section {
             title: format!("主题设置 - {id}"),

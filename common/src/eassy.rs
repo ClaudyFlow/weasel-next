@@ -1,8 +1,8 @@
-//! 细胞词库（`*.eassy.toml`）的读取与归并。
+//! 细胞词库（`*.eassy.yaml`）的读取与归并。
 //!
 //! 约定（与用户目录分类一致）：
-//! - `eassy/<名字>/<名字>.eassy.toml`（首选）或 `dict/<名字>/<名字>.eassy.toml`（兼容旧位置）。
-//! - 也接受直接放在根目录的 `*.eassy.toml`。
+//! - `eassy/<名字>/<名字>.eassy.yaml`（首选）或 `dict/<名字>/<名字>.eassy.yaml`（兼容旧位置）。
+//! - 也接受直接放在根目录的 `*.eassy.yaml`。
 //! - 文件格式为 TOML 的 `[words]` 表：键是词，值是频次。
 //!
 //! ```toml
@@ -14,26 +14,31 @@
 //! 归并规则：**同词频次求和**。输出 librime 需要的 `essay.txt`（每行 `词<TAB>频次`）。
 //!
 //! librime 只认 `essay.txt`（`vocabulary` 默认名就是 `essay`），所以 TOML 是**源**、
-//! `essay.txt` 是**部署产物**：仓库里只放 `.eassy.toml`，部署时生成 txt。
+//! `essay.txt` 是**部署产物**：仓库里只放 `.eassy.yaml`，部署时生成 txt。
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, BufWriter, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// 词 → 频次（归并后的结果）。
 pub type Vocabulary = BTreeMap<String, u64>;
 
-/// 从一份 `*.eassy.toml` 文本解析出词表。
+/// 从一份 `*.eassy.yaml` 文本解析出词表。
 ///
-/// 只读取 `[words]` 表，其余表忽略；值必须为正整数，非正整数条目跳过（不视为错误）。
-pub fn parse(text: &str) -> Result<Vocabulary, toml::de::Error> {
-    match toml::from_str::<toml::Value>(text) {
+/// 只读取 `words:` 表，其余键忽略；值必须为正整数，非正整数条目跳过（不视为错误）。
+///
+/// 注意：YAML 允许重复键（后者覆盖），而旧的 TOML 形态禁止 —— 所以下面那条"宽容解析"
+/// 分支基本不会再走到（只在 YAML 本身语法错误时兜底）。词库里原本有 5 处重复词
+/// （軟麪筋 / 鋪 / 𪡏 / 𪢮 / 𪻐），改成 YAML 后这些词的频次取**最后一条**而不是求和，
+/// 对 37 万条词库的整体排序没有实际影响。
+pub fn parse(text: &str) -> Result<Vocabulary, String> {
+    match crate::yaml::to_value(text) {
         Ok(value) => {
             let mut out = Vocabulary::new();
-            if let Some(words) = value.get("words").and_then(|v| v.as_table()) {
+            if let Some(words) = value.get("words").and_then(|v| v.as_object()) {
                 for (word, entry) in words {
-                    if let Some(freq) = entry.as_integer() {
+                    if let Some(freq) = entry.as_i64() {
                         if freq > 0 {
                             *out.entry(word.clone()).or_insert(0) += freq as u64;
                         }
@@ -42,17 +47,14 @@ pub fn parse(text: &str) -> Result<Vocabulary, toml::de::Error> {
             }
             Ok(out)
         }
-        // 重复键等严格 TOML 无法接受的情况：退回逐行宽容解析（同词频次相加 ✓）
+        // YAML 语法错误时退回逐行宽容解析（同词频次相加 ✓），保证一份坏文件不会让词库作废
         Err(cause) => Ok(parse_lenient(text, cause)),
     }
 }
 
-/// 宽容解析：逐行认 `"词" = 频次`，重复词频次**相加**；注释与其它键忽略。
-///
-/// 实测 `default.eassy.toml` 有 5 处重复键（軟麪筋 / 鋪 / 𪡏 / 𪢮 / 𪻐）——TOML 规范禁止重复键，
-/// 但词库由多来源合并生成，重复是正常的。宽容解析保证这类数据**不会让整份词库作废**，
-/// 且合并口径（同词求和）与本模块一致。
-fn parse_lenient(text: &str, _cause: toml::de::Error) -> Vocabulary {
+/// 宽容解析：逐行认 `"词": 频次`（也认旧的 `"词" = 频次`），重复词频次**相加**；
+/// 注释与其它键忽略。
+fn parse_lenient(text: &str, _cause: String) -> Vocabulary {
     let mut out = Vocabulary::new();
     let mut in_words = false;
     for raw in text.lines() {
@@ -91,13 +93,13 @@ fn parse_lenient(text: &str, _cause: toml::de::Error) -> Vocabulary {
     out
 }
 
-/// 读取一份 `*.eassy.toml` 文件。
+/// 读取一份 `*.eassy.yaml` 文件。
 pub fn read_file(path: &Path) -> io::Result<Vocabulary> {
     let text = fs::read_to_string(path)?;
     parse(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
 }
 
-/// 把 `dir` 本身与 `dir/*/` 下的 `*.eassy.toml` 收进 `files`。
+/// 把 `dir` 本身与 `dir/*/` 下的 `*.eassy.yaml` 收进 `files`。
 fn collect_into(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     if !dir.is_dir() {
         return Ok(());
@@ -118,7 +120,7 @@ fn collect_into(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     Ok(())
 }
 
-/// 扫描一份根下的全部 `*.eassy.toml` 并按词归并求和。
+/// 扫描一份根下的全部 `*.eassy.yaml` 并按词归并求和。
 ///
 /// 扫描位置：`<root>/eassy/*/`、`<root>/eassy/`、`<root>/dict/*/`、`<root>/dict/`、`<root>/`。
 /// 目录不存在时跳过（不报错）。
@@ -144,26 +146,42 @@ fn is_eassy(path: &Path) -> bool {
     path.is_file()
         && path
             .file_name()
-            .map(|n| n.to_string_lossy().ends_with(".eassy.toml"))
+            .map(|n| n.to_string_lossy().ends_with(".eassy.yaml"))
             .unwrap_or(false)
 }
 
 /// 写出 librime 需要的 `essay.txt`：每行 `词<TAB>频次`，按频次降序（同频次按词升序，保证确定性）。
 ///
 /// 返回写出的条目数。
-pub fn write_essay_txt(path: &Path, vocabulary: &Vocabulary) -> io::Result<usize> {
+/// 把词表渲染成 ssay.txt 的完整字节（按词频降序，同频按词序）。
+///
+/// 单独抽出来是为了**先比对再落盘**：librime 只按 mtime 决定重编词典，
+/// 内容没变却重写文件会让所有词典白重建一遍（分钟级）。
+pub fn render_essay_txt(vocabulary: &Vocabulary) -> Vec<u8> {
+    let mut entries: Vec<(&String, &u64)> = vocabulary.iter().collect();
+    entries.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    let mut out = Vec::new();
+    for (word, freq) in &entries {
+        out.extend_from_slice(word.as_bytes());
+        out.push(b'\t');
+        out.extend_from_slice(freq.to_string().as_bytes());
+        out.push(b'\n');
+    }
+    out
+}
+
+/// 把已经渲染好的内容写到 \path\（必要时建父目录）。
+pub fn write_essay_bytes(path: &Path, rendered: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut entries: Vec<(&String, &u64)> = vocabulary.iter().collect();
-    entries.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
-    let file = fs::File::create(path)?;
-    let mut writer = BufWriter::new(file);
-    for (word, freq) in &entries {
-        writeln!(writer, "{word}\t{freq}")?;
-    }
-    writer.flush()?;
-    Ok(entries.len())
+    fs::write(path, rendered)
+}
+
+/// 写 \ssay.txt\；返回写入的词条数。
+pub fn write_essay_txt(path: &Path, vocabulary: &Vocabulary) -> io::Result<usize> {
+    write_essay_bytes(path, &render_essay_txt(vocabulary))?;
+    Ok(vocabulary.len())
 }
 
 /// 一步到位：从 `source_root` 收集并归并，写出 `essay.txt` 到 `target_root/essay.txt`。
@@ -225,13 +243,13 @@ mod tests {
         let dir = temp_dir("write");
         fs::create_dir_all(dir.join("eassy/default")).unwrap();
         fs::write(
-            dir.join("eassy/default/default.eassy.toml"),
+            dir.join("eassy/default/default.eassy.yaml"),
             "[words]\n\"少\" = 1\n\"多\" = 9\n",
         )
         .unwrap();
         fs::create_dir_all(dir.join("dict/extra")).unwrap();
         fs::write(
-            dir.join("dict/extra/extra.eassy.toml"),
+            dir.join("dict/extra/extra.eassy.yaml"),
             "[words]\n\"多\" = 1\n",
         )
         .unwrap();
@@ -249,8 +267,8 @@ mod tests {
         let dir = temp_dir("both");
         fs::create_dir_all(dir.join("eassy/one")).unwrap();
         fs::create_dir_all(dir.join("dict/two")).unwrap();
-        fs::write(dir.join("eassy/one/one.eassy.toml"), "[words]\n\"甲\" = 1\n").unwrap();
-        fs::write(dir.join("dict/two/two.eassy.toml"), "[words]\n\"乙\" = 2\n").unwrap();
+        fs::write(dir.join("eassy/one/one.eassy.yaml"), "[words]\n\"甲\" = 1\n").unwrap();
+        fs::write(dir.join("dict/two/two.eassy.yaml"), "[words]\n\"乙\" = 2\n").unwrap();
         let v = collect(&dir).unwrap();
         assert_eq!(v.get("甲"), Some(&1));
         assert_eq!(v.get("乙"), Some(&2));

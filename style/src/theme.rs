@@ -1,11 +1,11 @@
-//! 读取我们约定的主题文件 `theme\<名字>.theme.toml`（例如 `default.theme.toml`）。
+//! 读取我们约定的主题文件 `theme\<名字>.theme.yaml`（例如 `default.theme.yaml`）。
 //!
 //! 这份文件由 `theme-toml` 这个 bin 从官方 `weasel.yaml` 生成（见 `src/bin/theme_toml.rs`），
 //! 内容是官方 style 段与 layout 段的全部字段，加上 `preset_color_schemes` 里每一套配色。
-//! librime 已打补丁把 `.theme.toml` 归入 `theme/` 子目录，因此运行期路径是：
+//! librime 已打补丁把 `.theme.yaml` 归入 `theme/` 子目录，因此运行期路径是：
 //!
-//! * 共享数据：`<程序文件夹>\Rime-Next\theme\default.theme.toml`
-//! * 用户覆盖：`%APPDATA%\Rime-Next\theme\default.theme.toml`（可选，优先）
+//! * 共享数据：`<程序文件夹>\Rime-Next\theme\default.theme.yaml`
+//! * 用户覆盖：`%APPDATA%\Rime-Next\theme\default.theme.yaml`（可选，优先）
 //!
 //! 设计要点与官方一致：**皮肤是数据不是代码**。本模块只负责把文件读成结构体，
 //! 再转换成与 `weasel.yaml` 完全相同的 [`WeaselConfig`]，这样消费方（渲染器、设置界面）
@@ -15,7 +15,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::{ColorScheme, Layout, UIStyle, WeaselConfig};
+use crate::{ColorScheme, UIStyle, WeaselConfig};
 
 /// TOML 里的 `[style]` 段。字段与官方 style 键一一对应，缺项用官方默认值补齐。
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -77,6 +77,8 @@ pub struct LayoutSection {
     pub linespacing: Option<i32>,
     pub baseline: Option<i32>,
     pub layout_type_mode: Option<i32>,
+    /// 官方 `style/layout/type` 的字符串形式（vertical / horizontal / …）
+    pub layout_type: Option<String>,
 }
 
 /// TOML 里的一套配色 `[schemes.<id>]`。颜色写成 `"0xRRGGBBAA"` 之类的字符串。
@@ -106,6 +108,7 @@ pub struct SchemeSection {
     pub hilited_candidate_shadow_color: Option<String>,
     pub hilited_label_color: Option<String>,
     pub hilited_comment_text_color: Option<String>,
+    pub hilited_mark_color: Option<String>,
     pub nextpage_color: Option<String>,
     pub prevpage_color: Option<String>,
 }
@@ -122,14 +125,14 @@ pub struct ThemeFile {
 }
 
 /// 解析主题 TOML 文本。
-pub fn parse_toml(text: &str) -> Result<ThemeFile, toml::de::Error> {
-    toml::from_str(text)
+pub fn parse_theme(text: &str) -> Result<ThemeFile, String> {
+    weasel_common::yaml::from_str(text)
 }
 
 /// 一步到位：解析文件。
 pub fn parse_file(path: impl AsRef<Path>) -> Result<ThemeFile, Box<dyn std::error::Error>> {
     let text = std::fs::read_to_string(path)?;
-    Ok(parse_toml(&text)?)
+    Ok(parse_theme(&text)?)
 }
 
 impl ThemeFile {
@@ -209,6 +212,7 @@ impl ThemeFile {
                 take_layout!(linespacing);
                 take_layout!(baseline);
                 take_layout!(layout_type_mode);
+                take_layout!(layout_type);
             }
         }
 
@@ -218,15 +222,19 @@ impl ThemeFile {
         config.style.color_scheme_dark = self.color_scheme_dark;
 
         for (id, section) in self.schemes {
+            let color_format = section.color_format.clone().unwrap_or_default();
+            let format = crate::ColorFormat::from_name(&color_format);
             let mut scheme = ColorScheme {
                 name: section.name.unwrap_or_else(|| id.clone()),
                 author: section.author.unwrap_or_default(),
-                color_format: section.color_format.unwrap_or_default(),
+                color_format,
                 ..ColorScheme::default()
             };
-            let mut put = |raw: Option<String>, slot: &mut u32| {
+            let put = |raw: Option<String>, slot: &mut u32| {
                 if let Some(text) = raw {
-                    *slot = crate::parse_color(&text);
+                    if let Some(value) = crate::color::parse(&text, format) {
+                        *slot = value;
+                    }
                 }
             };
             put(section.back_color, &mut scheme.back_color);
@@ -249,12 +257,30 @@ impl ThemeFile {
             put(section.hilited_candidate_shadow_color, &mut scheme.hilited_candidate_shadow_color);
             put(section.hilited_label_color, &mut scheme.hilited_label_color);
             put(section.hilited_comment_text_color, &mut scheme.hilited_comment_text_color);
+            put(section.hilited_mark_color, &mut scheme.hilited_mark_color);
             put(section.nextpage_color, &mut scheme.nextpage_color);
             put(section.prevpage_color, &mut scheme.prevpage_color);
-            config.schemes.insert(id, scheme);
+            config.schemes.insert(id, scheme.resolve());
         }
 
         config
+    }
+}
+
+/// 读主题里的"编码画在哪"这一个开关（官方 `style/inline_preedit`）。
+///
+/// 语义与官方一致：**false = 组字串画进候选窗**（官方出厂默认），true = 画在宿主应用里。
+/// 这是主题（布局）的一部分，所以来源是 `theme.yaml`，**不是**宿主配置：
+///
+/// * 用户目录 `%APPDATA%\Rime-Next\theme\theme.yaml` 优先；
+/// * 其次程序文件夹 `<程序>\Rime-Next\theme\theme.yaml`；
+/// * 都没有（或解析失败）就用官方出厂值 `false`。
+///
+/// `shared` 传程序文件夹里的 `Rime-Next`，`user` 传 `%APPDATA%\Rime-Next`。
+pub fn inline_preedit(shared: &Path, user: &Path, name: &str) -> bool {
+    match load_theme(shared, user, name) {
+        Ok(Some(config)) => config.style.inline_preedit,
+        _ => UIStyle::default().inline_preedit,
     }
 }
 
@@ -263,12 +289,12 @@ impl ThemeFile {
 /// `shared` 传程序文件夹里的 `Rime-Next`，`user` 传 `%APPDATA%\Rime-Next`，
 /// `name` 是主题名（例如 `default`）。
 pub fn theme_candidates(shared: &Path, user: &Path, name: &str) -> Vec<PathBuf> {
-    let file = format!("{name}.theme.toml");
+    let file = format!("{name}.theme.yaml");
     vec![
-        // 树结构：theme/<名字>/<名字>.theme.toml（首选）
+        // 树结构：theme/<名字>/<名字>.theme.yaml（首选）
         user.join("theme").join(name).join(&file),
         shared.join("theme").join(name).join(&file),
-        // 兼容旧的扁平位置：theme/<名字>.theme.toml
+        // 兼容旧的扁平位置：theme/<名字>.theme.yaml
         user.join("theme").join(&file),
         shared.join("theme").join(file),
     ]
@@ -287,12 +313,12 @@ fn merge_theme(main: ThemeFile, skin: ThemeFile) -> ThemeFile {
     }
 }
 
-/// 主题主文件的位置：`theme\theme.toml`（用户覆盖优先，其次共享）。
+/// 主题主文件的位置：`theme\theme.yaml`（用户覆盖优先，其次共享）。
 pub fn theme_main_candidates(shared: &Path, user: &Path) -> Vec<PathBuf> {
-    vec![user.join("theme").join("theme.toml"), shared.join("theme").join("theme.toml")]
+    vec![user.join("theme").join("theme.yaml"), shared.join("theme").join("theme.yaml")]
 }
 
-/// 读主题：主文件（`theme\theme.toml`）+ 皮肤文件（`theme\<名字>\<名字>.theme.toml`）合并。
+/// 读主题：主文件（`theme\theme.yaml`）+ 皮肤文件（`theme\<名字>\<名字>.theme.yaml`）合并。
 ///
 /// 两者都可缺：只有主文件时按旧行为直接用；只有皮肤文件时也能工作。都没有则返回 `None`。
 pub fn load_theme(
@@ -327,44 +353,46 @@ pub fn load_theme(
 mod tests {
     use super::*;
 
-/// 拆分后的主题主文件（布局 + 用哪套皮肤）。
-const DEFAULT_THEME_MAIN: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/theme/theme.toml");
+    /// 出厂皮肤文件（只有配色；布局与配色选择属于用户设置）。
     const DEFAULT_THEME: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/theme/default/default.theme.toml");
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/theme/default/default.theme.yaml");
 
     #[test]
-    fn parses_generated_default_theme() {
-        // 拆分后要读两份再合并：theme.toml（布局 + 用哪套皮肤）+ 皮肤文件（配色）。
-        let main = parse_file(DEFAULT_THEME_MAIN).expect("theme.toml 必须能解析");
-        let skin = parse_file(DEFAULT_THEME).expect("default.theme.toml 必须能解析");
-        let config = merge_theme(main, skin).into_config();
-        println!("config_version = {:?}", config.config_version);
-        println!("当前配色 = {:?}", config.style.color_scheme);
+    fn factory_skin_stands_alone_with_official_defaults() {
+        // 出厂侧不再分发 theme.yaml（布局/配色选择是用户设置），所以皮肤文件必须能单独用：
+        // 配色来自文件，布局走 UIStyle::default()（= 官方 weasel.yaml 的出厂值）。
+        let skin = parse_file(DEFAULT_THEME).expect("default.theme.yaml 必须能解析");
+        let config = merge_theme(ThemeFile::default(), skin).into_config();
         println!("配色数量 = {}", config.schemes.len());
-        println!("字体 = {:?} {}", config.style.font_face, config.style.font_point);
         println!("布局 = {:?}", config.style.layout);
-        let aqua = config.scheme("aqua");
-        println!("aqua = {:?} 底色 {:#010x}", aqua.name, aqua.back_color);
+        println!("字体 = {:?} {}", config.style.font_face, config.style.font_point);
 
-        assert_eq!(config.config_version, "0.23");
-        assert_eq!(config.style.color_scheme, "aqua");
         assert_eq!(config.schemes.len(), 36, "官方 36 套配色必须齐全");
         assert_eq!(config.style.font_face, "Microsoft YaHei");
         assert_eq!(config.style.font_point, 14);
+        // 布局缺省必须等于官方 weasel.yaml，否则"没写 theme.yaml"就会渲染走样
         assert_eq!(config.style.layout.min_width, 160);
         assert_eq!(config.style.layout.border, 3);
-        assert_eq!(config.style.layout.round_corner, 4);
+        assert_eq!(config.style.layout.round_corner, 4, "官方 weasel.yaml 的 round_corner");
         assert_eq!(config.style.layout.corner_radius, 4);
         assert_eq!(config.style.layout.shadow_offset_x, 4);
-        assert!(!aqua.name.is_empty(), "配色的显示名不能为空");
-        // 每套配色都要能解出非零颜色（官方文件里就是有值的）
+    }
+
+    #[test]
+    fn skin_colors_keep_official_alpha_semantics() {
+        let skin = parse_file(DEFAULT_THEME).expect("default.theme.yaml 必须能解析");
+        let config = merge_theme(ThemeFile::default(), skin).into_config();
+        let aqua = config.scheme("aqua");
+        // 不透明黑与全透明必须分得开（生成器写 6 位/8 位就是为这个）
+        assert_eq!(aqua.text_color >> 24, 0xff, "text_color 0x000000 应是不透明黑");
+        assert_eq!(aqua.shadow_color, 0, "shadow_color 0x00000000 应是全透明");
+        // 高亮候选底色 0xfa3a0a（abgr）→ RGB(0x0a,0x3a,0xfa)
+        assert_eq!(aqua.hilited_candidate_back_color, 0xff0a_3afa);
         for (id, scheme) in &config.schemes {
-            let any = scheme.back_color
-                | scheme.text_color
-                | scheme.candidate_text_color
-                | scheme.hilited_candidate_back_color;
-            assert!(any != 0, "配色 {id} 没有解出任何颜色");
+            assert!(
+                scheme.text_color >> 24 == 0xff,
+                "配色 {id} 的文字色应被补齐为不透明"
+            );
         }
     }
 
@@ -373,7 +401,7 @@ const DEFAULT_THEME_MAIN: &str =
         let shared = Path::new("C:\\share");
         let user = Path::new("C:\\user");
         let candidates = theme_candidates(shared, user, "default");
-        assert_eq!(candidates[0], PathBuf::from("C:\\user\\theme\\default\\default.theme.toml"));
-        assert_eq!(candidates[1], PathBuf::from("C:\\share\\theme\\default\\default.theme.toml"));
+        assert_eq!(candidates[0], PathBuf::from("C:\\user\\theme\\default\\default.theme.yaml"));
+        assert_eq!(candidates[1], PathBuf::from("C:\\share\\theme\\default\\default.theme.yaml"));
     }
 }

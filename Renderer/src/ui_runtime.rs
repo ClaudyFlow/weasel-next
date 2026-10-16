@@ -209,7 +209,7 @@ fn normalized_renderer_settings(
     let Some(mut root) = config.query(".").ok().flatten().cloned() else {
         return config.clone();
     };
-    let defaults: serde_json::Value = serde_json::from_str(include_str!("../../weasel.json"))
+    let defaults: serde_json::Value = weasel_common::yaml::to_value(include_str!("../../weasel.yaml"))
         .expect("embedded settings must be valid JSON");
     let Some(root_object) = root.as_object_mut() else {
         return weasel_common::settings::ConfigSnapshot::new(defaults);
@@ -219,12 +219,6 @@ fn normalized_renderer_settings(
         .expect("embedded settings root must be an object");
     let mut warnings = Vec::new();
     let checks = [
-        (
-            "inline_preedit",
-            root_object
-                .get("inline_preedit")
-                .is_some_and(serde_json::Value::is_boolean),
-        ),
         (
             "themeSettings",
             root_object
@@ -621,7 +615,6 @@ fn run_ui(
         let _ = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let config =
             config.with_theme_defaults(registration.name(), registration.default_settings()?)?;
-        let inline_preedit = config.required::<bool>(".inline_preedit")?;
         let indicator_duration =
             Duration::from_millis(config.required::<u64>(".input_mode_indicator_duration_ms")?);
         let creation = registration.create(mode, &config);
@@ -629,9 +622,11 @@ fn run_ui(
             crate::notifications::report(registration.name(), notice);
         }
         let backend = creation.backend?;
-        if !inline_preedit && !registration.capabilities().preedit {
+        // 预编辑画在哪由主题决定（theme.yaml 的 style/inline_preedit）：引擎只在需要
+        // 外置预编辑时才把 preedit 放进快照；主题不支持外置时这里记一条便于排查。
+        if !registration.capabilities().preedit {
             crate::diagnostics::record(format_args!(
-                "theme {} does not support preedit; using inline preedit",
+                "theme {} does not support preedit; engine must keep preedit inline",
                 registration.name()
             ));
         }
@@ -654,9 +649,11 @@ fn run_ui(
         // layout leaves the controller's previous preview alive.
         if mode == UiMode::Preview {
             let mut snapshot = crate::preview::synthetic_snapshot();
-            if !inline_preedit && registration.capabilities().preedit {
+            // 预览是"这主题能画成什么样"的展示面：只要主题声明支持预编辑就带上一条，
+            // 这样 `inline_preedit` 的两种配法都能在预览里看到（实时路径仍按配置来）。
+            if registration.capabilities().preedit {
                 snapshot.preedit = Some(weasel_common::message::RenderPreedit {
-                    text: "nihao".into(),
+                    text: "jie m".into(),
                     cursor_utf16: 5,
                 });
             }

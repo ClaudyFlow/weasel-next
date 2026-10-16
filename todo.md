@@ -9,8 +9,8 @@
 - 官方渲染器源码已入库：`theme\official\reference\`（24 文件 230 KB + README 对应表）
 - 两份对照文档：`doc\official-layout-reference.md`、`doc\official-style-as-toml.md`
 - librime 改动已归档：`librime\weasel-next.patch`（9 文件）
-- `installation.yaml` → `installation.toml`（installation_id 未变）
-- 分层约定：出厂只读在**程序文件夹**、用户设置在**用户文件夹**（`theme.toml` / `schema.toml`）
+- `installation.yaml` → `installation.yaml`（installation_id 未变）
+- 分层约定：出厂只读在**程序文件夹**、用户设置在**用户文件夹**（`theme.yaml` / `schema.yaml`）
 
 ## P0 —— 渲染（照官方 `WeaselPanel.cpp`）
 
@@ -20,13 +20,13 @@
    - **编译报错**：`PCWSTR` 未导入 → 改成 `windows_core::PCWSTR(face.as_ptr())` 即可
    - 症状：注音方案下候选画成 `Y / ȶ / ɿ`（`ㄚ` 缺字形被回退）
 2. **预编辑行未画** ✗ —— `Layout::new_with_preedit(widths, preedit_w)` 已就绪；调用处仍传 0，`paint` 也没画。照官方 `_DrawPreedit`（`WeaselPanel.cpp:511`，尺寸 `L539-541`）：白底块 + 文字 + 右端小三角
-3. **布局值仍写死** ✗ —— `logic.rs` 里是 `MARGIN 12 / ROW_GAP 5 / LABEL_GAP 4 / MIN_WIDTH 160`（= 官方 aqua 值 ✓）；应接 `theme.toml` 的 `Metrics`（骨架见参照文档第六节）
+3. **布局值仍写死** ✗ —— `logic.rs` 里是 `MARGIN 12 / ROW_GAP 5 / LABEL_GAP 4 / MIN_WIDTH 160`（= 官方 aqua 值 ✓）；应接 `theme.yaml` 的 `Metrics`（骨架见参照文档第六节）
 4. 未做：`align_type` 垂直居中（center/bottom）· `comment` 列 · `mark` 与页码箭头（aqua 全透明，官方也不画）
 
 ## P1 —— 数据/引擎
 
 5. `user.yaml` → `user.toml`：配置层加 `.toml` 分支（`config_component.cc:166` 后缀 + `config_data.cc` 解析分支，需重建 rime.dll）
-6. 程序文件夹根目录 7 个 yaml 迁进分类目录；`weasel.yaml` / `default.yaml` 内容已被 `theme.toml` / `schema.toml` 接管，可退休
+6. 程序文件夹根目录 7 个 yaml 迁进分类目录；`weasel.yaml` / `default.yaml` 内容已被 `theme.yaml` / `schema.yaml` 接管，可退休
 7. 引擎侧 `eassy.txt` 写出位置改到用户目录（现在每次启动报 `拒绝访问 (os error 5)`）
 8. 引擎启动前设 `GLOG_minloglevel=1`，压掉 librime 200+ 条 INFO（WARNING/ERROR 保留）
 

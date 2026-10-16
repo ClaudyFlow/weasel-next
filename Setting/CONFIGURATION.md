@@ -1,10 +1,11 @@
 # 配置描述文件
 
-- `xxx.json`：默认配置的唯一来源。
-- `xxx.richschema.json`：人工维护的标准约束和界面提示。
-- `xxx.schema.json`：生成给编辑器使用的标准 JSON Schema，不手工修改。
+- `xxx.toml`：默认配置的唯一来源（手写，不再由脚本生成）。
+- `xxx.richschema.json`：人工维护的标准约束和界面提示（设置界面按它渲染）。
 
-运行 `node script/generate-schemas.mjs` 生成，传 `--check` 检查生成结果是否过期。
+原先还有一份 `xxx.schema.json`（给编辑器用的标准 JSON Schema），由
+`script/generate-schemas.mjs` 从上面两份生成；**该生成器与生成物都已删除** ——
+默认值只有 `xxx.json` 一处，避免"同一份默认值维护两遍"。
 
 richschema 的 `formatVersion` 当前为 1；`schema` 使用标准 JSON Schema，
 `ui.fields` 以主题局部的 JSON Pointer 为键，存放排序、控件、分组等界面提示。

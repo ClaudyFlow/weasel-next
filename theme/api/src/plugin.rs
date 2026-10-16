@@ -140,6 +140,17 @@ unsafe fn decode<T: DeserializeOwned>(data: *const u8, len: usize) -> Result<T, 
         .map_err(|e| e.to_string())
 }
 
+/// 把 panic 载荷转成可读文本（`&str` / `String` 两种情况，其他给个占位）。
+fn describe_panic(payload: &Box<dyn core::any::Any + Send>) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_string()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "非字符串载荷".to_string()
+    }
+}
+
 /// 查询工厂元数据并编码为 JSON 缓冲区。
 ///
 /// 工厂 panic 会转换为包含错误文本的结果；JSON 编码失败或超过 [`MAX_BYTES`]
@@ -152,7 +163,9 @@ pub fn describe(factory: &dyn ThemeFactory) -> Buffer {
             defaults: factory.default_settings()?,
         })
     }))
-    .unwrap_or_else(|_| Err("theme metadata panicked".into()));
+    .unwrap_or_else(|payload| {
+        Err(format!("theme metadata panicked: {}", describe_panic(&payload)))
+    });
     encode(&result)
 }
 
@@ -208,7 +221,9 @@ pub unsafe fn create(
         }
         Ok::<_, String>(reply)
     }))
-    .unwrap_or_else(|_| Err("theme creation panicked".into()));
+    .unwrap_or_else(|payload| {
+        Err(format!("theme creation panicked: {}", describe_panic(&payload)))
+    });
     encode(&result.unwrap_or_else(|error| Reply {
         error: Some(error),
         ..Default::default()
@@ -277,10 +292,12 @@ pub unsafe fn invoke(handle: *mut c_void, data: *const u8, len: usize) -> Buffer
             error: Some(error),
             ..Default::default()
         },
-        Err(_) => {
+        Err(payload) => {
             instance.faulted = true;
             Reply {
-                error: Some("theme operation panicked".into()),
+                // 带上 panic 内容：以前只有一句 "theme operation panicked"，
+                // 渲染器日志里看不出是哪一行、什么原因（RefCell 双重借用就这样被埋过一次）。
+                error: Some(format!("theme operation panicked: {}", describe_panic(&payload))),
                 ..Default::default()
             }
         }

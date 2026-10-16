@@ -8,7 +8,7 @@
 //!   就是官方简介框显示的三行。
 //! * **已选方案** = `default.yaml` 的 `schema_list`（叠加用户补丁后的结果）。
 //!   官方的列表里，已选中的排前面并打勾，其余可用方案接在后面不打勾。
-//! * **写回** = `patch: schema_list:` 一段 YAML 列表，写进 `default.custom.yaml`，
+//! * **写回** = 用户目录 `schema/schema.yaml`（勾选清单 + 当前方案）；引擎读它再落到 librime，
 //!   与官方 `customize_string("schema_list", ...)` 落到同一个位置。
 
 use std::collections::BTreeMap;
@@ -137,10 +137,10 @@ fn read_schema_list(text: &str) -> Vec<String> {
 }
 
 /// 列出全部方案：已选中的在前（按 `schema_list` 顺序），其余按 id 排在后面。
-/// 列出全部方案：已选中的在前（按 `schema.toml` 里的顺序，即 a–z），其余按 id 排在后面。
+/// 列出全部方案：已选中的在前（按 `schema.yaml` 里的顺序，即 a–z），其余按 id 排在后面。
 ///
 /// 方案来自**两处** `schema\` 目录：程序文件夹的出厂方案与用户文件夹的方案，
-/// 同名以用户那份为准。已选清单读 `schema.toml`（用户目录优先、回退出厂）。
+/// 同名以用户那份为准。已选清单读 `schema.yaml`（用户目录优先、回退出厂）。
 pub fn list_schemas(shared: &Path, user: &Path) -> io::Result<Vec<SchemaInfo>> {
     let mut available: BTreeMap<String, (String, String, String)> = BTreeMap::new();
     // 先出厂、后用户：同名时用户的覆盖出厂的。
@@ -172,7 +172,7 @@ pub fn list_schemas(shared: &Path, user: &Path) -> io::Result<Vec<SchemaInfo>> {
         }
     }
 
-    // 已选清单：读 schema.toml（用户目录那份优先，回退出厂那份）。不再读写任何 YAML。
+    // 已选清单：读 schema.yaml（用户目录那份优先，回退出厂那份）。不再读写任何 YAML。
     let selected = read_schema_toml(shared, user);
     let mut rows = Vec::with_capacity(available.len());
     for id in &selected {
@@ -226,47 +226,131 @@ mod tests {
 
 }
 
-// ---------------------------------------------------------------- schema.toml
+// ---------------------------------------------------------------- schema.yaml
 
-/// 读 `schema.toml`：一行一个方案，键是方案 id、值表示是否勾选。
+/// `schema.yaml` 的内容：**勾选了哪些方案** + **当前用的是哪个**。
 ///
-/// 用户目录那份优先（`%APPDATA%\Rime-Next\schema\schema.toml`），没有就用
-/// 程序文件夹的出厂那份。返回**按 a–z 排序**的已选 id；解析失败当作"没有已选"。
-pub fn read_schema_toml(shared: &Path, user: &Path) -> Vec<String> {
-    let candidates = [user.join("schema").join("schema.toml"), shared.join("schema").join("schema.toml")];
+/// 这是"方案信息"的唯一落点（用户目录 `%APPDATA%\Rime-Next\schema\schema.yaml`）：
+/// 选项清单给引擎拿去写 rime 的 `default.custom.yaml`，`active` 给引擎在新会话上
+/// `select_schema` —— 两者都从这一份文件读，不再散落在 YAML 里。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SchemaTable {
+    /// 当前使用的方案 id；空表示"还没定过"，交给 rime 自己的记忆。
+    pub active: Option<String>,
+    /// 勾选清单，**按方案菜单顺序**排列（第一条是 rime 没有记忆时的默认方案）。
+    ///
+    /// 顺序必须保真：早先版本用 map 存，键会自动按 a–z 排序，`bopomofo` 跑到第一个，
+    /// 一旦 rime 丢了"上次用的方案"就会拿注音当默认，打字出怪字。
+    pub schemas: Vec<String>,
+}
+
+impl SchemaTable {
+    /// 已勾选的方案 id（保持清单顺序）。
+    pub fn selected_ids(&self) -> Vec<String> {
+        self.schemas.clone()
+    }
+    /// 记下当前方案。
+    pub fn set_active(&mut self, id: impl Into<String>) {
+        let id = id.into();
+        self.active = if id.is_empty() { None } else { Some(id) };
+    }
+}
+
+/// 读 `schema.yaml`：用户目录优先，其次程序文件夹的出厂那份。
+///
+/// 解析失败或文件缺失都返回空表（= 没有偏好），由调用方决定回退行为。
+pub fn read_schema_table(shared: &Path, user: &Path) -> SchemaTable {
+    let candidates = [
+        user.join("schema").join("schema.yaml"),
+        shared.join("schema").join("schema.yaml"),
+    ];
     for path in candidates {
         let Ok(text) = fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(table) = toml::from_str::<std::collections::BTreeMap<String, bool>>(&text) else {
-            continue;
+        // 新格式（数组）优先
+        if let Ok(table) = weasel_common::yaml::from_str::<SchemaTable>(&text) {
+            if table.active.is_some() || !table.schemas.is_empty() {
+                return table;
+            }
+        }
+        // 兼容早期两种写法：`[schemas]` 表或纯键值表（都丢了顺序 →
+        // 用出厂 default.yaml 的顺序把勾选过的挑出来，保证默认方案不出错）
+        let flat: Option<std::collections::BTreeMap<String, bool>> = {
+            #[derive(serde::Deserialize, Default)]
+            #[serde(default)]
+            struct LegacyTable {
+                active: Option<String>,
+                schemas: std::collections::BTreeMap<String, bool>,
+            }
+            match weasel_common::yaml::from_str::<LegacyTable>(&text) {
+                Ok(legacy) if !legacy.schemas.is_empty() => {
+                    let mut table = SchemaTable {
+                        active: legacy.active,
+                        schemas: Vec::new(),
+                    };
+                    let factory = read_schema_list(
+                        &fs::read_to_string(shared.join("default.yaml")).unwrap_or_default(),
+                    );
+                    for id in factory {
+                        if legacy.schemas.get(&id).copied().unwrap_or(false) {
+                            table.schemas.push(id);
+                        }
+                    }
+                    for (id, selected) in &legacy.schemas {
+                        if *selected && !table.schemas.contains(id) {
+                            table.schemas.push(id.clone());
+                        }
+                    }
+                    if !table.schemas.is_empty() {
+                        return table;
+                    }
+                    None
+                }
+                _ => weasel_common::yaml::from_str::<std::collections::BTreeMap<String, bool>>(&text).ok(),
+            }
         };
-        let mut ids: Vec<String> = table
-            .into_iter()
-            .filter(|(_, selected)| *selected)
-            .map(|(id, _)| id)
-            .collect();
-        ids.sort();
-        return ids;
+        if let Some(flat) = flat {
+            let factory = read_schema_list(
+                &fs::read_to_string(shared.join("default.yaml")).unwrap_or_default(),
+            );
+            let mut table = SchemaTable::default();
+            for id in factory {
+                if flat.get(&id).copied().unwrap_or(false) {
+                    table.schemas.push(id);
+                }
+            }
+            for (id, selected) in &flat {
+                if *selected && !table.schemas.contains(id) {
+                    table.schemas.push(id.clone());
+                }
+            }
+            if !table.schemas.is_empty() {
+                return table;
+            }
+        }
     }
-    Vec::new()
+    SchemaTable::default()
 }
 
-/// 写 `schema.toml`：一行一个方案（键 = 方案 id、值 = `true`），**一律按 a–z 排序**。
-///
-/// 只写已选的（未选的不出现，与"未列出的视为未勾选"一致）。程序文件夹只读，
-/// 所以调用方传进来的应当是用户目录那份路径。
-pub fn write_schema_toml(path: &Path, ids: &[String]) -> io::Result<()> {
-    let mut sorted: Vec<&String> = ids.iter().collect();
-    sorted.sort();
-    sorted.dedup();
+/// 读勾选清单（兼容旧调用点）。
+pub fn read_schema_toml(shared: &Path, user: &Path) -> Vec<String> {
+    read_schema_table(shared, user).selected_ids()
+}
+
+/// 写 `schema.yaml`：勾选清单 + 当前方案，一次写完。
+pub fn write_schema_table(path: &Path, table: &SchemaTable) -> io::Result<()> {
     let mut out = String::from(
-        "# 输入方案清单 —— 一行一个方案：键是方案 id，值表示是否勾选。按 a–z 排序。\n\
-         # 由「方案选单设定」按「中」后写出；不再写入任何 YAML。\n\n",
+        "# 方案信息 —— 勾选清单 + 当前使用的方案（YAML）。\n\
+         # 由「方案选单设定」与输入法自己维护；引擎启动时读它并把选择落实到 librime。\n",
     );
-    for id in sorted {
-        out.push_str(id);
-        out.push_str(" = true\n");
+    if let Some(active) = &table.active {
+        out.push_str(&format!("\nactive: {active}\n"));
+    }
+    out.push_str("\nschemas:\n");
+    for id in &table.schemas {
+        out.push_str(&format!("  - {id}\n"));
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -274,30 +358,84 @@ pub fn write_schema_toml(path: &Path, ids: &[String]) -> io::Result<()> {
     fs::write(path, out)
 }
 
+/// 首次运行时把出厂 `default.yaml` 的 `schema_list` 抄进 `schema.yaml`。
+///
+/// 这样"方案信息"从一开始就只有一处（用户目录那份），而不是"用户没定过就散在 rime 的
+/// 出厂配置里"。清单非空时什么都不做（用户或设置程序已经定过），返回是否写入。
+pub fn seed_schema_table(shared: &Path, user: &Path) -> std::io::Result<bool> {
+    let existing = read_schema_table(shared, user);
+    if existing.active.is_some() || !existing.schemas.is_empty() {
+        return Ok(false);
+    }
+    let Ok(text) = fs::read_to_string(shared.join("default.yaml")) else {
+        return Ok(false);
+    };
+    let ids = read_schema_list(&text);
+    if ids.is_empty() {
+        return Ok(false);
+    }
+    let table = SchemaTable {
+        active: None,
+        schemas: ids,
+    };
+    let path = user.join("schema").join("schema.yaml");
+    write_schema_table(&path, &table)?;
+    Ok(true)
+}
+
+/// 方案清单**不再**落成 `default.custom.yaml`。
+///
+/// librime 侧（`deployment_tasks.cc` 的 Weasel-Next 补丁）现在直接读
+/// `<用户目录>/schema/schema.yaml` 的 `schemas = [...]`，所以这份中转 YAML
+/// 既不需要生成，也不该出现在用户目录里。
+///
+/// 这条注释保留是为了说明"为什么这里没有生成代码" —— 曾经有过，
+/// 用户看到的 `default.custom.yaml` 就是它写的。
+
+/// 写 `schema.yaml` 的兼容入口：只给勾选清单，保留原有 `active`。
+pub fn write_schema_toml(path: &Path, ids: &[String]) -> io::Result<()> {
+    let mut table = match fs::read_to_string(path)
+        .ok()
+        .and_then(|t| weasel_common::yaml::from_str::<SchemaTable>(&t).ok())
+    {
+        Some(table) => table,
+        None => SchemaTable::default(),
+    };
+    table.schemas = ids.to_vec();
+    write_schema_table(path, &table)
+}
+
 #[cfg(test)]
 mod schema_toml_tests {
     use super::*;
 
     #[test]
-    fn writes_one_entry_per_line_sorted() {
+    fn writes_schema_list_in_given_order() {
         let dir = std::env::temp_dir().join("weasel-next-schema-toml-write");
         let _ = fs::remove_dir_all(&dir);
-        let path = dir.join("schema").join("schema.toml");
+        let path = dir.join("schema").join("schema.yaml");
         let ids = vec![
             "terra_pinyin".to_string(),
             "bopomofo".to_string(),
             "luna_pinyin".to_string(),
         ];
         write_schema_toml(&path, &ids).expect("写入应当成功");
+        // 顺序必须原样保留：菜单顺序 = 清单顺序，第一条也是 rime 没记忆时的默认方案
+        assert_eq!(
+            read_schema_toml(&dir, &dir),
+            ids,
+            "读回来的顺序应与写入一致"
+        );
         let text = fs::read_to_string(&path).expect("应当读回");
-        let body: Vec<&str> = text
+        let entries: Vec<&str> = text
             .lines()
-            .filter(|line| !line.trim_start().starts_with('#') && !line.trim().is_empty())
+            .map(str::trim)
+            .filter(|line| line.starts_with('"'))
             .collect();
         assert_eq!(
-            body,
-            vec!["bopomofo = true", "luna_pinyin = true", "terra_pinyin = true"],
-            "一行一个方案且按 a–z 排序"
+            entries,
+            vec!["\"terra_pinyin\",", "\"bopomofo\",", "\"luna_pinyin\","],
+            "一行一个方案，且不打乱顺序"
         );
         let _ = fs::remove_dir_all(&dir);
     }
@@ -310,14 +448,14 @@ mod schema_toml_tests {
         let _ = fs::remove_dir_all(&user);
         fs::create_dir_all(shared.join("schema")).unwrap();
         fs::write(
-            shared.join("schema").join("schema.toml"),
+            shared.join("schema").join("schema.yaml"),
             "bopomofo = true\nluna_pinyin = true\n",
         )
         .unwrap();
         // 用户那份存在时以它为准，且 false 的不算已选
         fs::create_dir_all(user.join("schema")).unwrap();
         fs::write(
-            user.join("schema").join("schema.toml"),
+            user.join("schema").join("schema.yaml"),
             "# 注释行应当被忽略\nterra_pinyin = true\nstroke = false\ncangjie5 = true\n",
         )
         .unwrap();

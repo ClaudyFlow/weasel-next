@@ -36,9 +36,10 @@ menu:
 
 punctuator:
   full_shape:
-    __include: punctuation:/full_shape
+    # 标点与符号只有一份数据：symbols.yaml（punctuation.yaml 已并入，候选更全）
+    __include: symbols:/punctuator/full_shape
   half_shape:
-    __include: punctuation:/half_shape
+    __include: symbols:/punctuator/half_shape
 
 key_binder:
   bindings:

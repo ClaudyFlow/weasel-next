@@ -51,6 +51,21 @@ struct Controller {
 /// 每次刷新先构造新的 `UiHandle`，仅在构造成功后替换旧句柄，因此失败不会破坏现有
 /// 预览。线程入口捕获 panic，避免异常越过线程边界；RPC、配置或主题初始化错误通过
 /// 完成通道返回。关闭时先退出命令循环并丢弃当前句柄，再发送 `Closed`。
+/// 在工作线程上抽空泵消息。
+///
+/// 主题窗口是在**本线程**创建的（`UiHandle::start` → 主题 `create`），而控制窗口的消息
+/// 循环在 UI 线程上跑，泵不到它。不在这里泵的话，主题窗口收不到 `WM_PAINT`/鼠标消息：
+/// 画面停在第一次呈现的那一帧，悬停、点击、尺寸变化都测不到。
+fn pump_messages() {
+    let mut message = MSG::default();
+    unsafe {
+        while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE as u32).as_bool() {
+            let _ = TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+}
+
 fn worker(hwnd: usize, commands: mpsc::Receiver<Command>, results: mpsc::Sender<Completion>) {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -58,7 +73,14 @@ fn worker(hwnd: usize, commands: mpsc::Receiver<Command>, results: mpsc::Sender<
             .build()
             .map_err(|e| e.to_string())?;
         let mut current: Option<UiHandle> = None;
-        while let Ok(command) = commands.recv() {
+        loop {
+            // 等命令时顺便把本线程窗口的消息泵掉（16ms 一轮）
+            pump_messages();
+            let command = match commands.recv_timeout(std::time::Duration::from_millis(16)) {
+                Ok(command) => command,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
             if matches!(command, Command::Close) {
                 break;
             }

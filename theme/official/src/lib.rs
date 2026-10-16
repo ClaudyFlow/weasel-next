@@ -1,6 +1,12 @@
-//! official 主题 DLL 入口 —— 照 fxliang/weasel 的 WeaselUI：D3D11 + DXGI 交换链 + DirectComposition + D2D1.1；DWM 圆角区域模糊 + 冰蓝玻璃色板；原生窗口和图形资源始终由创建它们的 UI 线程管理。
+//! official 主题 DLL 入口 —— 照 fxliang/weasel 的 `WeaselUI`：D3D11 + DXGI 组合交换链 +
+//! DirectComposition + Direct2D 1.1，配置读 `theme\theme.yaml` 与
+//! `theme\<皮肤>\<皮肤>.theme.yaml`（出厂皮肤是官方 `weasel.yaml` 的 36 套配色）。
 //!
-//! 本 crate 复用公共主题 API 与 Windows/Direct2D 支持层，并导出内部主题工厂。
+//! 模块分工：`config` 负责官方 style 语义（默认值、夹取、DPI 缩放、配色），`layout`
+//! 是官方 `DoLayout` 的移植，`paint` 是官方 `DoPaint`/`_HighlightRect` 的移植，
+//! `mod.rs` 管窗口、消息、定位与主题接口，`presenter` 是设备与合成层。
+//!
+//! 原生窗口和图形资源始终由创建它们的 UI 线程管理。
 pub use weasel_theme_api as theme_api;
 pub use weasel_theme_support::{appearance, bindings, d2d_bindings, diagnostics, presentation};
 #[path = "mod.rs"]

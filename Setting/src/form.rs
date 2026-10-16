@@ -474,20 +474,13 @@ mod tests {
         assert_eq!(scale.value(0, "17").unwrap(), None);
         assert!(resolve(&json!({"$ref":"#"}), &json!({"$ref":"#"}), 0).is_err());
         // 内置描述与后加载的 WASM 描述走同一路径。
-        for (defaults, rich, expected_system, expected_count) in [
-            (
-                include_str!("../schema/eleven/config.json"),
-                include_str!("../schema/eleven/config.richschema.json"),
-                true,
-                3,
-            ),
-            (
-                include_str!("../../archive/themes-legacy/wasm/theme-weaselui/config.json"),
-                include_str!("../../archive/themes-legacy/wasm/theme-weaselui/config.richschema.json"),
-                false,
-                13,
-            ),
-        ] {
+        // （archive\themes-legacy 里的旧主题已经移出仓库，这里只留还在的主题包。）
+        for (defaults, rich, expected_system, expected_count) in [(
+            include_str!("../schema/eleven/config.json"),
+            include_str!("../schema/eleven/config.richschema.json"),
+            true,
+            3,
+        )] {
             let metadata = Metadata::from_parts(
                 serde_json::from_str(defaults).unwrap(),
                 serde_json::from_str(rich).unwrap(),

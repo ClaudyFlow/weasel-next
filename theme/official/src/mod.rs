@@ -1,211 +1,405 @@
-//! Windows 10 候选栏主题后端，使用 Direct2D/DirectWrite 绘制独立弹出窗口。
+//! Windows 候选栏主题后端：照官方 `WeaselUI` 的窗口与绘制流程（`WeaselPanel` + `d2d`）。
 //!
-//! HWND、图形资源和输入状态均由本模块内部管理；窗口消息回调与主题接口共享稳定的
-//! [`Window`] 分配，所有原生窗口和图形操作都应在创建它们的 UI 线程执行。
-mod logic;
+//! 与官方一致的四条主线：
+//! * **窗口**：`WS_POPUP | WS_CLIPSIBLINGS` + `WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE |
+//!   WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP`（WeaselPanel.cpp:374-379）。官方**没有**
+//!   `WS_EX_LAYERED`、没有 DWM 模糊、没有 `SetWindowRgn` —— 逐像素透明靠
+//!   D3D11 + DXGI 组合交换链 + DirectComposition（见 `presenter.rs`）交给 DWM。
+//! * **布局**：`config::Metrics`（官方 style 语义）+ `layout::Layout`（官方 DoLayout）。
+//! * **绘制**：`paint::Painter`（官方 DoPaint）。
+//! * **定位**：官方 `_Reposition`（下方放不下就翻到插入点上方并进入 sticky）。
+//!
+//! HWND、图形资源和输入状态都由本模块内部管理；窗口消息回调与主题接口共享稳定的
+//! [`Window`] 分配，所有原生窗口和图形操作都在创建它们的 UI 线程执行。
+
+pub mod config;
+pub mod layout;
+pub mod paint;
 
 use crate::d2d_bindings::*;
-use crate::presenter::Presenter;
-use crate::theme_api::CandidateView;
-use crate::{
-    theme_api::EventSink,
-    theme_api::{ThemeBackend, UiMode},
-};
-use logic::{Gesture, HEIGHT, Hit, Layout, NUMBER, Palette, Recovery, SCALE, enabled, pixels};
+use crate::theme::paint::{d2d_color, Formats, Painter};
+use crate::theme_api::{CandidateView, EventSink, ThemeBackend, UiAction, UiMode};
+use config::Metrics;
+use layout::{Hit, Layout, Measured, Parts, Size};
 use std::{
     cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
 };
+use weasel_style::ColorScheme;
 use windows_strings::w;
 
 const CLASS: windows_strings::PCWSTR = w!("Weasel.ThemeOfficial.Official");
 const RETRY_TIMER: usize = 1;
 
-/// 持有 Direct2D 工厂、DirectWrite 格式及按需创建的 HWND 绘制目标。
+/// 官方 `MoveTo` 里给插入点下方留的 6 像素（WeaselPanel.cpp:196/213）。
+const CARET_GAP: i32 = 6;
+
+/// 官方 `WeaselPanel::AUTOREV_TIMER` / `AUTOHIDE_TIMER` 的作用：自动恢复与自动隐藏。
+const AUTOREV_TIMER: usize = 2;
+const AUTOHIDE_TIMER: usize = 3;
+
+// ---------------------------------------------------------------- 图形资源
+
+/// 持有 DirectWrite 格式及按需创建的 HWND 绘制目标。
 ///
-/// 工厂和绘制目标随窗口在 UI 线程使用；目标失效后清空并在后续绘制时重建。
+/// 注意：**Direct2D 工厂不在这里** —— 路径几何、画刷必须与呈现层出自同一个工厂
+/// （否则 `EndDraw` 报 `D2DERR_WRONG_FACTORY`），所以几何用
+/// [`crate::presenter::Presenter::d2d_factory`]。
 struct Graphics {
-    /// 创建 HWND 绘制目标的单线程 Direct2D 工厂。
-    factory: ID2D1Factory,
     /// 供文本测量和布局使用的共享 DirectWrite 工厂。
     write: IDWriteFactory,
-    /// 候选序号格式。
-    number: IDWriteTextFormat,
-    /// 候选主文本格式。
-    text: IDWriteTextFormat,
-    /// 候选次要文本格式。
-    comment: IDWriteTextFormat,
-    /// 中英文模式提示格式。
-    mode: IDWriteTextFormat,
-    /// 翻页和表情操作的图标格式。
-    icon: IDWriteTextFormat,
-    /// 与此 HWND 关联的呈现层：D3D11 + DXGI 组合交换链 + DirectComposition + D2D 设备上下文。逐像素 alpha 交给 DWM。
-    target: Option<Presenter>,
+    /// 四套文本格式（官方 `InitFontFormats`）。
+    formats: Formats,
+    /// 中英文模式提示用的紧凑格式（官方没有这一项，是我们自己的小窗）。
+    indicator: IDWriteTextFormat,
+    /// 与此 HWND 关联的呈现层：D3D11 + DXGI 组合交换链 + DirectComposition + D2D 设备上下文。
+    target: Option<crate::presenter::Presenter>,
 }
 
 impl Graphics {
-    /// 创建共享的 DirectWrite 工厂和本主题所需的字体格式。
-    ///
-    /// 字体格式创建失败会向上传播，使主题工厂能在窗口显示前回退。
-    fn new() -> windows_core::Result<Self> {
+    /// 按 `Metrics` 里的字体建文本格式（官方 `D2D::InitFontFormats`）。
+    fn new(m: &Metrics) -> windows_core::Result<Self> {
+        let write: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
+        let formats = Self::make_formats(&write, m)?;
+        let indicator = Self::make_format(
+            &write,
+            "Segoe UI",
+            (m.font_point * 0.75).max(9.0),
+            DWRITE_WORD_WRAPPING_NO_WRAP,
+            m,
+        )?;
+        Ok(Self {
+            write,
+            formats,
+            indicator,
+            target: None,
+        })
+    }
+
+    /// 官方 `GetOrCreateTextFormat`：字号 = 点 × `dpi/72`，LEADING + 段落居中，
+    /// 行距/基线只在两者都非 0 时启用。
+    fn make_format(
+        write: &IDWriteFactory,
+        face: &str,
+        size: f32,
+        wrapping: DWRITE_WORD_WRAPPING,
+        m: &Metrics,
+    ) -> windows_core::Result<IDWriteTextFormat> {
         unsafe {
-            let factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-            let write: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            let format = |font, size, align| -> windows_core::Result<IDWriteTextFormat> {
-                let f = write.CreateTextFormat(
-                    font,
-                    None,
-                    DWRITE_FONT_WEIGHT_NORMAL,
-                    DWRITE_FONT_STYLE_NORMAL,
-                    DWRITE_FONT_STRETCH_NORMAL,
-                    size * SCALE,
-                    w!("zh-CN"),
-                )?;
-                f.SetTextAlignment(align).ok()?;
-                f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)
-                    .ok()?;
-                f.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP).ok()?;
-                Ok(f)
-            };
-            Ok(Self {
-                factory,
-                number: format(w!("Segoe UI"), 27.0, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
-                text: format(
-                    w!("Microsoft YaHei UI"),
-                    27.0,
-                    DWRITE_TEXT_ALIGNMENT_LEADING,
-                )?,
-                comment: format(
-                    w!("Microsoft YaHei UI"),
-                    20.0,
-                    DWRITE_TEXT_ALIGNMENT_LEADING,
-                )?,
-                mode: format(w!("Microsoft YaHei UI"), 25.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
-                icon: format(w!("Segoe MDL2 Assets"), 20.0, DWRITE_TEXT_ALIGNMENT_CENTER)?,
+            let face: Vec<u16> = face.encode_utf16().chain(Some(0)).collect();
+            let format = write.CreateTextFormat(
+                windows_core::PCWSTR(face.as_ptr()),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                size,
+                w!("zh-CN"),
+            )?;
+            format
+                .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)
+                .ok()?;
+            format
+                .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)
+                .ok()?;
+            format.SetWordWrapping(wrapping).ok()?;
+            if m.linespacing != 0 && m.baseline != 0 {
+                let line = size * (m.linespacing as f32 / 100.0);
+                let base = size * (m.baseline as f32 / 100.0);
+                let _ = format.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, line, base);
+            } else {
+                let _ = format.SetLineSpacing(DWRITE_LINE_SPACING_METHOD_DEFAULT, 0.0, 0.0);
+            }
+            Ok(format)
+        }
+    }
+
+    fn make_formats(write: &IDWriteFactory, m: &Metrics) -> windows_core::Result<Formats> {
+        // 官方：max_width = 0（横向）或 max_height = 0（竖排）时用 NO_WRAP，否则整词换行；
+        // 预编辑在可换行时用按字符换行（D2D::InitFontFormats）
+        let wraps = if m.layout_type.is_vertical_text() {
+            m.max_height != 0.0
+        } else {
+            m.max_width != 0.0
+        };
+        let wrapping = if wraps {
+            DWRITE_WORD_WRAPPING_WHOLE_WORD
+        } else {
+            DWRITE_WORD_WRAPPING_NO_WRAP
+        };
+        let wrapping_preedit = if wraps {
+            DWRITE_WORD_WRAPPING_CHARACTER
+        } else {
+            DWRITE_WORD_WRAPPING_NO_WRAP
+        };
+        Ok(Formats {
+            preedit: Self::make_format(
                 write,
-                target: None,
-            })
-        }
+                &m.font_face,
+                m.font_point,
+                wrapping_preedit,
+                m,
+            )?,
+            text: Self::make_format(write, &m.font_face, m.font_point, wrapping, m)?,
+            label: Self::make_format(
+                write,
+                &m.label_font_face,
+                m.label_font_point,
+                wrapping,
+                m,
+            )?,
+            comment: Self::make_format(
+                write,
+                &m.comment_font_face,
+                m.comment_font_point,
+                wrapping,
+                m,
+            )?,
+        })
     }
-    /// 按给定格式测量文本宽度，结果以 DIP 表示并包含尾随空白。
-    ///
-    /// 调用方在内容布局阶段逐项测量，因此这里不缓存临时文本布局。
-    fn measure(&self, text: &str, format: &IDWriteTextFormat) -> windows_core::Result<f32> {
+
+    /// 配置变了（明暗、字体、DPI）就重建格式。
+    fn refresh_formats(&mut self, m: &Metrics) -> windows_core::Result<()> {
+        self.formats = Self::make_formats(&self.write, m)?;
+        self.indicator = Self::make_format(
+            &self.write,
+            "Segoe UI",
+            (m.font_point * 0.75).max(9.0),
+            DWRITE_WORD_WRAPPING_NO_WRAP,
+            m,
+        )?;
+        Ok(())
+    }
+
+    /// 官方 `D2D::GetTextSize`：量宽度含尾随空白、向上取整，并把 overhang 的正向溢出补进尺寸。
+    fn measure(&self, text: &str, format: &IDWriteTextFormat, m: &Metrics) -> Size {
+        if text.is_empty() {
+            return Size::ZERO;
+        }
         unsafe {
-            let text: Vec<u16> = text.encode_utf16().collect();
-            let layout = self
+            let wide: Vec<u16> = text.encode_utf16().collect();
+            let max_width = if m.layout_type.is_vertical_text() {
+                0.0
+            } else {
+                m.max_width
+            };
+            let Ok(layout) = self
                 .write
-                .CreateTextLayout(&text, format, 1_000_000.0, HEIGHT)?;
+                .CreateTextLayout(&wide, format, max_width, 0.0)
+            else {
+                return Size::ZERO;
+            };
             let mut metrics = DWRITE_TEXT_METRICS::default();
-            layout.GetMetrics(&mut metrics).ok()?;
-            Ok(metrics.widthIncludingTrailingWhitespace)
+            if layout.GetMetrics(&mut metrics).is_err() {
+                return Size::ZERO;
+            }
+            let mut size = Size::new(
+                metrics.widthIncludingTrailingWhitespace.ceil(),
+                metrics.height.ceil(),
+            );
+            // 官方把 layout 重新按实际宽高建一次再取 overhang
+            if let Ok(again) = self.write.CreateTextLayout(
+                &wide,
+                format,
+                metrics.widthIncludingTrailingWhitespace,
+                metrics.height,
+            ) {
+                if let Ok(overhang) = again.GetOverhangMetrics() {
+                    if overhang.left > 0.0 {
+                        size.cx += overhang.left + 1.0;
+                    }
+                    if overhang.right > 0.0 {
+                        size.cx += overhang.right + 1.0;
+                    }
+                    if overhang.top > 0.0 {
+                        size.cy += overhang.top + 1.0;
+                    }
+                    if overhang.bottom > 0.0 {
+                        size.cy += overhang.bottom + 1.0;
+                    }
+                }
+            }
+            size
         }
     }
+
+    /// 官方 `StandardLayout::RecalculateSizes`：把所有文本先量好。
+    fn measure_all(&self, m: &Metrics, view: &CandidateView) -> Measured {
+        let count = view.items.len().min(layout::MAX_CANDIDATES);
+        let mut measured = Measured {
+            label: Vec::with_capacity(count),
+            text: Vec::with_capacity(count),
+            comment: Vec::with_capacity(count),
+            ..Default::default()
+        };
+        for i in 0..count {
+            let item = &view.items[i];
+            // 序号：官方来自 rime 的 labels（"1" "2" …续页继续累加），再套 style/label_format
+            let label = m.format_label(&(view.page_start + i as u32 + 1).to_string());
+            measured.label.push(if m.label_font_valid {
+                self.measure(&label, &self.formats.label, m)
+            } else {
+                Size::ZERO
+            });
+            measured.text.push(if m.text_font_valid {
+                self.measure(&item.primary_text, &self.formats.text, m)
+            } else {
+                Size::ZERO
+            });
+            measured.comment.push(if m.comment_font_valid {
+                self.measure(&item.secondary_text, &self.formats.comment, m)
+            } else {
+                Size::ZERO
+            });
+        }
+        // 预编辑：我们的快照只给"整段组字中"，所以整段都是高亮段（官方 composition 的常态）
+        if let Some(preedit) = &view.preedit {
+            let size = self.measure(&preedit.text, &self.formats.preedit, m);
+            measured.preedit = Parts {
+                before: Size::ZERO,
+                hilite: size,
+                after: Size::ZERO,
+                total: size,
+            };
+        }
+        // 翻页字形（官方用 `<` / `>`，字体同预编辑）
+        measured.page_prev = self.measure(layout::PAGE_PREV, &self.formats.preedit, m);
+        measured.page_next = self.measure(layout::PAGE_NEXT, &self.formats.preedit, m);
+        // 标记：官方在没有 mark_text 时用 "|" 的尺寸做基准
+        measured.mark = if m.mark_text.is_empty() {
+            self.measure("|", &self.formats.text, m)
+        } else {
+            self.measure(&m.mark_text, &self.formats.text, m)
+        };
+        measured
+    }
+
     /// 为窗口惰性创建绘制目标；已有目标由窗口的 resize/DPI 消息调整。
     ///
-    /// 创建失败由调用方转换为主题错误或进入设备丢失恢复流程。
-    fn ensure_target(&mut self, hwnd: HWND, dpi: u32) -> windows_core::Result<()> {
-            // 官方 d2d.cpp:136 —— 同一个窗口且交换链/目标还在时**直接返回**，绝不重建。
-            // 重建会让 CreateTargetForHwnd 对已合成的窗口失败（ALREADY_COMPOSED）。
-            if self.target.is_some() {
+    /// ntialias 取 style/antialias_mode：官方在 D2D::InitDirect2D 里设一次
+    /// （d2d.cpp:183），几何固定逐图元抗锯齿（d2d.cpp:182）。
+    fn ensure_target(
+        &mut self,
+        hwnd: HWND,
+        dpi: u32,
+        antialias: config::Antialias,
+    ) -> windows_core::Result<()> {
+        // 官方 d2d.cpp:136 —— 同一个窗口且交换链/目标还在时**直接返回**，绝不重建。
+        // 重建会让 CreateTargetForHwnd 对已合成的窗口失败（ALREADY_COMPOSED）。
+        if self.target.is_some() {
+            return Ok(());
+        }
+        unsafe {
+            let mut rc = RECT::default();
+            GetClientRect(hwnd, &mut rc).ok()?;
+            let width = (rc.right - rc.left).max(0) as u32;
+            let height = (rc.bottom - rc.top).max(0) as u32;
+            if width == 0 || height == 0 {
+                // 窗口还没显示时客户区就是空的：官方这时直接返回，什么都不做
                 return Ok(());
             }
-            unsafe {
-                let mut rc = RECT::default();
-                GetClientRect(hwnd, &mut rc).ok()?;
-                let raw_width = rc.right - rc.left;
-                let raw_height = rc.bottom - rc.top;
-                if raw_width <= 0 || raw_height <= 0 {
-                    // 窗口还没显示时客户区就是空的。官方这时直接返回、什么都不做；
-                    // 报错会被上层当成"主题不可用"，进而让渲染器退出（表现为候选窗一闪不出）。
-                    crate::diagnostics::record(format_args!(
-                        "客户区还是空的（{}x{}），等窗口显示后再建绘制目标",
-                        raw_width,
-                        raw_height
-                    ));
-                    return Ok(());
-                }
-                let width = raw_width as u32;
-                let height = raw_height as u32;
-                let presenter = Presenter::new(hwnd, width, height).map_err(|message| {
+            let presenter = crate::presenter::Presenter::new(hwnd, width, height).map_err(
+                |message| {
                     crate::diagnostics::record(format_args!("呈现层创建失败: {message}"));
                     windows_core::Error::from_hresult(E_UNEXPECTED)
-                })?;
-                presenter.render_target().SetDpi(dpi as f32, dpi as f32);
-                self.target = Some(presenter);
-            }
+                },
+            )?;
+            presenter.render_target().SetDpi(dpi as f32, dpi as f32);
+            apply_antialias(&presenter, antialias);
+            self.target = Some(presenter);
+        }
         Ok(())
     }
 }
 
-/// 一次呈现所需的不可变快照、事件发送端和预计算布局。
-///
-/// `primary_widths` 与候选项按相同索引对应，用于绘制时定位次要文本。
+// ---------------------------------------------------------------- 状态
+
+/// 一次呈现所需的不可变快照、事件发送端、实测尺寸与布局。
 struct Content {
-    /// 当前呈现的数据快照；索引与 `layout` 中的候选区域一致。
     snapshot: CandidateView,
-    /// 点击操作发往渲染器的事件通道。
     events: EventSink,
-    /// 根据文本测量宽度构造的命中与绘制几何。
+    measured: Measured,
     layout: Layout,
-    primary_widths: Vec<f32>,
 }
+
 /// 窗口 UI 状态；由 [`Window::app`] 的动态借用保护，避免回调重入时别名可变访问。
 struct App {
-    /// 本窗口的 Direct2D/DirectWrite 资源。
+    /// 最近一次读配置时主题文件的修改时间；变了就重载（换皮肤立刻生效）。
+    stamp: Option<std::time::SystemTime>,
     graphics: Graphics,
-    /// 当前内容；为 `None` 时窗口没有可呈现的候选栏。
     content: Option<Content>,
-    /// 当前鼠标按下与悬停状态。
-    gesture: Gesture,
-    /// 绘制时使用的当前外观色板。
-    palette: Palette,
+    /// 原始（未按 DPI 缩放）的 style：DPI 变化时靠它重新缩放。
+    raw_style: weasel_style::UIStyle,
+    /// 当前生效的 style（含 DPI 缩放）与配色。
+    metrics: Metrics,
+    scheme: ColorScheme,
+    /// 当前悬停与按下（官方 `m_hoverIndex` / 点击计时）。
+    hovered: Option<Hit>,
+    pressed: Option<Hit>,
+    /// 官方 `m_sticky`：面板被翻到插入点上方后保持在上方。
+    sticky: bool,
 }
 
 /// 窗口回调可访问的稳定状态分配。
-///
-/// 创建 HWND 时将此对象的地址写入窗口数据；因此分配必须至少存活到 HWND 销毁，且
-/// `Rc` 持有者不得在窗口仍可能回调时释放。会同步派发消息的原生调用不得持有此对象
-/// 或其 [`App`] 的独占引用；内部使用 `Cell`/`RefCell` 并在调用边界前结束借用。
 struct Window {
-    /// 关联的 HWND；窗口销毁后由 `WM_NCDESTROY` 清空。
     hwnd: Cell<HWND>,
-    /// 当前窗口 DPI，始终至少为 1。
     dpi: Cell<u32>,
-    /// 回调与后端共享的 UI/图形状态，借用冲突用于阻止重入别名访问。
     app: RefCell<App>,
-    /// 首个原生操作错误或最近一次回调 panic 的文本表示。
     error: RefCell<Option<String>>,
-    /// Direct2D 目标恢复预算与定时等待状态。
     recovery: RefCell<Recovery>,
-    /// 防止 `SetWindowPos` 同步派发 DPI 消息时递归定位。
     positioning: Cell<bool>,
     /// 为真时采用可激活、可关闭的预览窗口行为。
     preview: bool,
 }
 
+/// Direct2D 设备丢失后的有限重试状态。
+#[derive(Default)]
+struct Recovery {
+    failures: u8,
+    waiting: bool,
+}
+
+impl Recovery {
+    fn failed(&mut self, device_lost: bool) -> bool {
+        if !device_lost || self.failures >= 3 {
+            return false;
+        }
+        self.failures += 1;
+        self.waiting = true;
+        true
+    }
+    fn succeeded(&mut self) {
+        self.failures = 0;
+        self.waiting = false;
+    }
+}
+
 /// 实现主题接口的轻量句柄；窗口回调通过共享的稳定分配访问状态。
 struct Ten {
-    /// 保持 HWND 保存的指针稳定，并允许后端移动时不移动窗口状态。
     window: Rc<Window>,
 }
 
-/// 初始化图形资源和窗口，并返回候选栏后端。
-///
-/// `Live` 模式创建不激活且不显示任务栏按钮的工具窗口，其他模式创建可关闭的预览窗。
-/// 窗口类、HWND 或初始绘制目标创建失败时返回错误；调用方可在首次显示前回退。
+/// 将 DIP 长度转换为物理像素，DPI 至少按 1 处理。
+fn pixels(dip: f32, dpi: u32) -> i32 {
+    (dip * dpi.max(1) as f32 / 96.0).round() as i32
+}
+
+/// 快照是否"没有内容"（官方 `Context::empty`：无候选、无预编辑、无辅助串）。
+fn empty_context(view: &CandidateView) -> bool {
+    view.items.is_empty() && view.preedit.is_none()
+}
+
+// ---------------------------------------------------------------- 创建
+
 fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
     let preview = mode != UiMode::Live;
+    let loaded = config::load(crate::appearance::is_dark());
+    let antialias = config::Antialias::from_name(&loaded.style.antialias_mode);
     let window = Rc::new(Window {
         hwnd: Cell::new(HWND::default()),
         dpi: Cell::new(96),
-        app: RefCell::new(App {
-            graphics: Graphics::new().map_err(|e| e.to_string())?,
-            content: None,
-            gesture: Gesture::default(),
-            palette: logic::palette_from_official(crate::appearance::is_dark()),
-        }),
+        app: RefCell::new(App::new(loaded, 96.0)?),
         error: RefCell::new(None),
         recovery: RefCell::new(Recovery::default()),
         positioning: Cell::new(false),
@@ -216,8 +410,6 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
         if instance.0.is_null() {
             return Err(windows_core::Error::from_thread().to_string());
         }
-        // The class icon is the task-bar button icon for the preview window. The
-        // live tool window has no task-bar presence, so it is harmless there too.
         let icon = LoadIconW(Some(instance), w!("WEASEL_ICON"));
         let mut existing = WNDCLASSW::default();
         if !GetClassInfoW(Some(instance), CLASS, &mut existing).as_bool() {
@@ -226,7 +418,6 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
                 lpszClassName: CLASS,
                 lpfnWndProc: Some(wnd_proc),
                 hCursor: LoadCursorW(None, IDC_ARROW),
-                // Class icon also acts as the preview task-bar icon fallback.
                 hIcon: icon,
                 ..Default::default()
             };
@@ -234,14 +425,17 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
                 return Err(windows_core::Error::from_thread().to_string());
             }
         }
-        // 照官方 WeaselPanel.cpp:374-376：WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST
-        // | WS_EX_NOREDIRECTIONBITMAP（**不要** WS_EX_LAYERED ✗ —— 那会和 DComp 合成冲突，
-        // 且未设 SetLayeredWindowAttributes 时整窗全透明，表现为"看不见颜色"）。
+        // 照官方 WeaselPanel.cpp:374-379：不要 WS_EX_LAYERED（会和 DComp 合成冲突，
+        // 未设分层属性时整窗全透明）、不要 DWM 模糊、不要 SetWindowRgn。
         let (ex_style, title) = if preview {
-            ((WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP) as u32, w!("Weasel-Next 皮肤预览"))
+            (
+                (WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP) as u32,
+                w!("Weasel-Next 皮肤预览"),
+            )
         } else {
             (
-                (WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP) as u32,
+                (WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+                    | WS_EX_NOREDIRECTIONBITMAP) as u32,
                 w!("Weasel candidates"),
             )
         };
@@ -249,7 +443,8 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
             ex_style,
             CLASS,
             title,
-            WS_POPUP | if preview { WS_SYSMENU as u32 } else { 0 },
+            (WS_POPUP as u32 | WS_CLIPSIBLINGS as u32)
+                | if preview { WS_SYSMENU as u32 } else { 0 },
             0,
             0,
             1,
@@ -263,90 +458,23 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
             return Err(windows_core::Error::from_thread().to_string());
         }
         window.hwnd.set(hwnd);
-        // 玻璃第 1 步：给原生窗口打开整窗模糊（hRgnBlur = NULL → 整个客户区）。
-        // ⚠️ 单靠它看不见效果：当前的 ID2D1HwndRenderTarget 会不透明地盖住它。
-        // 第 2 步（把渲染目标换成 ID2D1DCRenderTarget + 32 位 DIB，用 UpdateLayeredWindow
-        // 提交逐像素 alpha）落地后，这一步才会真正显示为毛玻璃。
-        #[repr(C)]
-        struct DwmBlurBehind {
-            flags: u32,
-            enable: i32,
-            blur_region: isize,
-            transition_on_maximized: i32,
-        }
-        const DWM_BB_ENABLE: u32 = 0x1;
-        #[link(name = "dwmapi")]
-        unsafe extern "system" {
-            fn DwmEnableBlurBehindWindow(hwnd: HWND, bb: *const DwmBlurBehind) -> i32;
-        }
-        let blur = DwmBlurBehind {
-            flags: DWM_BB_ENABLE,
-            enable: 0,   // [Weasel-Next] 关掉整窗 DWM 模糊: blur_region=NULL 会按矩形铺满窗口, 圆角之外会露出方形模糊层
-            blur_region: 0,
-            transition_on_maximized: 0,
-        };
-        unsafe {
-            let _ = DwmEnableBlurBehindWindow(hwnd, &blur);
-        }
-        // 玻璃加强：在"逐像素 alpha + 透明清屏"都已具备的前提下，再上
-        // ACCENT_ENABLE_ACRYLICBLURBEHIND —— 这才是**强糊**（Aero/亚克力那种），
-        // 而 DwmEnableBlurBehindWindow 的模糊很弱、在纯色背景上几乎看不出来。
-        // tint 用 40% 淡白（AABBGGRR）：既保住白字可读，又让面板是一块可辨的玻璃。
-        #[repr(C)]
-        struct AccentPolicy {
-            state: i32,
-            flags: i32,
-            gradient_color: u32,
-            animation_id: i32,
-        }
-        #[repr(C)]
-        struct WindowCompositionAttributeData {
-            attribute: i32,
-            data: *mut core::ffi::c_void,
-            size: usize,
-        }
-        const WCA_ACCENT_POLICY: i32 = 19;
-        const ACCENT_ENABLE_ACRYLICBLURBEHIND: i32 = 4;
-        #[link(name = "user32")]
-        unsafe extern "system" {
-            fn SetWindowCompositionAttribute(
-                hwnd: HWND,
-                data: *mut WindowCompositionAttributeData,
-            ) -> i32;
-        }
-        let mut policy = AccentPolicy {
-            state: 0, // ACCENT_DISABLED：液态玻璃不要磨砂，只保留 DwmEnableBlurBehindWindow 的轻微模糊
-            flags: 2,
-            gradient_color: 0x66ff_ffff,
-            animation_id: 0,
-        };
-        let mut data = WindowCompositionAttributeData {
-            attribute: WCA_ACCENT_POLICY,
-            data: &mut policy as *mut _ as *mut core::ffi::c_void,
-            size: core::mem::size_of::<AccentPolicy>(),
-        };
-        unsafe {
-            let _ = SetWindowCompositionAttribute(hwnd, &mut data);
-        }
         window.dpi.set(GetDpiForWindow(hwnd).max(1));
         if preview {
             apply_taskbar_icon(hwnd, icon);
         }
-        // Eager initialization means the factory can fail over before first show.
+        // DPI 定下来后重算一次缩放后的度量
+        window.app.borrow_mut().set_dpi(window.dpi.get());
         window
             .app
             .borrow_mut()
             .graphics
-            .ensure_target(hwnd, window.dpi.get())
+            .ensure_target(hwnd, window.dpi.get(), antialias)
             .map_err(|e| e.to_string())?;
     }
     window.health()?;
     Ok(Box::new(Ten { window }))
 }
 
-/// 设置预览窗口的小图标和大图标，使任务栏按钮显示 Weasel 图标。
-///
-/// 空图标句柄不做处理；窗口类图标仍作为任务栏图标的后备值。
 unsafe fn apply_taskbar_icon(hwnd: HWND, icon: HICON) {
     if icon.0.is_null() {
         return;
@@ -367,6 +495,68 @@ unsafe fn apply_taskbar_icon(hwnd: HWND, icon: HICON) {
     }
 }
 
+impl App {
+    fn new(loaded: config::Loaded, dpi: f32) -> Result<Self, String> {
+        let metrics = Metrics::new(&loaded.style, dpi).with_colors(&loaded.scheme);
+        crate::diagnostics::record(format_args!("主题配置: {}", loaded.source));
+        Ok(Self {
+            stamp: config::dirs().and_then(|(shared, user)| config::stamp(&shared, &user)),
+            graphics: Graphics::new(&metrics).map_err(|e| e.to_string())?,
+            content: None,
+            raw_style: loaded.style,
+            metrics,
+            scheme: loaded.scheme,
+            hovered: None,
+            pressed: None,
+            sticky: false,
+        })
+    }
+
+    /// DPI 变了：按原始 style 重新缩放度量与字号。
+    fn set_dpi(&mut self, dpi: u32) {
+        self.metrics = Metrics::new(&self.raw_style, dpi.max(1) as f32).with_colors(&self.scheme);
+        let _ = self.graphics.refresh_formats(&self.metrics);
+        if let Some(content) = &mut self.content {
+            content.measured = self.graphics.measure_all(&self.metrics, &content.snapshot);
+            content.layout = Layout::build(&self.metrics, &content.snapshot, &content.measured);
+        }
+    }
+
+    /// 重新读配置（明暗外观变化、用户改皮肤时调用）。
+    fn reload(&mut self, dark: bool, dpi: u32) {
+        self.stamp = config::dirs()
+            .and_then(|(shared, user)| config::stamp(&shared, &user));
+        let loaded = config::load(dark);
+        crate::diagnostics::record(format_args!("主题配置: {}", loaded.source));
+        self.raw_style = loaded.style;
+        self.scheme = loaded.scheme;
+        self.metrics =
+            Metrics::new(&self.raw_style, dpi.max(1) as f32).with_colors(&self.scheme);
+        let _ = self.graphics.refresh_formats(&self.metrics);
+        if let Some(presenter) = self.graphics.target.as_ref() {
+            apply_antialias(presenter, self.metrics.antialias);
+        }
+        if let Some(content) = &mut self.content {
+            content.measured = self.graphics.measure_all(&self.metrics, &content.snapshot);
+            content.layout = Layout::build(&self.metrics, &content.snapshot, &content.measured);
+        }
+    }
+}
+
+/// 官方 d2d.cpp:183：把 style/antialias_mode 套到设备上下文的文字抗锯齿上。
+///
+/// 几何（圆角矩形/描边）固定用逐图元抗锯齿，与官方 d2d.cpp:182 一致。
+fn apply_antialias(presenter: &crate::presenter::Presenter, antialias: config::Antialias) {
+    unsafe {
+        presenter
+            .render_target()
+            .SetTextAntialiasMode(
+                // 官方是直接强转枚举值，两边的取值定义相同（0..3）
+                core::mem::transmute::<i32, D2D1_TEXT_ANTIALIAS_MODE>(antialias.d2d()),
+            );
+    }
+}
+
 impl Window {
     /// 记录首个故障，保留最初错误作为后续健康检查的结果。
     fn fail(&self, error: impl ToString) {
@@ -375,116 +565,29 @@ impl Window {
             *slot = Some(error.to_string());
         }
     }
-    /// 请求 Windows 在之后的消息循环中重绘窗口。
     fn invalidate(&self) {
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd.get()), None, false);
         }
     }
-    /// 清除按下/悬停状态，并在本窗口持有鼠标捕获时释放捕获。
     fn cancel(&self) {
-        self.app.borrow_mut().gesture.cancel();
+        let mut app = self.app.borrow_mut();
+        app.pressed = None;
+        app.hovered = None;
         unsafe {
             if GetCapture() == self.hwnd.get() {
                 let _ = ReleaseCapture();
             }
         }
     }
-    /// 按当前内容、锚点和 DPI 定位顶置窗口。
-    ///
-    /// `SetWindowPos` 可能同步触发 DPI 消息；重入时直接返回，外层最多重算三次以
-    /// 收敛显示器切换导致的 DPI 变化。无可定位内容时不移动窗口。
-    fn position(&self) -> windows_core::Result<()> {
-        if self.positioning.replace(true) {
-            return Ok(());
-        }
-        struct Reset<'a>(&'a Cell<bool>);
-        impl Drop for Reset<'_> {
-            fn drop(&mut self) {
-                self.0.set(false);
-            }
-        }
-        let _reset = Reset(&self.positioning);
-        // Moving between monitors may synchronously change DPI. Recompute once
-        // that call returns, with a finite bound for pathological monitor layouts.
-        for _ in 0..3 {
-            let dpi = self.dpi.get();
-            let bounds = {
-                let app = self.app.borrow();
-                if self.preview {
-                    // The preview has no caret; center the strip on the primary
-                    // monitor instead of anchoring to a rect.
-                    app.content.as_ref().map(|c| {
-                        let width = pixels(c.layout.width, dpi);
-                        let height = pixels(c.layout.height, dpi);
-                        let (x, y) = crate::presentation::preview_position(width, height);
-                        (x, y, width, height)
-                    })
-                } else {
-                    app.content.as_ref().and_then(|c| {
-                        c.snapshot
-                            .anchor
-                            .as_ref()
-                            .filter(|a| a.valid)
-                            .map(|anchor| {
-                                let width = pixels(c.layout.width, dpi);
-                                let height = pixels(c.layout.height, dpi);
-                                let (x, y) =
-                                    crate::presentation::popup_position(anchor, width, height);
-                                (x, y, width, height)
-                            })
-                    })
-                }
-            };
-            let Some((x, y, width, height)) = bounds else {
-                return Ok(());
-            };
-            unsafe {
-                SetWindowPos(
-                    self.hwnd.get(),
-                    Some(HWND_TOPMOST),
-                    x,
-                    y,
-                    width,
-                    height,
-                    SWP_NOACTIVATE as u32,
-                )
-                .ok()?;
-            }
-            if dpi == self.dpi.get() {
-                break;
-            }
-        }
-        Ok(())
-    }
-    /// 将 Direct2D 目标的 DPI 和像素尺寸同步到当前客户区。
-    fn resize(&self) -> windows_core::Result<()> {
-        let mut app = self.app.borrow_mut();
-        if let Some(presenter) = &mut app.graphics.target {
-            unsafe {
-                let mut rc = RECT::default();
-                GetClientRect(self.hwnd.get(), &mut rc).ok()?;
-                presenter.render_target().SetDpi(self.dpi.get() as f32, self.dpi.get() as f32);
-                presenter
-                    .resize(
-                        (rc.right - rc.left).max(1) as u32,
-                        (rc.bottom - rc.top).max(1) as u32,
-                    )
-                    .map_err(|message| {
-                        crate::diagnostics::record(format_args!("交换链尺寸调整失败: {message}"));
-                        windows_core::Error::from_hresult(E_UNEXPECTED)
-                    })?;
-            }
-        }
-        Ok(())
+    fn health(&self) -> Result<(), String> {
+        self.error
+            .borrow()
+            .as_ref()
+            .map_or(Ok(()), |e| Err(e.clone()))
     }
     /// 丢弃失效的绘制目标，并对设备丢失进行有限次数的定时重试。
-    ///
-    /// 非设备丢失错误、超过重试预算或定时器创建失败都会成为持久健康错误。
     fn graphics_error(&self, error: windows_core::Error) {
-        // 照官方（d2d.cpp:136 AttachWindow 的守卫）：合成目标每个窗口只建一次，
-        // 丢掉再建会对同一个 HWND 报 DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED。
-        // self.app.borrow_mut().graphics.target = None;
         if !self
             .recovery
             .borrow_mut()
@@ -499,288 +602,74 @@ impl Window {
             }
         }
     }
-    /// 绘制当前内容；仅在绘制成功后重置设备恢复预算。
-    ///
-    /// 绘制开始前创建可能失败的画刷，`DrawGuard` 保证所有已开始的绘制最终调用
-    /// `EndDraw`。设备目标创建或绘制失败均由消息处理层交给恢复逻辑。
-    fn paint(&self) -> windows_core::Result<()> {
-        let mut app = self.app.borrow_mut();
-        app.graphics
-            .ensure_target(self.hwnd.get(), self.dpi.get())?;
-            // 客户区还可能为空（窗口尚未显示或尺寸为 0）：这一帧什么都不画，
-            // 等窗口显示后的下一条消息再来建目标。**这里绝不能报错** —— 上层会把主题
-            // 错误当成"主题不可用"并让渲染器退出，表现就是候选窗一闪不出。
-            let Some(presenter) = app.graphics.target.as_ref() else {
-                return Ok(());
-            };
-            let target = presenter.render_target();
-            let p = app.palette;
-        unsafe {
-            // Allocate fallible resources before BeginDraw; EndDraw is RAII too.
-            let brush = target.CreateSolidColorBrush(&color(p.text), None)?;
-            presenter.begin_draw();
-            let draw = DrawGuard {
-                presenter,
-                ended: false,
-            };
-            // 玻璃：把背景清成完全透明（A=0）。窗口上已开 DwmEnableBlurBehindWindow，
-            // 配合 PREMULTIPLIED 像素格式，DWM 才能把背后的模糊合成进来。
-            // 想让文字在任何背景上都看得清时，把 a 调到 0.4~0.5 即可（半透明底色）。
-            // 圆角玻璃：清屏保持**全透明** → 圆角之外的像素没人画，自然透出背后内容。
-            let mut glass = color(p.background);
-            glass.a = 0.0;
-            target.Clear(Some(&glass));
-            if let Some(c) = &app.content {
-                let width = c.layout.width;
-                let height = c.layout.height;
-                    // 圆角裁剪 + 分层透明度：每次渲染都按当前尺寸重裁（圆角不能只在第一帧对 ✗）
-                    unsafe { apply_round_region(self.hwnd.get(), width, height); }
-                if width > 0.0 && height > 0.0 {
-                    // 官方：圆角 = style/layout/round_corner（aqua = 4）。
-                    const ROUND_CORNER: f32 = 4.0;   // TODO 从 theme.toml 的 round_corner 读（现在与官方 aqua 一致 ✓）
-                    let radius = ROUND_CORNER.min(width / 2.0).max(1.0);
-                    // 圆角要"切干净"：显式用逐图元抗锯齿，边缘平滑无锯齿。
-                    target.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-let mut fill = color(p.background);
-                    fill.a = 1.0;   // 面板用真彩色 ✓ 透明由整窗 LWA_ALPHA 提供（否则 DWM 忽略逐像素 alpha → 又暗又平 ✗）
-                    brush.SetColor(&fill);
-                    crate::diagnostics::record(format_args!(
-                        "调色板: 底 #{:06x} 框 #{:06x} 选中 #{:06x} 字 #{:06x} 次 #{:06x} · 面板矩形 {:.0},{:.0}-{:.0},{:.0} · 行数 {}",
-                        p.background, p.border, p.active, p.text, p.secondary,
-                        rect(0.0, 0.0, width, height).left, rect(0.0, 0.0, width, height).top,
-                        rect(0.0, 0.0, width, height).right, rect(0.0, 0.0, width, height).bottom,
-                        c.layout.rows.len()
-                    ));
-                    target.FillRoundedRectangle(
-                        &D2D1_ROUNDED_RECT {
-                            rect: rect(0.0, 0.0, width, height),
-                            radiusX: radius,
-                            radiusY: radius,
-                        },
-                        &brush,
-                    );
-                    // 圆角描边：加厚到 2px、更亮 —— 轮廓清楚（内缩半个描边宽，避免被裁）。
-                    // 官方 _HighlightRect：描边画在矩形内侧（路径半径 = radius - border/2），线宽 = border，颜色不透明。
-                    let mut outline = color(p.border);
-                    outline.a = 1.0;
-                    brush.SetColor(&outline);
-                    target.DrawRoundedRectangle(
-                        &D2D1_ROUNDED_RECT {
-                            rect: rect(1.5, 1.5, width - 1.5, height - 1.5),
-                            radiusX: radius,
-                            radiusY: radius,
-                        },
-                        &brush,
-                        3.0,   // 线宽 = border ✓
-                        None,
-                    );
-                    brush.SetColor(&color(p.text));
-                }
-            }
-            if let Some(c) = &app.content {
-                if let Some(indicator) = &c.snapshot.mode_indicator {
-                    text(
-                        &target,
-                        &brush,
-                        &app.graphics.mode,
-                        if indicator.ascii_mode { "英" } else { "中" },
-                        rect(0.0, 0.0, c.layout.width, c.layout.height),
-                        p.text,
-                    );
-                }
+}
 
-                // ★★ 三层结构（用户要求 ✓）: ① 底层(满窗底+圆角面板, 已画) / ② 左侧候选区 / ③ 右侧功能区
-                let fn_left = c.layout.cells.iter()
-                    .find(|cell| matches!(cell.hit, Hit::Previous))
-                    .map(|cell| cell.left)
-                    .unwrap_or(c.layout.width);
-                if fn_left < c.layout.width {
-                    let content_h = c.layout.height;
-                    let mut zone = color(0x000000);   // 功能区底色 ✓
-                    zone.a = 0.10;   // 功能区比面板略深 → 读作"独立一栏" ✓
-                    brush.SetColor(&zone);
-                    target.FillRectangle(&rect(fn_left, 0.0, c.layout.width, content_h), &brush);
-                    let mut edge = color(0xFFFFFF);
-                    edge.a = 0.22;   // 功能区左沿 1px 分隔线 ✓
-                    brush.SetColor(&edge);
-                    target.FillRectangle(&rect(fn_left, 0.0, fn_left + 1.0, content_h), &brush);
-                    brush.SetColor(&color(p.text));
-                }
-
-                for cell in &c.layout.cells {
-                // 官方是纵向行模型：每个候选一行，高亮矩形取该行的并集矩形 ✓
-                // aqua 的 prevpage/nextpage/comment 颜色全透明 → 官方不画翻页与表情格 ✓ 这里一并跳过 ✓
-                let row = match cell.hit {
-                    Hit::Candidate(i) => c.layout.rows.get(i).copied(),
-                    _ => None,
-                };
-                let Some(row) = row else { continue };
-                let row_rect = row.rect;
-                    let selected = matches!(cell.hit, Hit::Candidate(i) if i == c.snapshot.selected_index as usize);
-                    let usable = enabled(&c.snapshot, cell.hit);
-                    let rect = rect(row_rect.left, row_rect.top, row_rect.right, row_rect.bottom);   // 行矩形 → D2D ✓
-                    if selected || (usable && app.gesture.hovered == Some(cell.hit)) {
-                        // 用户要求：选中/悬停一律用灰色，不要蓝色。
-                        // 取文字色（白）降透明度当灰底 —— 透底之上就是一层中性灰。
-                        let mut gray = color(p.active);   // ★ 选中与悬停**同色**（用户要求 ✓）
-                        gray.a = 1.0;   // ★ 高亮：选中/悬停块完全不透明，在黑底上最醒目 ✓
-                        brush.SetColor(&gray);
-                        crate::diagnostics::record(format_args!("高亮填充: 色 #{:06x} 行矩形 {:.0},{:.0}-{:.0},{:.0}", p.active, row_rect.left, row_rect.top, row_rect.right, row_rect.bottom));
-                        target.FillRectangle(&rect, &brush);
-                    }
-                    // ★ 细分隔线（对齐截图：候选区 / 翻页箭头 / 表情之间各一条 ✓）
-                    if matches!(cell.hit, Hit::Previous | Hit::Emoji) {
-                        let mut divider = color(0xFFFFFF);
-                        divider.a = 0.10;
-                        brush.SetColor(&divider);
-                        target.FillRectangle(&rect_with(rect, cell.left, cell.left + 1.0), &brush);   // 用 rect_with ✓ 此处 rect 是局部变量 ✓
-                        brush.SetColor(&color(p.text));
-                    }                    match cell.hit {
-                        Hit::Candidate(i) => {
-                            let item = &c.snapshot.items[i];
-                            text(
-                                &target,
-                                &brush,
-                                &app.graphics.number,
-                                &(i + 1).to_string(),
-                                rect_with(rect, cell.left, cell.left + NUMBER - 8.0 * SCALE),
-                                if !usable {
-                                    p.disabled
-                                } else if selected {
-                                    p.active_number
-                                } else {
-                                    p.secondary
-                                },
-                            );
-                            text(
-                                &target,
-                                &brush,
-                                &app.graphics.text,
-                                &item.primary_text,
-                                rect_with(rect, cell.left + NUMBER, cell.right - logic::PAD),
-                                0xB0B0B0,   // 箭头/表情：暗灰 ✓（text() 要 u32 色值 ✓）
-                            );
-                            if !item.secondary_text.is_empty() {
-                                text(
-                                    &target,
-                                    &brush,
-                                    &app.graphics.comment,
-                                    &item.secondary_text,
-                                    rect_with(
-                                        rect,
-                                        cell.left + NUMBER + c.primary_widths[i] + 8.0 * SCALE,
-                                        cell.right - logic::PAD,
-                                    ),
-                                    if usable { p.secondary } else { p.disabled },
-                                );
-                            }
-                        }
-                        hit => {
-                            let glyph = match hit {
-                                Hit::Previous => "\u{2039}",   // ‹ 用普通文字字体画 ✓ 图标字体可能缺字形 ✗
-                                Hit::Next => "\u{203A}",   // › 同上 ✓
-                                _ => "\u{263A}",   // ☺ 用普通字体可显示的字形 ✓（原来 U+E76E 图标字体缺字形 → 空白 ✗）
-                            };
-                            let mut icon_rect = rect;
-                            icon_rect.top -= 2.0 * SCALE;
-                            icon_rect.bottom -= 2.0 * SCALE;
-                            text(
-                                &target,
-                                &brush,
-                                &app.graphics.number,   // 箭头与表情改用正文/数字字体 ✓ 保证有字形 ✓
-                                glyph,
-                                icon_rect,
-                                0xB0B0B0,   // 箭头/表情：暗灰 ✓（text() 要 u32 色值 ✓）
-                            );
-                        }
-                    }
-                }
-                brush.SetColor(&color(p.border));
-                for cell in &c.layout.cells {
-                    if matches!(cell.hit, Hit::Previous | Hit::Emoji) {
-                        target.FillRectangle(
-                            &rect(cell.left, 0.0, cell.left + SCALE, c.layout.height),
-                            &brush,
-                        );
-                    }
-                }
-                for edge in [
-                    rect(0.0, 0.0, c.layout.width, SCALE),
-                    rect(
-                        0.0,
-                        c.layout.height - SCALE,
-                        c.layout.width,
-                        c.layout.height,
-                    ),
-                    rect(0.0, 0.0, SCALE, c.layout.height),
-                    rect(c.layout.width - SCALE, 0.0, c.layout.width, c.layout.height),
-                ] {
-                    target.FillRectangle(&edge, &brush);
-                }
+impl Drop for Window {
+    fn drop(&mut self) {
+        let hwnd = self.hwnd.get();
+        if !hwnd.0.is_null() {
+            unsafe {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                self.cancel();
+                let _ = KillTimer(Some(hwnd), RETRY_TIMER);
+                let _ = DestroyWindow(hwnd);
             }
-            draw.finish()?;
         }
-        self.recovery.borrow_mut().succeeded();
-        Ok(())
-    }
-    /// 将鼠标消息中的有符号像素坐标换算为 DIP，并命中当前布局。
-    fn hit(&self, param: LPARAM) -> Option<Hit> {
-        let x = param.0 as u16 as i16 as f32 * 96.0 / self.dpi.get() as f32;
-        let y = (param.0 >> 16) as u16 as i16 as f32 * 96.0 / self.dpi.get() as f32;
-        self.app
-            .borrow()
-            .content
-            .as_ref()
-            .and_then(|c| c.layout.hit(x, y))
     }
 }
 
 impl ThemeBackend for Ten {
-    /// 更新候选栏；相同内容的锚点/布局更新只重新定位窗口。
     fn render(&mut self, snapshot: &CandidateView, events: &EventSink) -> Result<(), String> {
         self.window.render(snapshot, events)
     }
-    /// 隐藏窗口并清除内容、输入捕获和待重试状态。
     fn hide(&mut self) {
         self.window.hide();
     }
-    /// 重新读取系统明暗外观并请求重绘。
     fn refresh_appearance(&mut self) -> Result<(), String> {
-        self.window.app.borrow_mut().palette = logic::palette_from_official(crate::appearance::is_dark());
+        let dark = crate::appearance::is_dark();
+        let dpi = self.window.dpi.get();
+        self.window.app.borrow_mut().reload(dark, dpi);
         self.window.invalidate();
         self.window.health()
     }
-    /// 返回已记录的首个窗口或图形故障。
     fn check_health(&mut self) -> Result<(), String> {
         self.window.health()
     }
 }
 
 impl Window {
-    /// 应用候选快照并显示窗口。
-    ///
-    /// 可见且内容未变时仅更新快照/事件发送端并重新定位，保留当前手势和已测量布局；
-    /// 内容变化时取消手势、重测文本并重建布局。隐藏或锚点无效的快照会隐藏窗口。
-    /// 原生定位错误直接返回；首次显示前的绘制错误进入图形恢复流程。
+    /// 应用候选快照：内容没变就只重新定位，变了就重新测量 + 布局 + 绘制。
     fn render(&self, snapshot: &CandidateView, events: &EventSink) -> Result<(), String> {
-        // Layout-only snapshots must not cancel a pressed candidate, rebuild
-        // text layouts, or repaint content. position() handles DPI transitions.
-        let moved = {
+        let same = {
             let mut app = self.app.borrow_mut();
-            if let Some(content) = app.content.as_mut()
-                && (crate::presentation::is_visible(snapshot)
-                    || crate::presentation::is_mode_indicator_visible(snapshot))
-                && crate::theme_api::same_content(&content.snapshot, snapshot)
-            {
-                content.snapshot = snapshot.clone();
-                content.events = events.clone();
-                true
-            } else {
-                false
+            let App {
+                graphics,
+                content,
+                metrics,
+                ..
+            } = &mut *app;
+            match content.as_mut() {
+                Some(content)
+                    if crate::presentation::is_visible(snapshot)
+                        || crate::presentation::is_mode_indicator_visible(snapshot) =>
+                {
+                    if crate::theme_api::same_content(&content.snapshot, snapshot) {
+                        content.snapshot = snapshot.clone();
+                        content.events = events.clone();
+                        content.measured = graphics.measure_all(metrics, &content.snapshot);
+                        content.layout =
+                            Layout::build(metrics, &content.snapshot, &content.measured);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
             }
         };
-        if moved {
+        if same {
             self.position().map_err(|e| e.to_string())?;
+            self.invalidate();
             return self.health();
         }
         self.cancel();
@@ -791,64 +680,74 @@ impl Window {
             self.hide();
             return Ok(());
         }
+        // 主题文件被改过（例如刚在设置里换了皮肤）就重载一次，不必重启输入法
+        {
+            let changed = self
+                .app
+                .borrow()
+                .stamp
+                .ne(&config::dirs().and_then(|(shared, user)| config::stamp(&shared, &user)));
+            if changed {
+                let dark = crate::appearance::is_dark();
+                let dpi = self.dpi.get();
+                self.app.borrow_mut().reload(dark, dpi);
+            }
+        }
         let was_hidden = self.app.borrow().content.is_none();
         {
             let mut app = self.app.borrow_mut();
-            let mut primary_widths = Vec::with_capacity(snapshot.items.len());
-            let mut widths = Vec::with_capacity(snapshot.items.len());
-            for item in &snapshot.items {
-                let primary = app
-                    .graphics
-                    .measure(&item.primary_text, &app.graphics.text)
-                    .map_err(|e| e.to_string())?;
-                let secondary = if item.secondary_text.is_empty() {
-                    0.0
-                } else {
-                    8.0 * SCALE
-                        + app
-                            .graphics
-                            .measure(&item.secondary_text, &app.graphics.comment)
-                            .map_err(|e| e.to_string())?
-                };
-                primary_widths.push(primary);
-                widths.push(primary + secondary);
-            }
-            let layout = if snapshot.mode_indicator.is_some() {
-                Layout::mode_indicator()
+            let measured = app.graphics.measure_all(&app.metrics, snapshot);
+            let layout = if snapshot.mode_indicator.is_some() && snapshot.items.is_empty() {
+                Layout::mode_indicator(&app.metrics)
             } else {
-                Layout::new(widths)
+                Layout::build(&app.metrics, snapshot, &measured)
             };
+            crate::diagnostics::record(format_args!(
+                "布局: 面板 {:.1}x{:.1} DIP · 内容 {:.1},{:.1}-{:.1},{:.1} · 候选 {} 行 · 预编辑 {} · 翻页 {}",
+                layout.content_size.cx,
+                layout.content_size.cy,
+                layout.content.left,
+                layout.content.top,
+                layout.content.right,
+                layout.content.bottom,
+                layout.rows.len(),
+                if layout.preedit.is_null() { "无".to_string() } else { format!("{:.1},{:.1}-{:.1},{:.1}", layout.preedit.left, layout.preedit.top, layout.preedit.right, layout.preedit.bottom) },
+                if layout.page_prev.is_null() { "无".to_string() } else { format!("<{:.0},{:.0} >{:.0},{:.0}", layout.page_prev.left, layout.page_prev.top, layout.page_next.left, layout.page_next.top) },
+            ));
+            for (index, row) in layout.rows.iter().enumerate() {
+                crate::diagnostics::record(format_args!(
+                    "  行 {index}: 高亮 {:.1},{:.1}-{:.1},{:.1} · 序号 {:.1},{:.1}-{:.1},{:.1} · 正文 {:.1},{:.1}-{:.1},{:.1} · 注释 {:.1},{:.1}-{:.1},{:.1}",
+                    row.rect.left, row.rect.top, row.rect.right, row.rect.bottom,
+                    row.label.left, row.label.top, row.label.right, row.label.bottom,
+                    row.text.left, row.text.top, row.text.right, row.text.bottom,
+                    row.comment.left, row.comment.top, row.comment.right, row.comment.bottom,
+                ));
+            }
             app.content = Some(Content {
                 snapshot: snapshot.clone(),
                 events: events.clone(),
+                measured,
                 layout,
-                primary_widths,
             });
         }
         self.position().map_err(|e| e.to_string())?;
         if was_hidden {
-            // The HWND render target retains its previous frame while hidden.
-            // Present this composition before making the window visible.
+            // 隐藏期间窗口保留上一帧，先画一次再显示，避免闪出旧内容
             if let Err(error) = self.paint() {
                 self.graphics_error(error);
-                // Keep the existing recovery path; device loss may require a
-                // fresh target and the timer-driven repaint below.
             }
         }
         unsafe {
             let _ = ShowWindow(
                 self.hwnd.get(),
-                if self.preview {
-                    SW_SHOW
-                } else {
-                    SW_SHOWNOACTIVATE
-                },
+                if self.preview { SW_SHOW } else { SW_SHOWNOACTIVATE },
             );
         }
         self.invalidate();
         self.health()
     }
-    /// 隐藏 HWND，并释放当前交互及定时恢复状态。
+
+    /// 隐藏窗口并释放交互状态。
     fn hide(&self) {
         self.cancel();
         self.app.borrow_mut().content = None;
@@ -858,29 +757,323 @@ impl Window {
             let _ = ShowWindow(self.hwnd.get(), SW_HIDE);
         }
     }
-    /// 返回窗口回调或原生操作记录的健康错误（若有）。
-    fn health(&self) -> Result<(), String> {
-        self.error
-            .borrow()
+
+    /// 绘制一帧（官方 `DoPaint`）。
+    fn paint(&self) -> windows_core::Result<()> {
+        let mut app = self.app.borrow_mut();
+        let App {
+            graphics,
+            content,
+            metrics,
+            scheme,
+            hovered,
+            ..
+        } = &mut *app;
+        graphics.ensure_target(self.hwnd.get(), self.dpi.get(), metrics.antialias)?;
+        let Some(presenter) = graphics.target.as_ref() else {
+            // 客户区还是空的：等窗口显示后的下一条消息再来建目标
+            return Ok(());
+        };
+        let target = presenter.render_target();
+        let scheme = &*scheme;
+        let metrics = &*metrics;
+        unsafe {
+            let brush = target.CreateSolidColorBrush(&d2d_color(scheme.back_color), None)?;
+            presenter.begin_draw();
+            let draw = DrawGuard {
+                presenter,
+                ended: false,
+            };
+            // 官方：Clear 成全透明，圆角之外的像素没人画 → 透出背后内容
+            target.Clear(Some(&D2D_COLOR_F {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+            }));
+            if let Some(content) = content.as_ref() {
+                let mut painter = Painter::new(
+                    &target,
+                    presenter.d2d_factory(),
+                    &graphics.write,
+                    &brush,
+                    &graphics.formats,
+                    metrics,
+                    scheme,
+                    &content.snapshot,
+                );
+                painter.hover_index = match hovered {
+                    Some(Hit::Candidate(i)) => Some(*i),
+                    _ => None,
+                };
+                if content.snapshot.mode_indicator.is_some() && content.snapshot.items.is_empty() {
+                    draw_mode_indicator(
+                        &painter,
+                        &content.layout,
+                        &graphics.indicator,
+                        content.snapshot.ascii_mode.unwrap_or(false),
+                    );
+                } else {
+                    let empty = empty_context(&content.snapshot);
+                    painter
+                        .draw(&content.layout, empty)
+                        .map_err(|message| {
+                            crate::diagnostics::record(format_args!("绘制失败: {message}"));
+                            windows_core::Error::from_hresult(E_UNEXPECTED)
+                        })?;
+                }
+            }
+            draw.finish()?;
+        }
+        drop(app);
+        self.recovery.borrow_mut().succeeded();
+        Ok(())
+    }
+
+    /// 官方 `WeaselPanel::_ResizeWindow` + `D2D::OnResize`：把交换链尺寸对齐客户区。
+    ///
+    /// 必须做：窗口先以 1×1 创建（官方是 10×10），绘制目标若在定位前建好就是那个小尺寸，
+    /// 之后不 `ResizeBuffers` 的话合成出去的永远是那张小图（看起来"什么都没有"）。
+    fn resize(&self) -> windows_core::Result<()> {
+        let mut app = self.app.borrow_mut();
+        let dpi = self.dpi.get() as f32;
+        let Some(presenter) = app.graphics.target.as_mut() else {
+            return Ok(());
+        };
+        unsafe {
+            let mut rc = RECT::default();
+            GetClientRect(self.hwnd.get(), &mut rc).ok()?;
+            let width = (rc.right - rc.left).max(1) as u32;
+            let height = (rc.bottom - rc.top).max(1) as u32;
+            presenter.render_target().SetDpi(dpi, dpi);
+            let outcome = presenter.resize(width, height).map_err(|message| {
+                crate::diagnostics::record(format_args!("交换链尺寸调整失败: {message}"));
+                windows_core::Error::from_hresult(E_UNEXPECTED)
+            });
+            drop(app);
+            outcome?;
+        }
+        Ok(())
+    }
+
+    /// 官方 `_Reposition`（WeaselPanel.cpp:825）：默认贴插入点下方，放不下就翻到上方。
+    fn position(&self) -> windows_core::Result<()> {
+        if self.positioning.replace(true) {
+            return Ok(());
+        }
+        struct Reset<'a>(&'a Cell<bool>);
+        impl Drop for Reset<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+        let _reset = Reset(&self.positioning);
+        for _ in 0..3 {
+            let dpi = self.dpi.get();
+            // 注意：sticky 必须在**借用块之外**读写。
+            // 之前把 popup_position()（内部要 borrow_mut 写 sticky）放在持有 `app`
+            // 不可变借用的闭包里 —— RefCell 双重借用直接 panic，实时模式一打字渲染器就退出，
+            // 表现就是"候选窗看不见、但能打字"。preview 走的是另一条分支，所以预览测不出来。
+            let sticky = self.app.borrow().sticky;
+            let bounds = {
+                let app = self.app.borrow();
+                let Some(content) = app.content.as_ref() else {
+                    return Ok(());
+                };
+                let width = pixels(content.layout.content_size.cx, dpi);
+                let height = pixels(content.layout.content_size.cy, dpi);
+                if self.preview {
+                    let (x, y) = crate::presentation::preview_position(width, height);
+                    Some((x, y, width, height, None))
+                } else {
+                    content
+                        .snapshot
+                        .anchor
+                        .as_ref()
+                        .filter(|anchor| anchor.valid)
+                        .map(|anchor| {
+                            let work = crate::presentation::work_area(anchor);
+                            let placed = reposition(
+                                anchor,
+                                work.map(|work| {
+                                    (work.left, work.top, work.right, work.bottom)
+                                }),
+                                &app.metrics,
+                                width,
+                                height,
+                                dpi,
+                                sticky,
+                            );
+                            (placed.x, placed.y, width, height, Some(placed.sticky))
+                        })
+                }
+            };
+            let Some((x, y, width, height, new_sticky)) = bounds else {
+                return Ok(());
+            };
+            // 借用块已结束，这里写 sticky 是安全的
+            if let Some(sticky) = new_sticky {
+                self.app.borrow_mut().sticky = sticky;
+            }
+            unsafe {
+                SetWindowPos(
+                    self.hwnd.get(),
+                    Some(HWND_TOPMOST),
+                    x,
+                    y,
+                    width,
+                    height,
+                    (SWP_NOACTIVATE | SWP_NOREDRAW) as u32,
+                )
+                .ok()?;
+            }
+            if dpi == self.dpi.get() {
+                break;
+            }
+        }
+        self.resize()?;
+        Ok(())
+    }
+
+    /// 把鼠标坐标换算成 DIP 并命中。
+    fn hit(&self, param: LPARAM) -> Option<Hit> {
+        let app = self.app.borrow();
+        let scale = 96.0 / self.dpi.get().max(1) as f32;
+        let x = param.0 as u16 as i16 as f32 * scale;
+        let y = (param.0 >> 16) as u16 as i16 as f32 * scale;
+        app.content
             .as_ref()
-            .map_or(Ok(()), |e| Err(e.clone()))
+            .and_then(|c| c.layout.hit(&app.metrics, x, y))
     }
 }
 
-impl Drop for Window {
-    /// 先清除回调指针，再释放捕获、定时器和 HWND，避免回调访问正在析构的状态。
-    fn drop(&mut self) {
-        let hwnd = self.hwnd.get();
-        if !hwnd.0.is_null() {
-            unsafe {
-                // Detach before destruction: no callback can access a dropping App.
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                self.cancel();
-                let _ = KillTimer(Some(hwnd), RETRY_TIMER);
-                let _ = DestroyWindow(hwnd);
-            }
+/// 官方 `WeaselPanel::_Reposition`（WeaselPanel.cpp:825）的坐标数学，纯函数便于测。
+///
+/// 与官方逐条对应：
+/// 1. 锚点用插入点，并把下边界下移 6 像素（官方 `MoveTo` 里 `m_inputPos.bottom += 6`）；
+/// 2. 开了阴影时按 `offset` 回退，避免阴影把面板整体推离插入点；
+/// 3. 左右夹进工作区；
+/// 4. 下方放不下（或已经 sticky）就翻到插入点上方 6 像素，并记住 sticky；
+/// 5. 最后再夹一次上边界。
+///
+/// 返回的 `sticky` 要写回窗口状态：官方 `m_sticky` 一旦置上，插入点没大幅移动前一直生效。
+struct Position {
+    x: i32,
+    y: i32,
+    sticky: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reposition(
+    anchor: &crate::theme_api::Anchor,
+    work: Option<(i32, i32, i32, i32)>,
+    m: &Metrics,
+    width: i32,
+    height: i32,
+    dpi: u32,
+    sticky: bool,
+) -> Position {
+    let (work_left, work_top, work_right, work_bottom) = work.unwrap_or((0, 0, 1920, 1080));
+    let mut x = anchor.left;
+    let mut y = anchor.bottom + CARET_GAP;
+    if m.shadow_radius != 0.0 {
+        x -= pixels(m.offset().0, dpi);
+        y -= pixels(m.offset().1, dpi);
+    }
+    if x + width > work_right {
+        x = work_right - width;
+    }
+    if x < work_left {
+        x = work_left;
+    }
+    let mut sticky = sticky;
+    if y + height > work_bottom || sticky {
+        sticky = true;
+        y = anchor.top - CARET_GAP - height;
+        if m.shadow_radius != 0.0 && m.shadow_offset_y > 0.0 {
+            y -= pixels(m.shadow_offset_y, dpi);
         }
     }
+    if y < work_top {
+        y = work_top;
+    }
+    Position { x, y, sticky }
+}
+
+/// 模式提示（官方没有这个窗口：它用状态图标；我们按同一套配色画一个小提示）。
+fn draw_mode_indicator(
+    painter: &Painter<'_>,
+    layout: &Layout,
+    format: &IDWriteTextFormat,
+    ascii: bool,
+) {
+    // 和候选窗同款的圆角底 + 描边（用户要的"边框"）：内容就是那个方形面板
+    painter.highlight_rect(
+        &layout.content,
+        painter.m.round_corner_ex,
+        painter.m.border,
+        painter.scheme.back_color,
+        painter.scheme.shadow_color,
+        painter.scheme.border_color,
+        &layout::RoundInfo::default(),
+    );
+    // 面板里居中放 32×32 的状态图标（中/英各一枚，按底色深浅选一套）
+    let icon = if layout.status_icon.is_null() {
+        layout.content
+    } else {
+        layout.status_icon
+    };
+    let pixels = (icon.width() * painter.m.dpi_scale).round().max(1.0) as u32;
+    let dark_background = is_dark_color(painter.scheme.back_color);
+    if painter.draw_mode_icon(&icon, ascii, pixels, dark_background) {
+        crate::diagnostics::record(format_args!(
+            "模式提示: 图标 {} {pixels}px · 面板 {:.1}x{:.1} DIP",
+            if ascii { "en" } else { "zh" },
+            layout.content_size.cx,
+            layout.content_size.cy
+        ));
+        return;
+    }
+    // 图标读不到（缺文件/加载失败）时退化成居中文字，至少能看出中英状态
+    crate::diagnostics::record(format_args!(
+        "模式提示: 图标不可用，退化为文字 {}",
+        if ascii { "英" } else { "中" }
+    ));
+    let text = if ascii { "英" } else { "中" };
+    unsafe {
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        if let Ok(text_layout) = painter.write.CreateTextLayout(
+            &wide,
+            format,
+            layout.content.width(),
+            layout.content.height(),
+        ) {
+            let _ = text_layout.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            let _ = text_layout.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            let _ = painter.brush.SetColor(&d2d_color(painter.scheme.text_color));
+            painter.target.DrawTextLayout(
+                windows_numerics::Vector2 {
+                    x: layout.content.left,
+                    y: layout.content.top,
+                },
+                &text_layout,
+                painter.brush,
+                D2D1_DRAW_TEXT_OPTIONS_CLIP,
+            );
+        }
+    }
+}
+
+/// 底色是不是深的（决定用 `*-light.ico` 还是 `*-dark.ico` 那一套图标）。
+///
+/// 官方按 `appearance::is_dark()`（系统深浅色）取图标；我们的图标是按**面板底色**
+/// 分的两套，所以这里看配色本身的亮度，跟着配色走更稳。
+fn is_dark_color(argb: u32) -> bool {
+    let r = ((argb >> 16) & 0xff) as f32;
+    let g = ((argb >> 8) & 0xff) as f32;
+    let b = (argb & 0xff) as f32;
+    // 感知亮度（Rec. 601），阈值 128
+    0.299 * r + 0.587 * g + 0.114 * b < 128.0
 }
 
 struct PaintGuard {
@@ -888,7 +1081,6 @@ struct PaintGuard {
     ps: PAINTSTRUCT,
 }
 impl PaintGuard {
-    /// 开始一次 WM_PAINT 区域处理；析构时与之配对调用 `EndPaint`。
     unsafe fn begin(hwnd: HWND) -> Self {
         let mut ps = PAINTSTRUCT::default();
         unsafe {
@@ -898,19 +1090,18 @@ impl PaintGuard {
     }
 }
 impl Drop for PaintGuard {
-    /// 即使绘制提前返回，也结束 Windows 的绘制事务。
     fn drop(&mut self) {
         unsafe {
             let _ = EndPaint(self.hwnd, &self.ps);
         }
     }
 }
+
 struct DrawGuard<'a> {
-    presenter: &'a Presenter,
+    presenter: &'a crate::presenter::Presenter,
     ended: bool,
 }
 impl DrawGuard<'_> {
-    /// 显式结束这一帧：先 EndDraw，再提交交换链，让 DWM 取走这一帧。
     fn finish(mut self) -> windows_core::Result<()> {
         self.ended = true;
         self.presenter.end_draw().map_err(|message| {
@@ -920,7 +1111,6 @@ impl DrawGuard<'_> {
     }
 }
 impl Drop for DrawGuard<'_> {
-    /// 尚未显式结束时尽力配对结束，避免遗留未完成的绘制事务。
     fn drop(&mut self) {
         if !self.ended {
             let _ = self.presenter.end_draw();
@@ -928,87 +1118,7 @@ impl Drop for DrawGuard<'_> {
     }
 }
 
-/// Windows 窗口过程的 ABI 边界；捕获 Rust panic，避免展开穿过系统回调。
-/// 把窗口裁剪成**圆角矩形**，并开启分层窗口的统一透明度。
-///
-/// 为什么必须这么做：当前用的是 `ID2D1HwndRenderTarget`，它**不会**把逐像素 alpha 交给 DWM ✗，
-/// 于是"清屏 alpha=0"的圆角外区域会以 RGB(0,0,0) **不透明**地显示出来 —— 就是用户看到的
-/// "圆角边上多一层黑角" ✓。用 `SetWindowRgn` 在系统层面裁掉圆角之外，圆角就一定是干净的 ✓。
-/// 真正的逐像素玻璃（面板半透明）需要 `ID2D1DCRenderTarget` + 32 位 DIB + `UpdateLayeredWindow` ✓（下一步）。
-/// 分层窗口扩展样式（0x00080000）。d2d 绑定集里没有导出它，这里本地定义 ✓
-/// 只有设了它，`SetLayeredWindowAttributes` 才生效（整窗统一透明度 ✓）。
-const WS_EX_LAYERED: i32 = 0x0008_0000;
-/// 官方用的合成窗口样式：不分配 GDI 重定向位图，交换链直接交给 DComp。
-const WS_EX_NOREDIRECTIONBITMAP: i32 = 0x0020_0000;
-unsafe fn apply_round_region(hwnd: HWND, width: f32, height: f32) {
-    #[link(name = "gdi32")]
-    unsafe extern "system" {
-        fn CreateRoundRectRgn(x1: i32, y1: i32, x2: i32, y2: i32, w: i32, h: i32) -> isize;
-    }
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn SetWindowRgn(hwnd: HWND, rgn: isize, redraw: i32) -> i32;
-        fn SetLayeredWindowAttributes(hwnd: HWND, key: u32, alpha: u8, flags: u32) -> i32;
-    }
-    if width <= 0.0 || height <= 0.0 {
-        return;
-    }
-    // ★ 单位换算（今晚踩的坑 ✗）：调用方给的是 **DIP**，而 SetWindowRgn 要的是**设备像素** ✗。
-    // 不换算时 DPI>96（125%/150% 缩放）区域会偏小 → 面板**右侧与底部被切掉** ✗（用户报的"右侧不全" ✓）。
-    let dpi = GetDpiForWindow(hwnd).max(96) as f32;
-    let scale = dpi / 96.0;
-    let radius = (height / 6.0).max(4.0) * scale;   // 半径同样换算成像素 ✓
-    let d = (radius * 2.0).round() as i32;
-    let rgn = CreateRoundRectRgn(
-        0,
-        0,
-        (width * scale).round() as i32 + 1,
-        (height * scale).round() as i32 + 1,
-        d,
-        d,
-    );
-    if rgn != 0 {
-        // SetWindowRgn 接管 region 所有权，不需要 DeleteObject ✓
-        SetWindowRgn(hwnd, rgn, 1);
-    // ★ 磨砂玻璃：给 DWM 模糊也传**圆角区域**（传 NULL 会按矩形铺满 → 圆角外露出方形磨砂层 ✗）
-    // 注意 SetWindowRgn 会接管 rgn 的所有权 ✗ 所以这里必须再建一个区域 ✓
-    let blur_rgn = CreateRoundRectRgn(
-        0,
-        0,
-        (width * scale).round() as i32 + 1,
-        (height * scale).round() as i32 + 1,
-        d,
-        d,
-    );
-    if blur_rgn != 0 {
-        #[link(name = "dwmapi")]
-        unsafe extern "system" {
-            fn DwmEnableBlurBehindWindow(hwnd: HWND, bb: *const BlurBehind) -> i32;
-        }
-        #[repr(C)]
-        struct BlurBehind {
-            flags: u32,
-            enable: i32,
-            blur_region: isize,
-            transition_on_maximized: i32,
-        }
-        const DWM_BB_ENABLE: u32 = 0x1;
-        const DWM_BB_BLURREGION: u32 = 0x2;
-        let bb = BlurBehind {
-            flags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
-            enable: 1,
-            blur_region: blur_rgn,
-            transition_on_maximized: 0,
-        };
-        DwmEnableBlurBehindWindow(hwnd, &bb);
-    }
-    }
-    // 分层窗口：整个（已裁圆的）窗口带统一透明度 ✓（逐像素 alpha 要等 DIB + UpdateLayeredWindow ✓）
-    const LWA_ALPHA: u32 = 0x2;
-    SetLayeredWindowAttributes(hwnd, 0, 200, LWA_ALPHA);   // ★ Aero 玻璃 200 ≈ 78%：让 DWM 磨砂真正透出来 ✓
-}
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    // Catch every Rust callback, including paint and event delivery, before ABI return.
     match catch_unwind(AssertUnwindSafe(|| unsafe { dispatch(hwnd, msg, wp, lp) })) {
         Ok(result) => result,
         Err(_) => {
@@ -1016,7 +1126,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Window;
                 if let Some(window) = ptr.as_ref() {
                     if let Ok(mut error) = window.error.try_borrow_mut() {
-                        *error = Some("theme_ten native callback panicked".into());
+                        *error = Some("official 主题原生回调 panic".into());
                     }
                 }
             }
@@ -1025,10 +1135,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
     }
 }
 
-/// 分发窗口消息并驱动绘制、DPI、恢复和鼠标手势状态机。
-///
-/// `WM_NCCREATE` 将创建参数中的稳定 `Window` 指针绑定到 HWND；后续消息仅在该指针
-/// 存在时访问状态。调用者必须保证消息参数符合对应 Win32 消息的约定。
+/// 分发窗口消息：绘制、DPI、恢复、鼠标手势（官方 `WeaselPanel::MsgHandler`）。
 unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         if msg == WM_NCCREATE as u32 {
@@ -1057,19 +1164,13 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                 }
                 WM_ERASEBKGND => return LRESULT(1),
                 WM_CLOSE => {
-                    // Closing the preview window ends the process. The live tool
-                    // window is destroyed by the shutdown path and never posts
-                    // WM_CLOSE.
                     if window.preview {
                         PostQuitMessage(0);
-                        // Leave HWND destruction to the owning backend's Drop.
                         return LRESULT(0);
                     }
                     return DefWindowProcW(hwnd, msg, wp, lp);
                 }
                 WM_MOUSEACTIVATE => {
-                    // The preview window must be activatable so it can be closed
-                    // (Alt+F4); the live strip never activates the host.
                     if window.preview {
                         return DefWindowProcW(hwnd, msg, wp, lp);
                     }
@@ -1079,16 +1180,15 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                     if let Err(e) = window.resize() {
                         window.graphics_error(e);
                     }
+                    window.invalidate();
                     return LRESULT(0);
                 }
                 WM_DPICHANGED => {
                     window.dpi.set((wp.0 as u32 & 0xffff).max(1));
                     window.cancel();
+                    window.app.borrow_mut().set_dpi(window.dpi.get());
                     if let Err(e) = window.position() {
                         window.fail(e);
-                    }
-                    if let Err(e) = window.resize() {
-                        window.graphics_error(e);
                     }
                     window.invalidate();
                     return LRESULT(0);
@@ -1099,46 +1199,18 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                     window.invalidate();
                     return LRESULT(0);
                 }
-                WM_LBUTTONDOWN => {
-                    let hit = window.hit(lp);
-                    let pressed = {
-                        let mut app = window.app.borrow_mut();
-                        let App {
-                            content, gesture, ..
-                        } = &mut *app;
-                        if let Some(c) = content {
-                            gesture.press(hit, &c.snapshot);
-                        }
-                        gesture.pressed.is_some()
-                    };
-                    if pressed {
-                        let _ = SetCapture(hwnd);
-                    }
+                WM_TIMER if wp.0 == AUTOREV_TIMER => {
+                    let _ = KillTimer(Some(hwnd), AUTOREV_TIMER);
+                    window.invalidate();
                     return LRESULT(0);
                 }
-                WM_LBUTTONUP => {
-                    let hit = window.hit(lp);
-                    let event = {
-                        let mut app = window.app.borrow_mut();
-                        let App {
-                            content, gesture, ..
-                        } = &mut *app;
-                        content.as_ref().and_then(|c| {
-                            gesture
-                                .release(hit, &c.snapshot)
-                                .map(|e| (c.events.clone(), e))
-                        })
-                    };
-                    window.cancel();
-                    if let Some((sender, event)) = event {
-                        sender.send(event);
-                    }
-                    window.invalidate();
+                WM_TIMER if wp.0 == AUTOHIDE_TIMER => {
+                    let _ = KillTimer(Some(hwnd), AUTOHIDE_TIMER);
+                    window.hide();
                     return LRESULT(0);
                 }
                 WM_MOUSEMOVE => {
                     let hit = window.hit(lp);
-                    window.app.borrow_mut().gesture.motion(hit);
                     let mut track = TRACKMOUSEEVENT {
                         cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
                         dwFlags: TME_LEAVE as u32,
@@ -1146,7 +1218,128 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                         dwHoverTime: 0,
                     };
                     let _ = TrackMouseEvent(&mut track);
+                    let mut app = window.app.borrow_mut();
+                    let changed = app.hovered != hit;
+                    // 官方 hover_type = none 时完全不悬停
+                    app.hovered = if app.metrics.hover == config::Hover::None {
+                        None
+                    } else {
+                        hit
+                    };
+                    if changed {
+                        crate::diagnostics::record(format_args!(
+                            "悬停: {:?} → {:?}（hover_type={:?}）",
+                            changed, app.hovered, app.metrics.hover
+                        ));
+                    }
+                    if changed {
+                        drop(app);
+                        window.invalidate();
+                    }
+                    return LRESULT(0);
+                }
+                WM_LBUTTONDOWN => {
+                    let hit = window.hit(lp);
+                    let event = {
+                        let mut app = window.app.borrow_mut();
+                        match hit {
+                            // 官方在按下时就翻页（WeaselPanel.cpp:1116-1143）
+                            Some(Hit::Previous) => {
+                                app.pressed = None;
+                                Some(UiAction::NavigatePrevious)
+                            }
+                            Some(Hit::Next) => {
+                                app.pressed = None;
+                                Some(UiAction::NavigateNext)
+                            }
+                            other => {
+                                app.pressed = other;
+                                None
+                            }
+                        }
+                    };
+                    if event.is_none() {
+                        let _ = SetCapture(hwnd);
+                    }
+                    if let Some(action) = event {
+                        let sender = window
+                            .app
+                            .borrow()
+                            .content
+                            .as_ref()
+                            .map(|c| c.events.clone());
+                        if let Some(sender) = sender {
+                            sender.send(action);
+                        }
+                    }
+                    return LRESULT(0);
+                }
+                WM_LBUTTONUP => {
+                    let hit = window.hit(lp);
+                    let event = {
+                        let mut app = window.app.borrow_mut();
+                        let pressed = app.pressed.take();
+                        let selected = app
+                            .content
+                            .as_ref()
+                            .map(|c| c.snapshot.selected_index as usize);
+                        match (pressed, hit) {
+                            // 官方：只有点在**当前高亮**的候选上才算选中（L1050-1057）
+                            (Some(Hit::Candidate(i)), Some(Hit::Candidate(j)))
+                                if i == j && Some(i) == selected =>
+                            {
+                                Some(UiAction::ItemInvoked(i as u32))
+                            }
+                            _ => None,
+                        }
+                    };
+                    window.cancel();
+                    if let Some(action) = event {
+                        let sender = window
+                            .app
+                            .borrow()
+                            .content
+                            .as_ref()
+                            .map(|c| c.events.clone());
+                        if let Some(sender) = sender {
+                            sender.send(action);
+                        }
+                    }
                     window.invalidate();
+                    return LRESULT(0);
+                }
+                WM_MOUSEWHEEL => {
+                    // 官方 OnScroll：paging_on_scroll 打开时滚轮翻页
+                    let delta = ((wp.0 >> 16) & 0xffff) as u16 as i16;
+                    let action = {
+                        let app = window.app.borrow();
+                        if !app.metrics.paging_on_scroll || delta == 0 {
+                            None
+                        } else if delta < 0 && app.content.as_ref().is_some_and(|c| c.snapshot.can_page_next)
+                        {
+                            Some(UiAction::NavigateNext)
+                        } else if delta > 0
+                            && app
+                                .content
+                                .as_ref()
+                                .is_some_and(|c| c.snapshot.can_page_previous)
+                        {
+                            Some(UiAction::NavigatePrevious)
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(action) = action {
+                        let sender = window
+                            .app
+                            .borrow()
+                            .content
+                            .as_ref()
+                            .map(|c| c.events.clone());
+                        if let Some(sender) = sender {
+                            sender.send(action);
+                        }
+                    }
                     return LRESULT(0);
                 }
                 WM_MOUSELEAVE | WM_CAPTURECHANGED | WM_CANCELMODE => {
@@ -1165,81 +1358,138 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     }
 }
 
-/// 将 `0xRRGGBB` 转为不透明的 Direct2D 浮点颜色。
-fn color(rgb: u32) -> D2D_COLOR_F {
-    D2D_COLOR_F {
-        r: ((rgb >> 16) & 255) as f32 / 255.0,
-        g: ((rgb >> 8) & 255) as f32 / 255.0,
-        b: (rgb & 255) as f32 / 255.0,
-        a: 1.0,
-    }
-}
-/// 按 DIP 坐标构造 Direct2D 矩形。
-fn rect(left: f32, top: f32, right: f32, bottom: f32) -> D2D_RECT_F {
-    D2D_RECT_F {
-        left,
-        top,
-        right,
-        bottom,
-    }
-}
-/// 保留矩形的垂直范围，仅替换水平边界。
-fn rect_with(mut rect: D2D_RECT_F, left: f32, right: f32) -> D2D_RECT_F {
-    rect.left = left;
-    rect.right = right;
-    rect
-}
-/// 设置画刷颜色并在给定裁剪矩形内绘制单行 UTF-16 文本。
-unsafe fn text(
-    target: &ID2D1RenderTarget,
-    brush: &ID2D1SolidColorBrush,
-    format: &IDWriteTextFormat,
-    value: &str,
-    rect: D2D_RECT_F,
-    rgb: u32,
-) {
-    let value: Vec<u16> = value.encode_utf16().collect();
-    unsafe {
-        brush.SetColor(&color(rgb));
-        target.DrawText(
-            &value,
-            format,
-            &rect,
-            brush,
-            D2D1_DRAW_TEXT_OPTIONS_CLIP,
-            DWRITE_MEASURING_MODE_NATURAL,
-        );
-    }
-}
-
-/// ten 候选栏主题的工厂入口。
+/// 官方皮肤主题的工厂入口。
 pub struct Factory;
 
 impl crate::theme_api::ThemeFactory for Factory {
-    /// 返回用于主题选择和诊断的稳定名称。
     fn name(&self) -> &'static str {
         "official"
     }
-    /// 声明此主题只提供候选栏界面。
+    /// 候选栏 + 预编辑（官方会把未行内显示的组字串画在候选窗里）+ 模式提示。
     fn capabilities(&self) -> crate::theme_api::ThemeCapabilities {
         crate::theme_api::ThemeCapabilities {
+            preedit: true,
+            resident: false,
             mode_indicator: true,
-            ..crate::theme_api::ThemeCapabilities::CANDIDATES_ONLY
         }
     }
-    /// 校验 ten 专属配置并创建对应模式的窗口后端。
-    ///
-    /// 当前接受任意 JSON 对象作为主题配置；窗口或配置校验失败会转换为创建错误。
     fn create(
         &self,
         mode: UiMode,
         settings: &weasel_common::settings::ConfigSnapshot,
     ) -> crate::theme_api::ThemeCreation {
         (|| -> Result<Box<dyn ThemeBackend>, String> {
-            // Theme-local validation; style fields will be defined by this theme.
             let _: serde_json::Map<String, serde_json::Value> = settings.theme_settings("official")?;
             create(mode)
         })()
         .into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme_api::Anchor;
+    use weasel_style::UIStyle;
+
+    fn metrics(shadow_radius: i32) -> Metrics {
+        let mut style = UIStyle::default();
+        style.layout.shadow_radius = shadow_radius;
+        Metrics::new(&style, 96.0)
+    }
+
+    fn anchor(left: i32, top: i32, right: i32, bottom: i32) -> Anchor {
+        Anchor {
+            left,
+            top,
+            right,
+            bottom,
+            valid: true,
+        }
+    }
+
+    #[test]
+    fn places_below_caret_with_official_six_pixel_gap() {
+        let m = metrics(0);
+        let work = Some((0, 0, 1920, 1080));
+        // 插入点在屏幕上方，下方空间充足 → 面板顶边 = 插入点底边 + 6
+        let placed = reposition(&anchor(100, 200, 104, 220), work, &m, 300, 200, 96, false);
+        assert_eq!((placed.x, placed.y), (100, 226));
+        assert!(!placed.sticky, "放得下就不该进入 sticky");
+    }
+
+    #[test]
+    fn flips_above_caret_when_bottom_is_too_close() {
+        let m = metrics(0);
+        let work = Some((0, 0, 1920, 1080));
+        // 插入点底部离工作区底部只剩 100px，面板高 200 → 翻到上方：top - 6 - 200
+        let placed = reposition(&anchor(100, 900, 104, 1000), work, &m, 300, 200, 96, false);
+        assert_eq!(placed.y, 900 - 6 - 200);
+        assert!(placed.sticky, "翻上去之后要保持 sticky");
+        // sticky 会一直生效，即使插入点又回到了下方有空间的位置；
+        // 翻上去后越出工作区顶时，官方最后还会再夹一次（所以这里是 0 而不是 -6）
+        let again = reposition(&anchor(100, 200, 104, 220), work, &m, 300, 200, 96, true);
+        assert_eq!(again.y, 0, "翻到上方越界后被夹到工作区顶");
+        assert!(again.sticky);
+    }
+
+    #[test]
+    fn clamps_into_work_area_on_both_sides() {
+        let m = metrics(0);
+        let work = Some((100, 50, 500, 400));
+        // 右边越界 → 贴右
+        let right = reposition(&anchor(480, 100, 484, 120), work, &m, 300, 100, 96, false);
+        assert_eq!(right.x, 500 - 300);
+        // 左边越界 → 贴左
+        let left = reposition(&anchor(20, 100, 24, 120), work, &m, 300, 100, 96, false);
+        assert_eq!(left.x, 100);
+        // 下方放不下（86 + 400 > 400）→ 翻到上方，再越界 → 夹到工作区顶
+        let top = reposition(&anchor(120, 60, 124, 80), work, &m, 300, 400, 96, false);
+        assert_eq!(top.y, 50);
+        assert!(top.sticky);
+    }
+
+    #[test]
+    fn shadow_offsets_pull_the_panel_back_by_offset() {
+        // 开阴影后 offset = shadow_offset + radius*2 - radius/2 + border*2
+        let m = metrics(6);
+        let (ox, oy) = m.offset();
+        let work = Some((0, 0, 1920, 1080));
+        let placed = reposition(&anchor(300, 400, 304, 420), work, &m, 300, 200, 96, false);
+        assert_eq!(placed.x, 300 - ox.round() as i32);
+        assert_eq!(placed.y, 420 + CARET_GAP - oy.round() as i32);
+    }
+
+    #[test]
+    fn no_work_area_falls_back_to_a_default_screen() {
+        let m = metrics(0);
+        let placed = reposition(&anchor(10, 10, 14, 30), None, &m, 200, 100, 96, false);
+        assert_eq!(placed.x, 10, "拿不到显示器信息时仍按插入点摆");
+        assert_eq!(placed.y, 36);
+    }
+
+    #[test]
+    fn antialias_names_match_official() {
+        use config::Antialias;
+        assert_eq!(Antialias::from_name("default"), Antialias::Default);
+        assert_eq!(Antialias::from_name("cleartype"), Antialias::ClearType);
+        assert_eq!(Antialias::from_name("grayscale"), Antialias::Grayscale);
+        assert_eq!(Antialias::from_name("aliased"), Antialias::Aliased);
+        assert_eq!(Antialias::from_name("没写"), Antialias::Default);
+        // 数值与 D2D1_TEXT_ANTIALIAS_MODE 一致（官方直接强转）
+        assert_eq!(
+            [
+                Antialias::Default.d2d(),
+                Antialias::ClearType.d2d(),
+                Antialias::Grayscale.d2d(),
+                Antialias::Aliased.d2d()
+            ],
+            [
+                D2D1_TEXT_ANTIALIAS_MODE_DEFAULT as i32,
+                D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE as i32,
+                D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE as i32,
+                D2D1_TEXT_ANTIALIAS_MODE_ALIASED as i32,
+            ]
+        );
     }
 }

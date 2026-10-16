@@ -1,7 +1,7 @@
 //! 把官方小狼毫的皮肤（`weasel.yaml`）转成我们约定的主题文件：
-//! `Rime-Next\theme\default.theme.toml`。
+//! `Rime-Next\theme\default.theme.yaml`。
 //!
-//! 用法：`cargo run --release -p weasel-style --bin theme-toml -- <输入 weasel.yaml> <输出 default.theme.toml>`
+//! 用法：`cargo run --release -p weasel-style --bin theme-toml -- <输入 weasel.yaml> <输出 default.theme.yaml>`
 //!
 //! 约定（TOML v1）：顶层 `config_version` / `color_scheme` / `color_scheme_dark`，
 //! `[style]` 段放官方 style 的 25 个键，`[style.layout]` 放 19 个布局键，
@@ -36,6 +36,7 @@ const COLOR_KEYS: &[(&str, fn(&ColorScheme) -> u32)] = &[
     ("hilited_candidate_shadow_color", |s| s.hilited_candidate_shadow_color),
     ("hilited_label_color", |s| s.hilited_label_color),
     ("hilited_comment_text_color", |s| s.hilited_comment_text_color),
+    ("hilited_mark_color", |s| s.hilited_mark_color),
     ("nextpage_color", |s| s.nextpage_color),
     ("prevpage_color", |s| s.prevpage_color),
 ];
@@ -108,17 +109,31 @@ fn write_scheme(out: &mut String, id: &str, scheme: &ColorScheme) {
     if !scheme.color_format.is_empty() {
         let _ = writeln!(out, "color_format = \"{}\"", escape(&scheme.color_format));
     }
+    // 颜色按官方 `color_format`（默认 abgr）写回官方文本形式：**不透明写 6 位、
+    // 带 alpha 写 8 位**。官方正是靠位数区分"不透明黑 0x000000"与"全透明
+    // 0x00000000"，一律写 8 位会把这个区别抹掉（旧版生成器就是这么丢的 ✗）。
+    let format = weasel_style::ColorFormat::from_name(&scheme.color_format);
     for (key, get) in COLOR_KEYS {
-        let _ = writeln!(out, "{key} = \"0x{:08x}\"", get(scheme));
+        let _ = writeln!(
+            out,
+            "{key} = \"{}\"",
+            weasel_style::color::format_text(get(scheme), format)
+        );
     }
 }
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let (input, output) = match (args.next(), args.next()) {
-        (Some(input), Some(output)) => (input, output),
+    let (input, output, skin_only) = match (args.next(), args.next(), args.next()) {
+        (Some(input), Some(output), mode) => (
+            input,
+            output,
+            matches!(mode.as_deref(), Some("--skin")),
+        ),
         _ => {
-            eprintln!("用法: theme-toml <weasel.yaml> <default.theme.toml>");
+            eprintln!("用法: theme-toml <weasel.yaml> <输出.toml> [--skin]");
+            eprintln!("  --skin: 只写配色（出厂皮肤文件 default.theme.yaml 用这个；");
+            eprintln!("          布局与配色选择属于用户设置，放在 %APPDATA%\\Rime-Next\\theme\\theme.yaml）");
             std::process::exit(2);
         }
     };
@@ -132,10 +147,21 @@ fn main() {
     };
 
     let mut out = String::new();
-    out.push_str("# default.theme.toml —— 官方小狼毫的皮肤，逐字搬过来\n");
-    out.push_str("#\n# 生成方式: cargo run --release -p weasel-style --bin theme-toml -- <weasel.yaml> <本文件>\n");
-    out.push_str("# 内容: 官方 style 段与 layout 段全部字段 + preset_color_schemes 里每一套配色。\n");
-    out.push_str("# 位置约定: <程序文件夹>\\Rime-Next\\theme\\default.theme.toml（由 librime 按路径识别）。\n\n");
+    if skin_only {
+        out.push_str("# default.theme.yaml —— 皮肤「default」：**只有配色**。\n");
+        out.push_str("#\n");
+        out.push_str(&format!(
+            "# 内容由官方 weasel.yaml（{input}）生成；\n# 布局与\"用哪套皮肤\"在 theme\\theme.yaml 里。\n"
+        ));
+        out.push_str("# 颜色沿用官方语义：位数决定 alpha（6 位不透明、8 位带 alpha），\n");
+        out.push_str("# 通道顺序按 color_format（官方默认 abgr，即文本是 AABBGGRR）。\n");
+        out.push_str("# 位置约定: <程序文件夹>\\Rime-Next\\theme\\<皮肤名>\\<皮肤名>.theme.yaml\n\n");
+    } else {
+        out.push_str("# default.theme.yaml —— 官方小狼毫的皮肤，逐字搬过来\n");
+        out.push_str("#\n# 生成方式: cargo run --release -p weasel-style --bin theme-toml -- <weasel.yaml> <本文件>\n");
+        out.push_str("# 内容: 官方 style 段与 layout 段全部字段 + preset_color_schemes 里每一套配色。\n");
+        out.push_str("# 位置约定: <程序文件夹>\\Rime-Next\\theme\\default.theme.yaml（由 librime 按路径识别）。\n\n");
+    }
     let _ = writeln!(out, "config_version = \"{}\"", escape(&config.config_version));
     let _ = writeln!(out, "color_scheme = \"{}\"", escape(&config.style.color_scheme));
     match &config.style.color_scheme_dark {
@@ -145,7 +171,9 @@ fn main() {
         None => out.push_str("# color_scheme_dark = \"\"   # 官方默认没有暗色方案\n"),
     }
 
-    write_style(&mut out, &config);
+    if !skin_only {
+        write_style(&mut out, &config);
+    }
     for (id, scheme) in &config.schemes {
         write_scheme(&mut out, id, scheme);
     }

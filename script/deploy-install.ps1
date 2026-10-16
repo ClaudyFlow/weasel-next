@@ -35,10 +35,33 @@ function Write-Warn2($text) { Write-Host "   $text" -ForegroundColor Yellow }
 function Invoke-ElevatedScript {
     param([string[]]$Lines)
     $tmp = Join-Path $env:TEMP ("weasel-next-deploy-{0}.cmd" -f ([Guid]::NewGuid().ToString('N').Substring(0, 8)))
-    Set-Content -Path $tmp -Value ((@('@echo off') + $Lines + @('echo DONE')) -join "`r`n") -Encoding OEM
-    $out = & sudo cmd /c $tmp 2>&1
-    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
-    return $out
+    # 提权脚本的完整输出留一份日志：同步失败时（例如 robocopy 报错）要能事后查
+    $logPath = Join-Path $env:TEMP 'weasel-next-deploy.log'
+    $donePath = Join-Path $env:TEMP 'weasel-next-deploy.done'
+    Remove-Item $logPath, $donePath -Force -ErrorAction SilentlyContinue
+    # sudo 处于「强制新建窗口」模式：命令是**异步**的，输出也不回传。
+    # 所以既把日志写进文件，也用一个结束标记文件让调用方等它真正做完。
+    $body = @('@echo off') + $Lines + @(
+        'echo SYNC_EXIT=%ERRORLEVEL%',
+        ('echo done > "{0}"' -f $donePath)
+    )
+    $quoted = $body -join "`r`n"
+    Set-Content -Path $tmp -Value $quoted -Encoding OEM
+    # 重定向写在 cmd 内部（用 call 包一层），避免 sudo 重新解析引号时丢掉重定向
+    $wrapper = Join-Path $env:TEMP 'weasel-next-deploy-wrapper.cmd'
+    Set-Content -Path $wrapper -Value (@('@echo off', ('call "{0}" > "{1}" 2>&1' -f $tmp, $logPath)) -join "`r`n") -Encoding OEM
+    & sudo cmd /c $wrapper | Out-Null
+    Write-Host "   提权日志：$logPath"
+    # 等结束标记（最多 10 分钟：首次复制可能要拷几百 MB）
+    for ($i = 0; $i -lt 1200; $i++) {
+        if (Test-Path $donePath) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    $log = if (Test-Path $logPath) { Get-Content -LiteralPath $logPath -Raw } else { '' }
+    foreach ($line in ($log -split "`r?`n" | Where-Object { $_.Trim() })) { Write-Host "     $line" }
+    if (-not (Test-Path $donePath)) { Write-Warn2 '提权脚本在 10 分钟内没有结束（可能还在复制，或 UAC 未确认）' }
+    Remove-Item $tmp, $wrapper, $donePath, $logPath -Force -ErrorAction SilentlyContinue
+    return $log
 }
 
 # 1) 编译
@@ -49,17 +72,60 @@ if (-not $SkipBuild) {
     Write-Ok '编译通过'
 }
 
+# 1.5) 先停栈：安装目录里的 exe/dll 被运行中的进程锁着，robocopy 会静默跳过它们
+Write-Step '停止运行中的组件（否则文件被占用，复制会静默失败）'
+$running = @(Get-Process -Name 'Weasel-Next-Server', 'Weasel-Next-Engine', 'Weasel-Next-Renderer' -ErrorAction SilentlyContinue)
+if ($running.Count -gt 0) {
+    $running | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+    for ($i = 0; $i -lt 40; $i++) {
+        $left = @(Get-Process -Name 'Weasel-Next-Server', 'Weasel-Next-Engine', 'Weasel-Next-Renderer' -ErrorAction SilentlyContinue)
+        if ($left.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 250
+    }
+    Write-Ok ("已停止 {0} 个进程" -f $running.Count)
+} else {
+    Write-Ok '没有在跑的组件'
+}
+
 # 2) 同步到安装目录（sudo + .cmd，参数才不会丢）
 Write-Step "同步到安装目录 $InstallDir"
 $elevated = @(
     ('if not exist "{0}" mkdir "{0}"' -f $InstallDir),
-    ('robocopy "{0}" "{1}" /E /XF *.old-* *.previous* *.log /NFL /NDL /NJH /NJS /R:1 /W:1' -f $stage, $InstallDir),
+    # 只拷运行时产物：cargo 的 deps\、build\、incremental\ 有几 GB，绝不能进安装目录
+    ('robocopy "{0}" "{1}" /E /XD deps build incremental .fingerprint examples /XF *.old-* *.previous* *.log *.d *.rlib *.rmeta *.pdb /NFL /NDL /NJH /NJS /R:1 /W:1' -f $stage, $InstallDir),
+    # 早先被整体复制进去的构建目录要清掉（安装目录只放运行时文件）。
+    # 注意：批处理里循环变量是 %%D；这里干脆一个目录一条命令，避免再次踩坑。
+    ('if exist "{0}\deps" rmdir /s /q "{0}\deps"' -f $InstallDir),
+    ('if exist "{0}\build" rmdir /s /q "{0}\build"' -f $InstallDir),
+    ('if exist "{0}\incremental" rmdir /s /q "{0}\incremental"' -f $InstallDir),
+    ('if exist "{0}\.fingerprint" rmdir /s /q "{0}\.fingerprint"' -f $InstallDir),
+    ('if exist "{0}\examples" rmdir /s /q "{0}\examples"' -f $InstallDir),
     ('robocopy "{0}\Rime-Next" "{1}\Rime-Next" /E /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
     ('robocopy "{0}\tool\7z" "{1}\7z" /E /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
     ('robocopy "{0}\target\release" "{1}\themes" weasel_theme_*.dll /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
     ('robocopy "{0}\Rime-Next\sound" "{1}\Rime-Next\sound" /E /NFL /NDL /NJH /NJS /R:1 /W:1' -f $root, $InstallDir),
+    # 方案清单已改成 librime 直读 schema.yaml：清掉老机器上生成的这份中转 YAML
+    ('del /f /q "%APPDATA%\Rime-Next\default.custom.yaml" 2>nul'),
+    # TIP 的 cargo 产物叫 weasel_tip.dll，对外/注册的名字是 Weasel-Next.dll。
+    # 必须在这里刷新对外名，否则注册表指向的那个 DLL 永远是上一版的（改动看着"没生效"）。
+    # 它被每个开着输入法的进程加载着 → 原地覆盖必然失败；照安装包的做法先改名再放新的
+    # （NTFS 允许给已加载的 DLL 改名），旧文件留成 weasel_tip.old.*.dll 等进程退出后再删。
+    ('if exist "{1}\Weasel-Next.dll" ren "{1}\Weasel-Next.dll" "weasel_tip.old.%RANDOM%%RANDOM%.dll"' -f $root, $InstallDir),
+    ('copy /y "{0}\target\release\weasel_tip.dll" "{1}\Weasel-Next.dll"' -f $root, $InstallDir),
+    ('del /f /q "{1}\weasel_tip.old.*.dll" 2>nul' -f $root, $InstallDir),
+    # rime.dll 由 artifact\smoke 提供（不在 target\release 里）——必须显式搬，否则永远装旧版
+    ('copy /y "{0}\artifact\smoke\rime.dll" "{1}\rime.dll"' -f $root, $InstallDir),
+    # punctuation.yaml 已并入 symbols.yaml：把安装目录里那份也清掉
+    ('del /f /q "{1}\Rime-Next\punctuation.yaml" 2>nul' -f $root, $InstallDir),
+    # 宿主配置已改回 YAML（同名换后缀）：装 weasel.yaml，清掉 weasel.json 与上一版的 weasel.toml
+    ('copy /y "{0}\weasel.yaml" "{1}\weasel.yaml"' -f $root, $InstallDir),
+    ('del /f /q "{1}\weasel.toml" 2>nul' -f $root, $InstallDir),
+    ('del /f /q "{1}\Rime-Next\theme\default\default.theme.toml" 2>nul' -f $root, $InstallDir),
+    ('del /f /q "{1}\Rime-Next\eassy\default\default.eassy.toml" 2>nul' -f $root, $InstallDir),
+    ('del /f /q "{1}\Rime-Next\schema\schema.toml" 2>nul' -f $root, $InstallDir),
+    ('del /f /q "{1}\weasel.json" 2>nul' -f $root, $InstallDir),
     # 清理已迁移的旧扁平 yaml：源已放进 schema\<方案>\，目标里残留的扁平副本要删掉
-    ('for %F in ("{1}\Rime-Next\*.schema.yaml" "{1}\Rime-Next\*.dict.yaml") do if exist "%F" del /f /q "%F"' -f $root, $InstallDir),
+    ('for %%F in ("{1}\Rime-Next\*.schema.yaml" "{1}\Rime-Next\*.dict.yaml") do if exist "%%F" del /f /q "%%F"' -f $root, $InstallDir),
     # 清掉早先留下的旧文件（安装目录里不该有它们）
     ('del /f /q "{0}\weasel_tip.previous.dll" 2>nul' -f $InstallDir),
     ('del /f /q "{0}\Weasel-Next-Engine.previous.exe" 2>nul' -f $InstallDir),
@@ -121,7 +187,7 @@ else { Write-Warn2 "仍是: $value" ; Write-Warn2 "期望: $expect（请重跑�
 # 5) 清单
 Write-Step '安装目录关键文件'
 foreach ($f in 'Weasel-Next-Server.exe', 'Weasel-Next-Engine.exe', 'Weasel-Next-Renderer.exe', 'Weasel-Next.dll', 'rime.dll',
-    'Rime-Next\sound\typewriter-key.wav', 'Rime-Next\sound\typewriter-bell.wav', 'theme\weasel_theme_ten.dll') {
+    'Rime-Next\sound\typewriter-key.wav', 'Rime-Next\sound\typewriter-bell.wav', 'weasel_theme_official.dll') {
     $p = Join-Path $InstallDir $f
     $mark = if (Test-Path $p) { '✓' } else { '✗' }
     $size = if (Test-Path $p) { '{0:N0} 字节' -f (Get-Item $p).Length } else { '缺失' }

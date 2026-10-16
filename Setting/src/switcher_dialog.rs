@@ -236,20 +236,44 @@ fn request_deploy() {
     const DEPLOY_COMMAND: u32 = 1001; // weasel_common::command_menu::DEPLOY
     const BROKER_WINDOW_CLASS: &str = "weasel-next-broker";
 
-    // 绑定里没有 FindWindowW，直接声明一个（user32 的稳定 API）。
+    // 用 EnumWindows 按类名找 broker 窗口。
+    //
+    // 原来用 FindWindowW：实测在部分环境（沙箱/不同完整性级别）它返回 0，而同一个窗口
+    // EnumWindows 能枚举到 —— 表现就是"改了方案清单却没人重新部署"，勾选不生效。
+    // EnumWindows 两种环境都稳，所以这里自己枚举。
     unsafe extern "system" {
-        fn FindWindowW(class: *const u16, window: *const u16) -> *mut core::ffi::c_void;
+        fn EnumWindows(callback: Option<unsafe extern "system" fn(*mut core::ffi::c_void, isize) -> i32>, param: isize) -> i32;
+        fn GetClassNameW(window: *mut core::ffi::c_void, buffer: *mut u16, count: i32) -> i32;
     }
 
-    let class = wide(BROKER_WINDOW_CLASS);
-    let raw = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
-    if raw.is_null() {
+    unsafe extern "system" fn look_for_broker(window: *mut core::ffi::c_void, param: isize) -> i32 {
+        let mut buffer = [0u16; 64];
+        let length = unsafe { GetClassNameW(window, buffer.as_mut_ptr(), buffer.len() as i32) };
+        if length > 0 {
+            let class = String::from_utf16_lossy(&buffer[..length as usize]);
+            if class == BROKER_WINDOW_CLASS {
+                let slot = param as *mut *mut core::ffi::c_void;
+                unsafe { *slot = window };
+                return 0; // 找到了就停
+            }
+        }
+        1 // 继续
+    }
+
+    let mut broker: *mut core::ffi::c_void = std::ptr::null_mut();
+    unsafe {
+        EnumWindows(
+            Some(look_for_broker),
+            &mut broker as *mut *mut core::ffi::c_void as isize,
+        );
+    }
+    if broker.is_null() {
         eprintln!("Weasel-Next-Setting: 找不到 broker 窗口，跳过部署");
         return;
     }
     unsafe {
         PostMessageW(
-            Some(HWND(raw)),
+            Some(HWND(broker)),
             WM_COMMAND_,
             WPARAM(DEPLOY_COMMAND as usize),
             LPARAM(0),
@@ -630,7 +654,7 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                         let slice = unsafe { std::slice::from_raw_parts(raw, len) };
                         selected.push(String::from_utf16_lossy(slice));
                     }
-                    let path = state.user.join("schema").join("schema.toml");
+                    let path = state.user.join("schema").join("schema.yaml");
                     switcher::write_schema_toml(&path, &selected)
                 });
                 match outcome {

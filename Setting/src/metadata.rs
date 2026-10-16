@@ -769,7 +769,7 @@ mod tests {
         for (name, defaults, richschema) in [
             (
                 "main",
-                include_str!("../../weasel.json"),
+                include_str!("../../weasel.yaml"),
                 include_str!("../../weasel.richschema.json"),
             ),
             (
@@ -779,17 +779,18 @@ mod tests {
             ),
             (
                 "eleven",
-                "seven", include_str!("../schema/eleven/config.json"),
+                include_str!("../schema/eleven/config.json"),
                 include_str!("../schema/eleven/config.richschema.json"),
             ),
-            (
-                "weaselui",
-                include_str!("../../archive/themes-legacy/wasm/theme-weaselui/config.json"),
-                include_str!("../../archive/themes-legacy/wasm/theme-weaselui/config.richschema.json"),
-            ),
         ] {
+            // 宿主配置是 TOML；各主题自己的 config.json 仍是 JSON（随主题包分发）
+            let defaults: Value = if name == "main" {
+                weasel_common::yaml::to_value(defaults).unwrap()
+            } else {
+                serde_json::from_str(defaults).unwrap()
+            };
             let m = Metadata::from_parts(
-                serde_json::from_str(defaults).unwrap(),
+                defaults,
                 serde_json::from_str(richschema).unwrap(),
             )
             .unwrap_or_else(|e| panic!("{name}: {e}"));

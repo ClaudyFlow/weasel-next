@@ -13,10 +13,14 @@
 //! 因此这里实现一个只覆盖 `weasel.yaml` 形状的极简 YAML 子集解析器：
 //! 缩进映射、标量、`#` 注释、单双引号、空行。够用且可测。
 
+/// 官方颜色语义（位数定 alpha、`color_format` 定通道序、混色）。
+pub mod color;
 pub mod settings;
 /// 方案选单的数据层（读方案目录与 schema_list，写 default.custom.yaml）。
 pub mod switcher;
 pub mod theme;
+
+pub use color::ColorFormat;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -245,6 +249,10 @@ pub struct Layout {
     pub border: i32,
     /// 官方 `style/layout/type`（0..5 六种布局 ✓，-1 = 未指定）
     pub layout_type_mode: i32,
+    /// 官方 `style/layout/type` 的**字符串**形式（`vertical` / `horizontal` /
+    /// `vertical_text` / `vertical+fullscreen` / `horizontal+fullscreen` /
+    /// `vertical_text+fullscreen`；官方 weasel.yaml 用的是这一种）
+    pub layout_type: String,
     /// 官方 `style/layout/hilited_corner_radius`（高亮块自己的圆角 ✓ -1 = 跟随 corner_radius ✓）
     pub hilited_corner_radius: i32,
     pub round_corner: i32,
@@ -257,7 +265,8 @@ pub struct Layout {
 }
 
 impl Default for Layout {
-    /// 默认值 = 官方 `output/data/weasel.yaml` 里的值。
+    /// 默认值 = 官方 `output/data/weasel.yaml` 里的值（逐键核对；出厂侧已不再分发 theme.yaml，
+    /// 所以这些默认值必须自带，缺 TOML 也要有官方观感）。
     fn default() -> Self {
         Self {
             align_type: "center".into(),
@@ -272,16 +281,19 @@ impl Default for Layout {
             candidate_spacing: 5,
             hilite_spacing: 4,
             hilite_padding: 2,
-            hilite_padding_x: 0,
-            hilite_padding_y: 0,
+            hilite_padding_x: 2,
+            hilite_padding_y: 2,
             border: 3,
             layout_type_mode: -1,
+            layout_type: String::new(),
+            // -1 = 未指定，跟随 round_corner（官方 weasel.yaml 的注释：round_corner 是
+            // hilited_corner_radius 的别名）
             hilited_corner_radius: -1,
-            round_corner: 0,
-            corner_radius: 0,
+            round_corner: 4,
+            corner_radius: 4,
             shadow_radius: 0,
-            shadow_offset_x: 0,
-            shadow_offset_y: 0,
+            shadow_offset_x: 4,
+            shadow_offset_y: 4,
             linespacing: 0,
             baseline: 0,
         }
@@ -302,7 +314,7 @@ impl Default for UIStyle {
             antialias_mode: "default".into(),
             ascii_tip_follow_cursor: false,
             click_to_capture: false,
-            horizontal: false,
+            horizontal: true,
             fullscreen: false,
             inline_preedit: false,
             preedit_type: "composition".into(),
@@ -352,8 +364,63 @@ pub struct ColorScheme {
     pub hilited_candidate_shadow_color: u32,
     pub hilited_label_color: u32,
     pub hilited_comment_text_color: u32,
+    /// 高亮候选左侧的标记条/标记文字颜色（官方 `hilited_mark_color`，未指定为 0）。
+    pub hilited_mark_color: u32,
     pub nextpage_color: u32,
     pub prevpage_color: u32,
+}
+
+impl ColorScheme {
+    /// 按官方 `_UpdateUIStyleColor` 的 fallback 链补齐未指定的颜色。
+    ///
+    /// 官方每读一个颜色都带 fallback，缺项时沿用别的键；我们的结构体里"未填"表现为 0，
+    /// 因此这里对**那些有 fallback 的键**把 0 当作未填（本身合法为透明的键——阴影、
+    /// 翻页、边框、候选底色——fallback 就是 0，无需处理）。
+    pub fn resolve(mut self) -> Self {
+        // 官方：back_color 缺省 0xffffffff
+        if self.back_color == 0 {
+            self.back_color = 0xffff_ffff;
+        }
+        // 官方：text_color 缺省 0xff000000（不透明黑）
+        if self.text_color == 0 {
+            self.text_color = 0xff00_0000;
+        }
+        if self.candidate_text_color == 0 {
+            self.candidate_text_color = self.text_color;
+        }
+        if self.border_color == 0 {
+            self.border_color = self.text_color;
+        }
+        if self.hilited_text_color == 0 {
+            self.hilited_text_color = self.text_color;
+        }
+        if self.hilited_back_color == 0 {
+            self.hilited_back_color = self.back_color;
+        }
+        if self.hilited_candidate_text_color == 0 {
+            self.hilited_candidate_text_color = self.hilited_text_color;
+        }
+        if self.hilited_candidate_back_color == 0 {
+            self.hilited_candidate_back_color = self.hilited_back_color;
+        }
+        // 官方：label_color 缺省 = candidate_text 混到 candidate_back 上
+        if self.label_color == 0 {
+            self.label_color = color::blend(self.candidate_text_color, self.candidate_back_color);
+        }
+        if self.hilited_label_color == 0 {
+            self.hilited_label_color = color::blend(
+                self.hilited_candidate_text_color,
+                self.hilited_candidate_back_color,
+            );
+        }
+        if self.comment_text_color == 0 {
+            self.comment_text_color = self.label_color;
+        }
+        if self.hilited_comment_text_color == 0 {
+            self.hilited_comment_text_color = self.hilited_label_color;
+        }
+        self
+    }
 }
 
 /// 整份 `weasel.yaml`。
@@ -369,20 +436,12 @@ pub struct WeaselConfig {
     pub app_options: BTreeMap<String, BTreeMap<String, bool>>,
 }
 
-/// 解析颜色：`0xRRGGBB` / `0xAARRGGBB` / 十进制 / 带引号。
+/// 解析颜色：按官方语义（`#RGB`/`#ARGB`/`#RRGGBB`/`#AARRGGBB`/`0x…`/十进制，
+/// 位数决定有没有 alpha，通道按**默认的 abgr** 顺序），返回内部 ARGB `0xAARRGGBB`。
+///
+/// 需要 `color_format` 指定的顺序时用 [`color::parse`]。
 pub fn parse_color(raw: &str) -> u32 {
-    let text = raw.trim().trim_matches('"').trim_matches('\'');
-    if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        return u32::from_str_radix(hex, 16).unwrap_or(0);
-    }
-    if let Ok(value) = text.parse::<u32>() {
-        return value;
-    }
-    // `#RRGGBB`（YAML 里少见，但兼容一下）
-    if let Some(hex) = text.strip_prefix('#') {
-        return u32::from_str_radix(hex, 16).unwrap_or(0);
-    }
-    0
+    color::parse(raw, ColorFormat::Abgr).unwrap_or(0)
 }
 
 fn text_of(node: Option<&Yaml>) -> Option<String> {
@@ -463,6 +522,7 @@ pub fn build(yaml: &Yaml) -> WeaselConfig {
             if let Some(v) = int_of(layout.get("border")) { l.border = v; }
             if let Some(v) = int_of(layout.get("border_width")) { l.border = v; }   // 出厂 yaml 用 border_width ✓ 两条都认 ✓
             if let Some(v) = int_of(layout.get("type")) { l.layout_type_mode = v; }
+            if let Some(v) = text_of(layout.get("type")) { l.layout_type = v; }
             if let Some(v) = int_of(layout.get("hilited_corner_radius")) { l.hilited_corner_radius = v; }
             if let Some(v) = int_of(layout.get("round_corner")) { l.round_corner = v; }
             if let Some(v) = int_of(layout.get("corner_radius")) { l.corner_radius = v; }
@@ -482,9 +542,12 @@ pub fn build(yaml: &Yaml) -> WeaselConfig {
                 color_format: text_of(node.get("color_format")).unwrap_or_default(),
                 ..ColorScheme::default()
             };
-            let mut color = |key: &str, slot: &mut u32| {
+            let format = ColorFormat::from_name(&scheme.color_format);
+            let color = |key: &str, slot: &mut u32| {
                 if let Some(raw) = text_of(node.get(key)) {
-                    *slot = parse_color(&raw);
+                    if let Some(value) = color::parse(&raw, format) {
+                        *slot = value;
+                    }
                 }
             };
             color("back_color", &mut scheme.back_color);
@@ -507,9 +570,10 @@ pub fn build(yaml: &Yaml) -> WeaselConfig {
             color("hilited_candidate_shadow_color", &mut scheme.hilited_candidate_shadow_color);
             color("hilited_label_color", &mut scheme.hilited_label_color);
             color("hilited_comment_text_color", &mut scheme.hilited_comment_text_color);
+            color("hilited_mark_color", &mut scheme.hilited_mark_color);
             color("nextpage_color", &mut scheme.nextpage_color);
             color("prevpage_color", &mut scheme.prevpage_color);
-            config.schemes.insert(name.clone(), scheme);
+            config.schemes.insert(name.clone(), scheme.resolve());
         }
     }
 
@@ -661,8 +725,8 @@ mod patch_tests {
         assert_eq!(config.style.color_scheme, "luna");
         assert_eq!(config.style.font_point, 20);
         assert_eq!(config.style.layout.corner_radius, 9);
-        assert_eq!(config.schemes["aqua"].back_color, 0x00ff_0000, "用户覆盖配色应生效");
-        assert_eq!(config.schemes["luna"].back_color, 0x0011_1111, "未覆盖的保持原值");
+        assert_eq!(config.schemes["aqua"].back_color, 0xff00_00ff, "用户覆盖配色应生效（abgr → 蓝）");
+        assert_eq!(config.schemes["luna"].back_color, 0xff11_1111, "未覆盖的保持原值");
     }
 
     #[test]
@@ -670,7 +734,7 @@ mod patch_tests {
         let custom = "patch:\n  style/layout/hilite_padding_x: 6\n  preset_color_schemes/新配色/text_color: 0x00ff00\n";
         let config = parse_with_patch(BASE, Some(custom)).expect("解析");
         assert_eq!(config.style.layout.hilite_padding_x, 6);
-        assert_eq!(config.schemes["新配色"].text_color, 0x0000_ff00);
+        assert_eq!(config.schemes["新配色"].text_color, 0xff00_ff00);
     }
 
     #[test]
@@ -695,7 +759,7 @@ mod patch_tests {
         assert_eq!(config.style.font_point, 18);
         assert_eq!(config.style.hover_type, "hilite");
         assert_eq!(config.style.layout.shadow_radius, 6);
-        assert_eq!(config.schemes["luna"].back_color, 0x0020_2020);
+        assert_eq!(config.schemes["luna"].back_color, 0xff20_2020);
         assert_eq!(config.schemes.len(), 36, "补丁不该减少配色数量");
         println!(
             "官方基底 + 用户补丁 → 方案 {:?} · 字号 {} · hover {:?} · 阴影 {} · luna 底色 {:#010x} · 配色 {} 套",
@@ -749,7 +813,11 @@ mod tests {
         assert_eq!(config.style.layout.border_width, 3);
         assert_eq!(config.style.layout.margin_x, 12);
         assert_eq!(config.style.layout.hilite_padding, 2);
-        assert_eq!(config.style.layout.max_width, 0); // 带 tab 注释`r`n        assert_eq!(config.style.layout.border, 3, "border_width 应同时填进官方 border 键");`r`n        assert_eq!(config.style.layout.hilited_corner_radius, -1, "官方未填则保持 -1（跟随 corner_radius）");
+        assert_eq!(config.style.layout.max_width, 0); // 带 tab 的注释也要剥掉
+        assert_eq!(config.style.layout.border, 3, "border_width 应同时填进官方 border 键");
+        assert_eq!(config.style.layout.hilited_corner_radius, -1, "官方未填则保持 -1（跟随 round_corner）");
+        assert_eq!(config.style.layout.round_corner, 4, "官方 weasel.yaml 的 round_corner");
+        assert_eq!(config.style.layout.corner_radius, 4);
         // app_options
         assert_eq!(
             config.app_options.get("cmd.exe").and_then(|m| m.get("ascii_mode")).copied(),
@@ -801,15 +869,50 @@ mod tests {
         assert_eq!(config.style.color_scheme, "luna");
         assert_eq!(config.style.layout.min_width, 42);
         assert_eq!(config.style.layout.shadow_radius, 7);
-        assert_eq!(config.schemes["x"].back_color, 0x0011_2233);
+        assert_eq!(config.schemes["x"].back_color, 0xff33_2211);
     }
 
     #[test]
     fn color_forms() {
-        assert_eq!(parse_color("0xff0000"), 0x00ff_0000);
-        assert_eq!(parse_color("0xFF0000"), 0x00ff_0000);
-        assert_eq!(parse_color("16711680"), 0x00ff_0000);
-        assert_eq!(parse_color("\"#ff0000\""), 0x00ff_0000);
+        // 官方语义：6 位不带 alpha（一律不透明），通道按默认的 abgr 顺序
+        assert_eq!(parse_color("0xff0000"), 0xff00_00ff, "abgr：R 在最低字节");
+        assert_eq!(parse_color("0xFF0000"), 0xff00_00ff);
+        assert_eq!(parse_color("16711680"), 0xff00_00ff);
+        assert_eq!(parse_color("\"#ff0000\""), 0xff00_00ff);
+        // 8 位才带 alpha：0x00000000 是全透明，0x000000 是不透明黑
+        assert_eq!(parse_color("0x000000"), 0xff00_0000);
+        assert_eq!(parse_color("0x00000000"), 0x0000_0000);
         assert_eq!(parse_color("不是颜色"), 0);
+    }
+
+    #[test]
+    fn official_aqua_follows_official_default_chain() {
+        let config = official();
+        let aqua = config.scheme("aqua");
+        // text_color: 0x000000 → 不透明黑
+        assert_eq!(aqua.text_color, 0xff00_0000);
+        // candidate_text_color 官方写了 0x000000 → 不透明黑
+        assert_eq!(aqua.candidate_text_color, 0xff00_0000);
+        // back_color: 0xeceeee（abgr）→ RGB(0xee,0xee,0xec)，alpha 补齐为不透明
+        assert_eq!(aqua.back_color, 0xffee_eeec);
+        // hilited_candidate_back_color: 0xfa3a0a → ABGR → RGB(0x0a,0x3a,0xfa) 蓝
+        assert_eq!(aqua.hilited_candidate_back_color, 0xff0a_3afa);
+        // aqua 没写 label_color → 官方 fallback = 候选文字混到候选底色上（不透明）
+        assert_eq!(aqua.label_color >> 24, 0xff, "label_color 必须被补齐为不透明");
+        // 阴影/翻页/边框这些官方留空的仍是全透明
+        assert_eq!(aqua.shadow_color, 0);
+        assert_eq!(aqua.prevpage_color, 0);
+        assert_eq!(aqua.candidate_border_color, 0);
+    }
+
+    #[test]
+    fn azure_is_blue_not_brown() {
+        // 官方 azure（青天）back_color 0x8b4e01：abgr → RGB(0x01,0x4e,0x8b) 深蓝。
+        // 这是"通道序必须照官方"的判据：按 argb 读会变成棕色 ✗
+        let config = official();
+        let azure = config.scheme("azure");
+        assert_eq!(azure.back_color, 0xff01_4e8b);
+        let blue = azure.back_color & 0xff;
+        assert!(blue > 0x80, "蓝通道应最大，实际 {blue:#x}");
     }
 }

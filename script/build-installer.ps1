@@ -27,7 +27,7 @@ try {
     Copy-Item 'target\release\weasel_tip.dll' 'target\release\Weasel-Next.dll' -Force
 
     $requiredFiles = @(
-        'weasel.json',
+        'weasel.yaml',
         'target\release\Weasel-Next-Server.exe',
         'target\release\Weasel-Next-Engine.exe',
         'target\release\Weasel-Next-Renderer.exe',

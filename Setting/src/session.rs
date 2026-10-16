@@ -257,7 +257,7 @@ impl Session {
             }
         }
 
-        let config = paths.user_data.join("weasel.custom.json");
+        let config = paths.user_data.join("weasel.custom.yaml");
         Ok(View {
             sections,
             notices: self.catalog.notices.clone(),
@@ -299,7 +299,7 @@ mod tests {
         let view = session.view(&paths).expect("生成视图");
         assert_eq!(view.sections.len(), session.catalog().sections.len());
         assert!(!view.paths.config.is_empty());
-        assert!(view.paths.config.ends_with("weasel.custom.json"));
+        assert!(view.paths.config.ends_with("weasel.custom.yaml"));
         assert!(!view.dirty);
     }
 

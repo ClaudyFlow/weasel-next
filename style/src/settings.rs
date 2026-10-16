@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// 一套配色的展示信息（界面用）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,10 +76,69 @@ fn patch_key(path: &str) -> &str {
 
 
 /// 切换当前配色（官方 `ApplyColorPatches` 的第一步）。
-pub fn set_active_scheme(custom_path: &Path, scheme_id: &str) -> io::Result<()> {
-    // 不再写 weasel.custom.yaml（全部去 YAML）：等接线到 theme\theme.toml 后恢复写入。
-    let _ = (custom_path, scheme_id);
-    Ok(())
+pub fn set_active_scheme(config_path: &Path, scheme_id: &str) -> io::Result<()> {
+    // 配色选择落在用户目录的 `theme/theme.yaml` 的 `color_scheme` 一行，不再写 YAML。
+    //
+    // 调用方历史上给的是"用户配置路径"，两种都可能：设置界面（dialogs）直接给
+    // `<用户>\theme\theme.yaml`，皮肤页（skins）给 `<用户>\weasel.custom.yaml`。
+    // 这里按文件名判断，别再多拼一层目录 —— 曾经因此写到 theme\theme\theme.yaml。
+    let theme_path = if config_path
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("theme.yaml"))
+    {
+        config_path.to_path_buf()
+    } else {
+        let user_dir = config_path
+            .parent()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "配置路径无父目录"))?;
+        user_dir.join("theme").join("theme.yaml")
+    };
+    set_theme_key(&theme_path, "color_scheme", scheme_id)
+}
+
+/// 改用户 `theme/theme.yaml` 里的一个顶层键：有就替换那一行，没有就追加。
+///
+/// 只碰这一行，**保留文件里其它内容与注释**（这份文件是给人看的：
+/// 布局参数都写在里面，重新序列化会把注释和顺序都洗掉）。
+pub fn set_theme_key(path: &Path, key: &str, value: &str) -> io::Result<()> {
+    let existing = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+    let mut replaced = false;
+    let mut lines: Vec<String> = existing
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if !replaced
+                && !trimmed.starts_with('#')
+                && trimmed
+                    .split_once(':')
+                    .is_some_and(|(name, _)| name.trim() == key)
+            {
+                replaced = true;
+                return format!("{key}: {value}");
+            }
+            line.to_string()
+        })
+        .collect();
+    if !replaced {
+        // 顶层键必须写在第一个 `[段]` 之前，否则会被算进段里
+        let insert_at = lines
+            .iter()
+            .position(|line| line.trim_start().starts_with('['))
+            .unwrap_or(lines.len());
+        lines.insert(insert_at, format!("{key}: {value}"));
+    }
+    let mut text = lines.join("\n");
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, text)
 }
 
 /// 改某套配色里的一个颜色（官方 `ApplyColorPatches` 的第二步）。
@@ -96,7 +155,7 @@ pub fn set_scheme_color(
     if value.is_empty() {
         remove_patch(custom_path, &path)
     } else {
-        // 同上：皮肤改动将写入 theme\<皮肤>\<皮肤>.theme.toml，不再写 YAML。
+        // 同上：皮肤改动将写入 theme\<皮肤>\<皮肤>.theme.yaml，不再写 YAML。
     let _ = (custom_path, path, value);
     Ok(())
     }

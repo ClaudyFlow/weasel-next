@@ -92,7 +92,7 @@ async fn load_broker_settings() -> Result<weasel_common::settings::ConfigSnapsho
 /// 未知字段保持原样，以便 renderer、主题或未来组件自行解释。应用专属选项中的
 /// 无效字段会被移除，从而重新继承对应全局值。
 fn normalize_server_settings(root: &mut serde_json::Value) -> Vec<String> {
-    let defaults: serde_json::Value = serde_json::from_str(include_str!("../../weasel.json"))
+    let defaults: serde_json::Value = weasel_common::yaml::to_value(include_str!("../../weasel.yaml"))
         .expect("embedded settings must be valid JSON");
     let defaults = defaults
         .as_object()
@@ -105,11 +105,6 @@ fn normalize_server_settings(root: &mut serde_json::Value) -> Vec<String> {
         (
             "theme",
             root.get("theme").is_some_and(serde_json::Value::is_string),
-        ),
-        (
-            "inline_preedit",
-            root.get("inline_preedit")
-                .is_some_and(serde_json::Value::is_boolean),
         ),
         (
             "global_ascii_status",
@@ -463,11 +458,27 @@ fn init_logging(paths: &RuntimePaths, component: &str) -> Result<(), String> {
 /// 监听器错误会在引擎完成关闭后返回；broker 失联、收到关闭请求或引擎结束则进入
 /// 清理流程。关闭响应最多排空 250 毫秒，连接读取任务与渲染桥接任务都会被终止并汇合。
 async fn serve(paths: RuntimePaths) -> Result<(), String> {
+    // 方案信息：第一次运行就把出厂方案清单抄进用户目录 schema/schema.yaml
+    match weasel_style::switcher::seed_schema_table(
+        &paths.executable_directory.join("Rime-Next"),
+        &paths.user_data,
+    ) {
+        Ok(true) => tracing::info!("schema.yaml: 已按出厂 schema_list 初始化方案清单"),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(%error, "schema.yaml: 初始化方案清单失败"),
+    }
     let (parent_exit, mut parent_dead) = tokio::sync::oneshot::channel();
     let _parent_watch = weasel_common::service_owner::ParentWatch::start(move || {
         let _ = parent_exit.send(());
     })
     .map_err(|e| e.to_string())?;
+    // 主题里的"编码画在哪"：读 theme.yaml（用户目录优先，程序文件夹兜底）；
+    // 既决定要不要跟渲染器协商外置预编辑，也作为每个客户端会话的默认值。
+    let theme_inline_preedit = weasel_style::theme::inline_preedit(
+        &paths.executable_directory.join("Rime-Next"),
+        &paths.user_data,
+        "default",
+    );
     let settings = match load_broker_settings().await {
         Ok(settings) => Some(settings),
         Err(error) => {
@@ -479,10 +490,12 @@ async fn serve(paths: RuntimePaths) -> Result<(), String> {
     let capability = publisher.clone();
     let eager_renderer = match settings.as_ref() {
         Some(settings) => {
-            let external_preedit = settings.needs_external_preedit().unwrap_or_else(|error| {
-                tracing::error!(%error, "invalid preedit setting; using inline preedit fallback");
-                false
-            });
+            let external_preedit = settings
+                .needs_external_preedit(theme_inline_preedit)
+                .unwrap_or_else(|error| {
+                    tracing::error!(%error, "invalid preedit setting; using inline preedit fallback");
+                    false
+                });
             let wasm = settings
                 .required::<String>(".theme")
                 .map(|theme| theme == "wasm")
@@ -495,7 +508,7 @@ async fn serve(paths: RuntimePaths) -> Result<(), String> {
         None => false,
     };
     let mut engine = worker::Worker::spawn(engine::QUEUE_CAPACITY, move || {
-        engine::Engine::new(paths, publisher, settings)
+        engine::Engine::new(paths, publisher, settings, theme_inline_preedit)
     })?;
     let renderer =
         renderer_bridge::spawn(snapshots, engine.sender.clone(), capability, eager_renderer);

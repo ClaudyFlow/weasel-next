@@ -18,6 +18,14 @@ impl SessionRoute {
     ///
     /// 首次绑定后，上下文标识和连接代次不可变，代次不可倒退；无令牌、零字段或身份
     /// 不匹配时返回 `false` 且保留当前绑定。成功时保存传入令牌。
+    /// 会话被新连接接管（按输入上下文复用）后调用：清掉旧令牌。
+    ///
+    /// 连接代次变了之后，旧令牌的 `connection_epoch` 与新的对不上 —— 那是正常的，
+    /// 不是"过期输入"。清空后，下一个合法令牌会被无条件下接受，会话继续用。
+    pub fn rebind(&mut self) {
+        self.token = None;
+    }
+
     pub fn observe(&mut self, token: Option<&ContextToken>) -> bool {
         if !token.is_some_and(|token| {
             token.context_id != 0 && token.connection_epoch != 0 && token.generation != 0

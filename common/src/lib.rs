@@ -8,9 +8,7 @@ pub mod command_menu;
 pub mod comrt;
 pub mod data_frame;
 pub mod deploy_manifest;
-pub mod deploy_watch;
 pub mod eassy;
-pub mod hash_tree;
 pub mod rime_layout;
 pub mod deploy_protocol;
 pub mod logging;
@@ -26,3 +24,4 @@ pub mod task_dialog;
 #[cfg(feature = "wasm-metadata")]
 pub mod wasm_metadata;
 pub mod windows_security;
+pub mod yaml;

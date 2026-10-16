@@ -79,13 +79,35 @@ impl Skins {
     }
 
     /// 当前生效的配色 id。
+    ///
+    /// 先说用户目录 `theme/theme.yaml` 的 `color_scheme`（现在的唯一落点），
+    /// 没有再回落到官方 YAML（出厂 `weasel.yaml` + `weasel.custom.yaml` 补丁）的
+    /// `style/color_scheme`。不能把原始补丁交给 active_scheme —— 单独解析补丁文件时
+    /// 读到的只是默认值。
     pub fn active_id(&self) -> String {
-        // 合并结果就在 self.base 里（出厂 + 用户补丁），直接读它的 style/color_scheme。
-        // 不能把原始补丁交给 active_scheme —— 单独解析补丁文件时读到的只是默认值。
+        if let Some(id) = self.theme_color_scheme() {
+            return id;
+        }
         match &self.base {
             Some(base) => base.style.color_scheme.clone(),
             None => String::new(),
         }
+    }
+
+    /// 用户 `theme/theme.yaml` 里的 `color_scheme`（没有文件或没有这个键时返回 `None`）。
+    fn theme_color_scheme(&self) -> Option<String> {
+        let path = self
+            .custom_path
+            .parent()?
+            .join("theme")
+            .join("theme.yaml");
+        let text = std::fs::read_to_string(path).ok()?;
+        let table = weasel_common::yaml::to_value(&text).ok()?;
+        table
+            .get("color_scheme")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
     }
 
     /// 组装界面行模型。
@@ -183,8 +205,9 @@ mod tests {
         let aqua = rows.iter().find(|r| r.id == "aqua").expect("应有 aqua");
         assert!(aqua.active, "aqua 应是当前生效的一套");
         assert_eq!(aqua.name, "碧水／Aqua");
-        assert_eq!(aqua.back_color, slint::Color::from_rgb_u8(0xec, 0xee, 0xee));
-        assert_eq!(aqua.hilited_back_color, slint::Color::from_rgb_u8(0xfa, 0x3a, 0x0a));
+        // 官方颜色是 abgr（文本 AABBGGRR）：0xeceeee → RGB(ee,ee,ec)、0xfa3a0a → RGB(0a,3a,fa)
+        assert_eq!(aqua.back_color, slint::Color::from_rgb_u8(0xee, 0xee, 0xec));
+        assert_eq!(aqua.hilited_back_color, slint::Color::from_rgb_u8(0x0a, 0x3a, 0xfa));
     }
 
     #[test]
@@ -195,8 +218,9 @@ mod tests {
         let mut skins = Skins::load(&repo_shared(), &user);
         let message = skins.select("luna").expect("切换应成功");
         println!("{message}");
-        let text = std::fs::read_to_string(user.join("weasel.custom.yaml")).unwrap();
-        assert!(text.contains("style/color_scheme: luna"), "补丁应写入：{text}");
+        // 配色选择写在用户目录的 theme/theme.yaml（`color_scheme` 一行），不再写 YAML
+        let text = std::fs::read_to_string(user.join("theme").join("theme.yaml")).unwrap();
+        assert!(text.contains("color_scheme: luna"), "主题文件应写入：{text}");
         assert_eq!(skins.active_id(), "luna", "重读后当前配色应为 luna");
         let rows = skins.rows();
         assert!(rows.iter().find(|r| r.id == "luna").unwrap().active);
