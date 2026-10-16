@@ -1,0 +1,25 @@
+# 输入方案清单（出厂默认）。
+#
+# 这是「方案选择」的**唯一数据源**：设置程序从这里读，改完写回同名文件。
+# 程序文件夹只读，所以用户的改动写到用户目录下的同名文件：
+#     %APPDATA%\Rime-Next\schema\schema.toml
+# 读取时以用户那份为准（不存在就用这份出厂默认）。
+#
+# 与 eassy/theme 一样用 TOML 作为项目内的统一形式；引擎需要 Rime 原生的
+# default.custom.yaml 时，由部署流程据此生成，不再各自维护一份。
+
+# 已选方案，顺序即界面顺序（已选的在前、未选的排在其后）。
+selected = [
+    "luna_pinyin",
+    "luna_pinyin_simp",
+    "luna_pinyin_fluency",
+    "bopomofo",
+    "bopomofo_tw",
+    "cangjie5",
+    "stroke",
+    "terra_pinyin",
+]
+
+# 可选方案：留空表示由 schema\ 目录自动扫描得出（当前这样即可）。
+available = []
+
