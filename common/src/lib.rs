@@ -8,6 +8,7 @@ pub mod command_menu;
 pub mod comrt;
 pub mod data_frame;
 pub mod deploy_manifest;
+pub mod deploy_watch;
 pub mod eassy;
 pub mod hash_tree;
 pub mod rime_layout;
