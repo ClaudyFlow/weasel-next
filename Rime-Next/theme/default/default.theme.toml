@@ -1,7 +1,7 @@
 # default.theme.toml —— 皮肤「default」：**只有配色**。
 #
-# 生成方式: cargo run --release -p weasel-style --bin theme-toml -- <weasel.yaml> <theme 目录>
-# 布局与"用哪套皮肤"在 theme\theme.toml 里，本文件不再包含 [style] / color_scheme。
+# 内容由官方 weasel.yaml（C:\Program Files\Rime\weasel-0.17.4\data\weasel.yaml）生成；
+# 布局与"用哪套皮肤"在 theme\theme.toml 里。
 # 位置约定: <程序文件夹>\Rime-Next\theme\<皮肤名>\<皮肤名>.theme.toml
 
 [schemes."android"]
