@@ -74,80 +74,6 @@ fn patch_key(path: &str) -> &str {
     path
 }
 
-/// 把一条改动写进 `weasel.custom.yaml` 的 `patch:` 段。
-///
-/// `path` 是路径式键，例如 `style/color_scheme` 或
-/// `preset_color_schemes/aqua/back_color`。已存在的键就地覆盖，不重复追加。
-///
-/// 文件不存在时创建，并把 `patch:` 作为顶层键；文件存在但缺 `patch:` 时补上。
-/// 同目录其它内容（用户的其它自定义）原样保留。
-pub fn write_patch(custom_path: &Path, patch_path: &str, value: &str) -> io::Result<()> {
-    let key = patch_key(patch_path);
-    let existing = match fs::read_to_string(custom_path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(error),
-    };
-
-    let lines: Vec<&str> = existing.lines().collect();
-    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 4);
-    let mut replaced = false;
-    let mut has_patch = false;
-    let mut in_patch = false;
-    // 补丁段里，键按路径逐层书写：`style/color_scheme:` 一行，或
-    // `preset_color_schemes/aqua/back_color:` 一行。这里只做**扁平路径**匹配，
-    // 与官方 customize_string 的行为一致。
-    let mut patch_indent = String::from("  ");
-
-    for line in &lines {
-        let trimmed = line.trim_end();
-        if trimmed == "patch:" {
-            has_patch = true;
-            in_patch = true;
-            out.push(trimmed.to_string());
-            continue;
-        }
-        if in_patch {
-            if !trimmed.is_empty() && !trimmed.starts_with(' ') && !trimmed.starts_with('\t') {
-                // patch 段结束（遇到新的顶层键）
-                if !replaced {
-                    out.push(format!("{patch_indent}{key}: {value}"));
-                    replaced = true;
-                }
-                in_patch = false;
-                out.push(trimmed.to_string());
-                continue;
-            }
-            let stripped = trimmed.trim_start();
-            if stripped.starts_with(&format!("{key}:")) {
-                let indent = &trimmed[..trimmed.len() - stripped.len()];
-                patch_indent = indent.to_string();
-                out.push(format!("{indent}{key}: {value}"));
-                replaced = true;
-                continue;
-            }
-        }
-        out.push(trimmed.to_string());
-    }
-
-    if in_patch && !replaced {
-        out.push(format!("{patch_indent}{key}: {value}"));
-        replaced = true;
-    }
-    if !has_patch {
-        if !out.is_empty() {
-            out.push(String::new());
-        }
-        out.push("patch:".to_string());
-        out.push(format!("  {key}: {value}"));
-    }
-
-    let text = out.join("\n") + "\n";
-    if let Some(parent) = custom_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(custom_path, text)
-}
 
 /// 切换当前配色（官方 `ApplyColorPatches` 的第一步）。
 pub fn set_active_scheme(custom_path: &Path, scheme_id: &str) -> io::Result<()> {
@@ -233,16 +159,6 @@ pub fn modified_colors(custom_path: &Path, scheme_id: &str) -> io::Result<BTreeM
     Ok(result)
 }
 
-/// 用户补丁文件的位置（`%APPDATA%\Rime-Next\weasel.custom.yaml`）。
-///
-/// 与 librime 的用户目录一致：程序文件夹放出厂文件，用户目录放改动。
-pub fn user_custom_path() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|appdata| {
-        PathBuf::from(appdata)
-            .join("Rime-Next")
-            .join("weasel.custom.yaml")
-    })
-}
 
 #[cfg(test)]
 mod tests {
@@ -255,26 +171,7 @@ mod tests {
         dir.join(name)
     }
 
-    #[test]
-    fn writes_patch_into_new_file() {
-        let path = temp_path("new-custom.yaml");
-        let _ = std::fs::remove_file(&path);
-        set_active_scheme(&path, "aqua").unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("patch:"), "应创建 patch 段：{text}");
-        assert!(text.contains("style/color_scheme: aqua"), "应写入配色名：{text}");
-    }
 
-    #[test]
-    fn replaces_existing_key_in_place() {
-        let path = temp_path("replace-custom.yaml");
-        std::fs::write(&path, "patch:\n  style/color_scheme: aqua\n  other/key: keep\n").unwrap();
-        set_active_scheme(&path, "luna").unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("style/color_scheme: luna"), "应就地替换：{text}");
-        assert!(text.contains("other/key: keep"), "其它改动必须保留：{text}");
-        assert_eq!(text.matches("style/color_scheme").count(), 1, "不应重复追加：{text}");
-    }
 
     #[test]
     fn appends_color_override_with_path_key() {
@@ -296,17 +193,6 @@ mod tests {
         assert_eq!(modified.len(), 2);
     }
 
-    #[test]
-    fn remove_patch_restores_factory_value() {
-        let path = temp_path("remove-custom.yaml");
-        let _ = std::fs::remove_file(&path);
-        set_scheme_color(&path, "aqua", "back_color", "0x00eceeee").unwrap();
-        set_scheme_color(&path, "aqua", "text_color", "0x00111111").unwrap();
-        remove_patch(&path, "preset_color_schemes/aqua/back_color").unwrap();
-        let modified = modified_colors(&path, "aqua").unwrap();
-        assert_eq!(modified.len(), 1, "只应删掉指定的那条");
-        assert!(modified.contains_key("text_color"));
-    }
 
     #[test]
     fn lists_official_schemes_from_factory_file() {

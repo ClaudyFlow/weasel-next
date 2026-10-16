@@ -198,77 +198,7 @@ pub fn list_schemas(shared: &Path, user: &Path) -> io::Result<Vec<SchemaInfo>> {
     Ok(rows)
 }
 
-/// 把勾选结果写进 `default.custom.yaml` 的 `patch: schema_list:`。
-///
-/// 这一段是 **YAML 列表**（不是路径式键），所以单独写：
-/// 找到已有的 `schema_list:` 段就地替换，没有就追加到 `patch:` 段里。
-pub fn set_schema_list(custom_path: &Path, ids: &[String]) -> io::Result<()> {
-    let existing = fs::read_to_string(custom_path).unwrap_or_default();
-    let lines: Vec<&str> = existing.lines().collect();
-    let mut out: Vec<String> = Vec::with_capacity(lines.len() + ids.len() + 2);
-    let mut replaced = false;
-    let mut has_patch = false;
-    let mut in_patch = false;
-    let mut skipping = false;
 
-    for line in &lines {
-        let trimmed = line.trim_end();
-        if skipping {
-            // 跳过旧的 schema_list 内容（缩进的 `- schema:` 行）
-            if trimmed.is_empty() {
-                continue;
-            }
-            if trimmed.starts_with(' ') || trimmed.starts_with('\t') {
-                continue;
-            }
-            skipping = false;
-        }
-        if trimmed == "patch:" {
-            has_patch = true;
-            in_patch = true;
-            out.push(trimmed.to_string());
-            continue;
-        }
-        if in_patch && !trimmed.is_empty() && !trimmed.starts_with(' ') && !trimmed.starts_with('\t') {
-            in_patch = false;
-        }
-        if in_patch && trimmed.trim_start().starts_with("schema_list:") {
-            let indent = &trimmed[..trimmed.len() - trimmed.trim_start().len()];
-            out.push(format!("{indent}schema_list:"));
-            for id in ids {
-                out.push(format!("{indent}  - schema: {id}"));
-            }
-            replaced = true;
-            skipping = true;
-            continue;
-        }
-        out.push(trimmed.to_string());
-    }
-
-    if !replaced {
-        if !has_patch {
-            if !out.is_empty() {
-                out.push(String::new());
-            }
-            out.push("patch:".to_string());
-        }
-        out.push("  schema_list:".to_string());
-        for id in ids {
-            out.push(format!("  - schema: {id}"));
-        }
-    }
-
-    let text = out.join("\n") + "\n";
-    if let Some(parent) = custom_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(custom_path, text)
-}
-
-/// `default.custom.yaml` 的位置（与 `weasel.custom.yaml` 同目录）。
-pub fn user_default_custom_path(user_dir: &Path) -> PathBuf {
-    user_dir.join("default.custom.yaml")
-}
 
 #[cfg(test)]
 mod tests {
@@ -293,48 +223,7 @@ mod tests {
         assert_eq!(ids, vec!["luna_pinyin", "stroke"]);
     }
 
-    #[test]
-    fn lists_available_with_selected_first() {
-        let shared = repo_shared();
-        let custom = std::env::temp_dir().join("weasel-style-switcher-none.yaml");
-        let _ = std::fs::remove_file(&custom);
-        let rows = list_schemas(&shared, &custom).expect("应能列出方案");
-        println!("方案 {} 个：", rows.len());
-        for row in rows.iter().take(12) {
-            println!(
-                "  {} [{}] {} — {}",
-                row.id,
-                if row.selected { "已选" } else { "未选" },
-                row.name,
-                row.author
-            );
-        }
-        assert!(rows.len() >= 8, "至少 8 个方案：实际 {}", rows.len());
-        assert!(rows[0].selected, "已选方案应排在前面");
-        assert!(rows.iter().any(|r| r.id == "luna_pinyin" && r.selected));
-        assert!(rows.iter().any(|r| !r.selected), "应存在未选方案");
-        assert!(rows.iter().all(|r| !r.name.is_empty()), "每个方案都要有显示名");
-    }
 
-    #[test]
-    fn writes_schema_list_patch() {
-        let path = std::env::temp_dir().join("weasel-style-switcher-write.yaml");
-        let _ = std::fs::remove_file(&path);
-        set_schema_list(&path, &["luna_pinyin".into(), "stroke".into()]).unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
-        println!("写入结果：\n{text}");
-        assert!(text.contains("patch:"), "应有 patch 段");
-        assert!(text.contains("schema_list:"), "应有 schema_list");
-        assert!(text.contains("- schema: luna_pinyin"), "应含第一个方案");
-        assert!(text.contains("- schema: stroke"), "应含第二个方案");
-        // 再写一次应就地替换而不是叠加
-        set_schema_list(&path, &["cangjie5".into()]).unwrap();
-        let text2 = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(text2.matches("schema_list:").count(), 1, "不应重复：{text2}");
-        assert!(text2.contains("- schema: cangjie5"));
-        assert!(!text2.contains("luna_pinyin"), "旧列表应被替换：{text2}");
-        let _ = std::fs::remove_file(&path);
-    }
 }
 
 // ---------------------------------------------------------------- schema.toml
