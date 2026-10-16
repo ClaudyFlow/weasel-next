@@ -9,8 +9,10 @@
 #        %APPDATA%\Rime-Next\schema\schema.toml）。
 #   3. 按下「中」后把结果总结回本文件（一律按 a–z 排序），再触发部署。
 #
-# 未列出的方案视为未勾选。程序文件夹只读，所以只会写用户目录那一份；
-# 引擎需要的 Rime 原生 default.custom.yaml 由部署流程据此生成。
+# 未列出的方案视为未勾选。程序文件夹只读，所以只会写用户目录那一份。
+#
+# **不再写入任何 YAML**：引擎直接读本文件（用户目录那份优先），
+# 不生成也不读取 default.custom.yaml。
 
 bopomofo = true
 bopomofo_tw = true
