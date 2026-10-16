@@ -337,3 +337,114 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 }
+
+// ---------------------------------------------------------------- schema.toml
+
+/// 读 `schema.toml`：一行一个方案，键是方案 id、值表示是否勾选。
+///
+/// 用户目录那份优先（`%APPDATA%\Rime-Next\schema\schema.toml`），没有就用
+/// 程序文件夹的出厂那份。返回**按 a–z 排序**的已选 id；解析失败当作"没有已选"。
+pub fn read_schema_toml(shared: &Path, user: &Path) -> Vec<String> {
+    let candidates = [user.join("schema").join("schema.toml"), shared.join("schema").join("schema.toml")];
+    for path in candidates {
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(table) = toml::from_str::<std::collections::BTreeMap<String, bool>>(&text) else {
+            continue;
+        };
+        let mut ids: Vec<String> = table
+            .into_iter()
+            .filter(|(_, selected)| *selected)
+            .map(|(id, _)| id)
+            .collect();
+        ids.sort();
+        return ids;
+    }
+    Vec::new()
+}
+
+/// 写 `schema.toml`：一行一个方案（键 = 方案 id、值 = `true`），**一律按 a–z 排序**。
+///
+/// 只写已选的（未选的不出现，与"未列出的视为未勾选"一致）。程序文件夹只读，
+/// 所以调用方传进来的应当是用户目录那份路径。
+pub fn write_schema_toml(path: &Path, ids: &[String]) -> io::Result<()> {
+    let mut sorted: Vec<&String> = ids.iter().collect();
+    sorted.sort();
+    sorted.dedup();
+    let mut out = String::from(
+        "# 输入方案清单 —— 一行一个方案：键是方案 id，值表示是否勾选。按 a–z 排序。\n\
+         # 由「方案选单设定」按「中」后写出；不再写入任何 YAML。\n\n",
+    );
+    for id in sorted {
+        out.push_str(id);
+        out.push_str(" = true\n");
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, out)
+}
+
+#[cfg(test)]
+mod schema_toml_tests {
+    use super::*;
+
+    #[test]
+    fn writes_one_entry_per_line_sorted() {
+        let dir = std::env::temp_dir().join("weasel-next-schema-toml-write");
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("schema").join("schema.toml");
+        let ids = vec![
+            "terra_pinyin".to_string(),
+            "bopomofo".to_string(),
+            "luna_pinyin".to_string(),
+        ];
+        write_schema_toml(&path, &ids).expect("写入应当成功");
+        let text = fs::read_to_string(&path).expect("应当读回");
+        let body: Vec<&str> = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('#') && !line.trim().is_empty())
+            .collect();
+        assert_eq!(
+            body,
+            vec!["bopomofo = true", "luna_pinyin = true", "terra_pinyin = true"],
+            "一行一个方案且按 a–z 排序"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_user_file_first_and_only_selected() {
+        let shared = std::env::temp_dir().join("weasel-next-schema-toml-read-shared");
+        let user = std::env::temp_dir().join("weasel-next-schema-toml-read-user");
+        let _ = fs::remove_dir_all(&shared);
+        let _ = fs::remove_dir_all(&user);
+        fs::create_dir_all(shared.join("schema")).unwrap();
+        fs::write(
+            shared.join("schema").join("schema.toml"),
+            "bopomofo = true\nluna_pinyin = true\n",
+        )
+        .unwrap();
+        // 用户那份存在时以它为准，且 false 的不算已选
+        fs::create_dir_all(user.join("schema")).unwrap();
+        fs::write(
+            user.join("schema").join("schema.toml"),
+            "# 注释行应当被忽略\nterra_pinyin = true\nstroke = false\ncangjie5 = true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_schema_toml(&shared, &user),
+            vec!["cangjie5".to_string(), "terra_pinyin".to_string()],
+            "用户那份优先、只取 true、按 a–z 排序"
+        );
+        // 删掉用户那份，应当回退到出厂那份
+        let _ = fs::remove_dir_all(&user);
+        assert_eq!(
+            read_schema_toml(&shared, &user),
+            vec!["bopomofo".to_string(), "luna_pinyin".to_string()],
+            "用户那份不存在时回退出厂那份"
+        );
+        let _ = fs::remove_dir_all(&shared);
+    }
+}
