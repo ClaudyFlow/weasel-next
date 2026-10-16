@@ -218,30 +218,35 @@ pub fn show(shared: &Path, user: &Path) -> Result<(), String> {
 
 
 
-/// 把一行插进 ListView，并按需要打勾。
-/// 在后台拉起一次重新部署（`Weasel-Next-Engine.exe --deploy`）。
+/// 请 broker 执行一次重新部署（给它的窗口发一条 `WM_COMMAND`，wparam = 托盘的 DEPLOY 命令 id）。
 ///
-/// 官方在 `WeaselDeployer` 里跑 `rime->deploy()`（`Configurator.cpp:144`）并重建
-/// `build\<方案>\`；我们交给引擎的 `--deploy` 开关（`server\src\main.rs:404`）。
-/// 不等待、不管输出 —— 部署要几秒，不能让设置界面卡住。
-fn deploy_in_background() {
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let Some(dir) = exe.parent() else {
-        return;
-    };
-    let engine = dir.join("Weasel-Next-Engine.exe");
-    if !engine.is_file() {
+/// 部署必须由掌握引擎生死的 broker 做 —— 引擎单实例，设置程序自己拉起第二个只会得到
+/// `AlreadyRunning`（实测）。broker 的命令处理见 `broker\src\tray.rs:177/236`。
+fn request_deploy() {
+    const DEPLOY_COMMAND: u32 = 1001; // weasel_common::command_menu::DEPLOY
+    const BROKER_WINDOW_CLASS: &str = "weasel-next-broker";
+
+    // 绑定里没有 FindWindowW，直接声明一个（user32 的稳定 API）。
+    unsafe extern "system" {
+        fn FindWindowW(class: *const u16, window: *const u16) -> *mut core::ffi::c_void;
+    }
+
+    let class = wide(BROKER_WINDOW_CLASS);
+    let raw = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
+    if raw.is_null() {
+        eprintln!("Weasel-Next-Setting: 找不到 broker 窗口，跳过部署");
         return;
     }
-    let _ = std::process::Command::new(engine)
-        .arg("--deploy-ui")
-        .current_dir(dir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    unsafe {
+        PostMessageW(
+            Some(HWND(raw)),
+            WM_COMMAND_,
+            WPARAM(DEPLOY_COMMAND as usize),
+            LPARAM(0),
+        );
+    }
 }
+
 
 unsafe fn insert_row(hwnd: HWND, index: i32, name: &str, checked: bool) -> (isize, isize, isize) {
     // 分三步，每步都记返回值，便于定位是哪一步被控件拒绝：
@@ -619,13 +624,11 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                 });
                 match outcome {
                     Some(Ok(())) => {
-                        // 写回成功后自动触发一次重新部署 —— 官方是让 WeaselDeployer 跑 rime->deploy()
-                        // （Configurator.cpp:144），我们对应的是引擎的 --deploy 开关；
-                        // 不部署的话方案不会进引擎，选了也不生效、打不了字。
-                        // 这里**不能**自己 spawn 引擎去部署：实测引擎返回 AlreadyRunning（单实例），
-                        // 从设置程序拉起第二个实例必然失败。部署必须由掌握引擎生死的 broker 执行
-                        // （broker 的 Operation::Deploy 会先停引擎、部署、再拉起并等完成）。
-                        // 待办：改为给 broker 窗口（类名 weasel-next-broker）PostMessage 请求部署。
+                        // 写回成功后请 broker 执行一次重新部署。部署必须由掌握引擎生死的 broker 做：
+                        // 引擎是单实例，设置程序自己拉起第二个只会得到 AlreadyRunning（实测）。
+                        // broker 收到 WM_COMMAND 会取 wparam 低 16 位当命令 id（tray.rs:177），
+                        // DEPLOY(1001) 进去就是 begin_operation(window, Operation::Deploy)（tray.rs:236）。
+                        request_deploy();
                         unsafe { EndDialog(hwnd, IDOK as isize) };
                     }
                     Some(Err(error)) => {
