@@ -156,6 +156,36 @@ pub fn write_watch(path: &Path, previous_text: &str, changes: &[Detected]) -> st
     Ok(text)
 }
 
+/// 部署完成后**清掉待部署记录**：这些文件夹只留最新的哈希，不再保留箭头历史。
+///
+/// 与 [`write_watch`] 的分工：没部署时把每次变化**追加**成 `旧哈希 -> 时间 新哈希`（攒着），
+/// 一旦部署就把这些条目**清掉**，只写当前已部署的哈希 —— 这样根目录那份始终表示
+/// "还没部署的变化"，部署之后就是干净的。
+pub fn clear_after_deploy(
+    path: &Path,
+    previous_text: &str,
+    deployed: &BTreeMap<String, String>,
+) -> std::io::Result<String> {
+    let mut lines: Vec<String> = previous_text
+        .lines()
+        .filter(|line| {
+            // 保留注释与空行；待部署条目按名字逐条替换。
+            let trimmed = line.trim_start();
+            trimmed.starts_with('#') || trimmed.is_empty()
+        })
+        .map(|line| line.to_string())
+        .collect();
+    for (name, hash) in deployed {
+        lines.push(format!("{name} = \"{hash}\""));
+    }
+    let text = lines.join("\n") + "\n";
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, &text)?;
+    Ok(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +236,23 @@ mod tests {
         let again = detect_changes(&prev, &cur, "2026-10-16 12:00:00");
         let text2 = write_watch(&path, &text, &again).expect("写入应当成功");
         assert_eq!(text2.matches("->").count(), text.matches("->").count(), "哈希没变不重复追加");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn deploy_clears_pending_records() {
+        let dir = std::env::temp_dir().join("weasel-next-user-toml-clear");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("user.toml");
+        // 先攒一条待部署记录
+        let prev = stamps(&[("schema", "2026-10-16 10:00:00", "aaa")]);
+        let cur = hashes(&[("schema", "ccc")]);
+        let pending = write_watch(&path, "# 注释保留\n", &detect_changes(&prev, &cur, "2026-10-16 11:00:00")).unwrap();
+        assert!(pending.contains("aaa -> 2026-10-16 11:00:00 ccc"), "攒着箭头历史");
+        // 部署之后：清账，只留最新
+        let cleared = clear_after_deploy(&path, &pending, &cur).unwrap();
+        assert!(cleared.contains("schema = \"ccc\""), "只留已部署的最新哈希");
+        assert!(!cleared.contains("->"), "箭头历史被清掉");
+        assert!(cleared.contains("# 注释保留"), "注释保留");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
