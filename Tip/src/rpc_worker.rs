@@ -287,9 +287,14 @@ impl Connection {
 
     /// 在已打开的输入会话中处理翻译后的按键。
     async fn process_translated_key(&self, event: InputKey) -> Result<KeyEventResponse, RpcError> {
+        // 输入统计：每个键都过这里，是最可靠的挂点。
+        crate::stats::record_key();
         self.prepare_input_session(event.token.clone(), None)
             .await?;
-        self.key_request(Payload::KeyEvent(event)).await
+        let response = self.key_request(Payload::KeyEvent(event)).await?;
+        // 上屏字数按**真正提交给宿主的文本**算（不是候选长度）。
+        crate::stats::record_commit(&response.commit_text);
+        Ok(response)
     }
 
     /// 转发上下文命令；未打开上下文的销毁操作作为空操作处理。
@@ -573,6 +578,14 @@ impl WorkerState {
                 response,
                 deadline,
             } => {
+                // 已经过了宿主给的时限：这一键宿主早就放弃等待了。
+                // 这里**不连接、不处理、也不拆连接** —— 处理了结果也没人要，
+                // 白白踢掉一条健康的连接反而害得下一键必须重连（用户看到的
+                // 就是"首键偶尔丢字"）。直接丢掉，保持现状。
+                if Instant::now() >= deadline {
+                    drop(response);
+                    return;
+                }
                 let value = self.handle_key_event(event).await;
                 if Instant::now() >= deadline || response.send(value).is_err() {
                     self.disconnect_invalidated_client().await;
@@ -809,7 +822,22 @@ impl RpcWorker {
         let (response, receiver) = mpsc::channel();
         // 后端忙（刚重启/刚切上下文/上次超时）时给更宽的预算，避免这一键被英文直通
         let busy = self.push.slow.load(Ordering::Acquire);
-        let budget = if busy { BUSY_KEY_TIMEOUT } else { COMMAND_TIMEOUT };
+        // ⚠️ **还没连上时（epoch == 0），宿主也要按"首键"给宽预算。**
+        //
+        // worker 侧为这一刻留了 CONNECT_KEY_TIMEOUT(500ms) 去完成
+        // 「连接 + 握手 + open_input」，但宿主侧原来只按 COMMAND_TIMEOUT(80ms)
+        // 加 60ms 余量等 —— **宿主 140ms 就先放弃了，worker 那边还在连**，
+        // 于是首键的结果永远取不到、直接 `None` 返回。
+        // 用户看到的就是"第一个字缺字"（键被输入法吞下，既没进输入法也没回给应用）。
+        // 两边预算必须对齐，否则 worker 给多宽的预算都是白给。
+        let establishing = self.connection_epoch() == 0;
+        let budget = if establishing {
+            CONNECT_KEY_TIMEOUT
+        } else if busy {
+            BUSY_KEY_TIMEOUT
+        } else {
+            COMMAND_TIMEOUT
+        };
         if commands
             .try_send(RpcCommand::KeyEvent {
                 event,

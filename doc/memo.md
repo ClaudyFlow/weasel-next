@@ -63,6 +63,30 @@ model/<名字>.gram                   语言模型    （直接放好，librime 
 | 旧统计文本（仅首次迁移用） | `<用户目录>\plugin\input_stat_<方案>.lua` |
 | 统计数据库（LevelDB） | `<用户目录>\userdb\input_stat.userdb`（保持与“所有 `*.userdb` 都在 `userdb\` 下”一致） |
 
+## 输入统计窗口（`/stat`「个人生涯」）的数据源（已定 2026-10-17，**22:0x 改二进制**）
+
+* 数据链：**TIP 采集 → `%APPDATA%\Rime-Next\stat\stat.bin`（单数 `stat`，单个二进制文件）
+  → `Weasel-Next-Setting.exe /stat` 读并显示**。
+  写侧 `Tip/src/stats.rs`（`encode`/`parse_file`），读侧 `Setting/src/stats.rs`（`parse_stat_bytes`）；
+  **两边是同一份字节契约，改一处必须同时改另一处**，各自有一组独立手写字节的往返测试看着。
+* 用户明确要求（2026-10-17 22:0x）：目录名 `stat` 单数、**单个二进制文件**、进程独占锁**防删**。
+  ⇒ 写侧 `CreateFileW(..., dwShareMode = FILE_SHARE_READ)`。
+  ⚠️ **共享模式由「先打开的一方」决定**：写侧给 `0` 时，读侧请求 `FILE_SHARE_READ|WRITE` 也一样
+  拿 `ERROR_SHARING_VIOLATION`（22:0x 的检查点写过反向结论，已实测推翻）。
+  `FILE_SHARE_READ` 同时满足两件事：读得开、`DeleteFile` 仍然失败（删要 `FILE_SHARE_DELETE`）。
+* 格式 v2（小端）：头 16B `"WNST"|version=2|天数|字数`；天 28B `date|keys|chars|active_ms`；
+  字 12B `codepoint|count`（全量前 200 个字）。v1（20B、无时长/字表）仍能读，落盘自动升级。
+* 旧 `stats\YYYY-MM-DD.toml`（**复数**目录）只作**只读兜底**：二进制里没有的日期才用，
+  不迁移、不删除用户文件。
+* 为什么不直接读统计插件的库：插件的数据在 librime 进程里（LevelDB / `input_stat_*.lua`），
+  目前也还没有数据；`/stat` 是界面侧的"个人生涯"，先用 TIP 这条**绝不阻塞按键**的链路喂。
+  等 Lua 版插件真正跑起来，再把更细的指标（码长 / 键准 / 极速）并进来。
+* 段位 / 境界两张表照抄 `input_statistics.lua`（20 级 + 7 境界），在 `Setting/src/main.rs`；
+  **经验 = 累计上屏字数**。
+* 速度（字/分）只用 `active_ms` 算：按键间隔 **>5 秒**视为中断、那段不计时（与 lua 版 `gapThd = 5` 一致）。
+  v1 文件 / 旧 toml 没有时长 → 速度显示 0，不除零。
+
+
 ## 程序文件夹与 asset 的结构（已定，待实现）
 
 单一配置文件夹原则：配置只有一份，就是用户目录 `%APPDATA%\Rime-Next\`；

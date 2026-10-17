@@ -712,3 +712,307 @@ fn push_skins(ui: &SettingsWindow, skins: &skins::Skins) {
         ui.set_scheme_preview_comment(row.comment_color);
     }
 }
+/// 打开「输入统计」窗口。`/stat` 走这里。
+///
+/// 数据来自 `%APPDATA%\Rime-Next\stat\stat.bin`（TIP 采集，见 `Tip/src/stats.rs`；
+/// 旧的 `stats\*.toml` 只读兜底）。读文件/算数字都在 `weasel_settings::stats` 里，
+/// 这里只做「数据 → Slint 属性」的搬运。
+pub fn show_stats() -> Result<(), String> {
+    let ui = StatsWindow::new().map_err(|error| error.to_string())?;
+    let weak = ui.as_weak();
+
+    // 刷新按钮和首次填充走同一条路径：重读文件、重算、重灌。数据量是「一天一条记录」，
+    // 直接全量重读即可，不必增量。
+    let apply: Rc<dyn Fn()> = Rc::new(move || {
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        let (entries, mut warnings) = weasel_settings::stats::load();
+        let snapshot =
+            weasel_settings::stats::snapshot(&entries, weasel_settings::stats::today_local());
+
+        let (title, level, exp_cur, exp_max) = career_level(snapshot.total_exp);
+        ui.set_level_title(title.into());
+        ui.set_level(level as i32);
+        ui.set_exp_cur(exp_cur as i32);
+        ui.set_exp_max(exp_max as i32);
+        ui.set_exp_ratio(if exp_max > 0 {
+            exp_cur as f32 / exp_max as f32
+        } else {
+            0.0
+        });
+        ui.set_exp_next(
+            format!("还差 {} 升下一级", exp_max.saturating_sub(exp_cur)).into(),
+        );
+        ui.set_realm(career_realm(snapshot.total_chars).into());
+
+        ui.set_today_keys(snapshot.today_keys.min(i32::MAX as u64) as i32);
+        ui.set_today_chars(snapshot.today_chars.min(i32::MAX as u64) as i32);
+        ui.set_today_speed(snapshot.today_speed as i32);
+        ui.set_streak_days(snapshot.streak_days as i32);
+
+        // GitHub 贡献图是 **7 行（星期）× 5 列（周）= 35 格**，
+        // Slint 里按 `week * 7 + day` 索引，所以 `snapshot.days` 恒为 35 个
+        // （未采集的格子 count = 0，不是"不填"）。
+        let day_cells: Vec<StatDay> = snapshot
+            .days
+            .iter()
+            .map(|cell| StatDay {
+                count: cell.count as i32,
+                tip: cell.tip.as_str().into(),
+                today: cell.today,
+            })
+            .collect();
+        ui.set_days(slint::ModelRc::new(slint::VecModel::from(day_cells)));
+
+        let words: Vec<StatWord> = snapshot
+            .words
+            .iter()
+            .map(|(word, count)| StatWord {
+                word: word.as_str().into(),
+                count: (*count).min(i32::MAX as u64) as i32,
+            })
+            .collect();
+        ui.set_words(slint::ModelRc::new(slint::VecModel::from(words)));
+
+        // 没有数据 ≠ 出错：给一句灰字解释，别让用户以为窗口坏了。
+        ui.set_hint(
+            if snapshot.has_data {
+                ""
+            } else {
+                "还没有采集到数据：替换掉 TIP（Weasel-Next.dll）后打的字才会开始累计。"
+            }
+            .into(),
+        );
+        if !warnings.is_empty() {
+            for warning in &warnings {
+                eprintln!("Weasel-Next-Setting: 统计文件 {warning}");
+            }
+            let first = warnings.remove(0);
+            ui.set_status(
+                format!("{} 个统计文件读不出来（例：{first}）", warnings.len() + 1).into(),
+            );
+        } else {
+            ui.set_status("".into());
+        }
+    });
+
+    apply();
+    {
+        let apply = apply.clone();
+        ui.on_refresh(move || apply());
+    }
+    ui.show().map_err(|error| error.to_string())?;
+    // 窗口要等事件循环跑起来才有真实尺寸/位置（`show()` 只是投递请求），
+    // 所以「立刻摆一次」之外，再在 120ms 后补一次 —— 这次才是真正生效的那次。
+    place_window_in_work_area(ui.window());
+    {
+        let weak = ui.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(120), move || {
+            if let Some(ui) = weak.upgrade() {
+                place_window_in_work_area(ui.window());
+            }
+        });
+    }
+    ui.run().map_err(|error| error.to_string())
+}
+
+/// 把窗口摆进主屏工作区（居中，放不下就贴左上）。
+///
+/// 为什么需要：Windows 对同一窗口类的**新建窗口会级联偏移**，实测 `/stat` 连续打开几次就会
+/// 漂到 (302,224) —— 740 逻辑高 × 125% 缩放 = 925 物理，底边直接跑到 1080 屏幕外，
+/// 用户看到的是「致谢那行被切掉」的半截窗口（2026-10-17 截图复现）。显式定位一次即可。
+fn place_window_in_work_area(window: &slint::Window) {
+    #[repr(C)]
+    #[derive(Default)]
+    struct Rect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+    unsafe extern "system" {
+        /// `SPI_GETWORKAREA` = 0x0030，取主屏去掉任务栏后的区域（物理像素）。
+        fn SystemParametersInfoW(action: u32, param: u32, out: *mut Rect, win_ini: u32) -> i32;
+    }
+    let mut work = Rect::default();
+    if unsafe { SystemParametersInfoW(0x0030, 0, &mut work, 0) } == 0 {
+        return;
+    }
+    let size = window.size();
+    let (width, height) = (size.width as i32, size.height as i32);
+    let (work_width, work_height) = (work.right - work.left, work.bottom - work.top);
+    if width <= 0 || height <= 0 || work_width <= 0 || work_height <= 0 {
+        return;
+    }
+    let x = work.left + (work_width - width).max(0) / 2;
+    let y = work.top + (work_height - height).max(0) / 2;
+    window.set_position(slint::PhysicalPosition::new(x, y));
+}
+/// 触发一次部署，并显示进度窗口。
+///
+/// 部署由 **broker** 执行（引擎单实例，Setting 自己拉引擎只会得到 `AlreadyRunning`），
+/// 所以这里没有回调可用，只能：
+///   1. 记下部署前 `user.yaml` 的 `var/last_build_time`
+///   2. 给 broker 发 `WM_COMMAND(1001)`
+///   3. 起一个 `slint::Timer` 轮询那个时间戳，变了 = 部署完成
+///   4. 期间按"阶段"推进进度条（纯估算，但足以让用户知道没卡死）
+pub fn deploy_with_progress() -> Result<(), String> {
+    let ui = DeployProgressWindow::new().map_err(|error| error.to_string())?;
+    let weak = ui.as_weak();
+
+    // 轮询用的状态：已经跑了几轮、部署前的 last_build_time
+    let before = read_last_build_time();
+    let ticks = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let finished_flag = std::rc::Rc::new(std::cell::Cell::new(false));
+    let finished_for_timer = finished_flag.clone();
+    let ticks_for_timer = ticks.clone();
+
+    // 立刻发部署命令
+    let _ = std::panic::catch_unwind(|| crate::switcher_dialog::request_deploy());
+
+    let timer = slint::Timer::default();
+    let weak_for_timer = weak.clone();
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(250),
+        move || {
+            if finished_for_timer.get() { return; }
+            let Some(ui) = weak_for_timer.upgrade() else { return };
+            let n = ticks_for_timer.get() + 1;
+            ticks_for_timer.set(n);
+
+            // 阶段文案 + 估算进度（部署典型耗时 4~8 秒）
+            let (stage, progress) = match n {
+                1..=4 => ("正在停止输入法进程…", 0.05 + n as f32 * 0.02),
+                5..=16 => ("正在编译输入方案（librime）…", 0.15 + (n - 4) as f32 * 0.035),
+                17..=24 => ("正在同步程序文件…", 0.60 + (n - 16) as f32 * 0.03),
+                25..=32 => ("正在重启输入法…", 0.85 + (n - 24) as f32 * 0.01),
+                _ => ("等待部署完成…", 0.95),
+            };
+            ui.set_stage(stage.into());
+            ui.set_progress(progress.min(0.99));
+            ui.set_detail(format!("已等待 {:.1} 秒", n as f32 * 0.25).into());
+
+            // 完成判据：last_build_time 变了（rime 部署成功会写它）
+            let now = read_last_build_time();
+            let done = match (before, now) {
+                (Some(a), Some(b)) => b > a,
+                (None, Some(_)) => true,
+                _ => false,
+            };
+            // 超时保护：20 秒还没变就认为失败，别让窗口挂死
+            let timed_out = n >= 80;
+            if done || timed_out {
+                finished_for_timer.set(true);
+                ui.set_finished(done && !timed_out);
+                ui.set_failed(timed_out);
+                ui.set_progress(if done { 1.0 } else { ui.get_progress() });
+                ui.set_stage(if done { "完成" } else { "超时（可能仍在后台部署，稍后看候选窗是否恢复）" }.into());
+                ui.set_detail("".into());
+                // 完成后再撑 0.8 秒让用户看见，然后自动关闭
+                let weak_done = weak_for_timer.clone();
+                let closer = slint::Timer::default();
+                closer.start(
+                    slint::TimerMode::SingleShot,
+                    std::time::Duration::from_millis(1600),
+                    move || {
+                        if let Some(ui) = weak_done.upgrade() {
+                            let _ = ui.hide();
+                            slint::quit_event_loop();
+                        }
+                    },
+                );
+                std::mem::forget(closer);
+            }
+        },
+    );
+    // timer 要活到窗口关掉
+    std::mem::forget(timer);
+
+    let weak_cancel = weak.clone();
+    ui.on_cancel(move || {
+        if let Some(ui) = weak_cancel.upgrade() {
+            let _ = ui.hide();
+        }
+        slint::quit_event_loop();
+    });
+
+    ui.run().map_err(|error| error.to_string())
+}
+
+/// 读 `user.yaml` 里的 `var/last_build_time`（rime 部署成功会更新它）。
+fn read_last_build_time() -> Option<i64> {
+    let path = std::env::var_os("APPDATA")?;
+    let path = std::path::PathBuf::from(path).join("Rime-Next").join("user.yaml");
+    let text = std::fs::read_to_string(path).ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("last_build_time:") {
+            return value.trim().parse::<i64>().ok();
+        }
+    }
+    None
+}
+// ── 生涯段位（移植自 input_statistics.lua 的 career_levels / career_realms）──────
+//
+// 20 级、按累计经验（≈上屏字数）分段；7 境界按累计字数。这两张表和 lua 插件
+// **完全一致**，否则同一个用户在两处看到的段位会不一样。
+const CAREER_LEVELS: &[(u32, u64, &str)] = &[
+    (1, 0, "🌱 初识键盘"),
+    (2, 100, "🍃 摸键学徒"),
+    (3, 300, "🌿 码字新人"),
+    (4, 600, "🌾 指尖练习生"),
+    (5, 1_000, "🌼 输入学徒"),
+    (6, 2_000, "🌸 码流行者"),
+    (7, 4_000, "🌺 飞键使"),
+    (8, 7_000, "🌻 连击者"),
+    (9, 12_000, "🌷 码阵构筑师"),
+    (10, 20_000, "🌹 熟练输入师"),
+    (11, 35_000, "⚔️ 码道武者"),
+    (12, 55_000, "🗡️ 飞码剑士"),
+    (13, 80_000, "🔥 码力掌控者"),
+    (14, 120_000, "🌪️ 疾风键客"),
+    (15, 180_000, "✨ 码道宗师"),
+    (16, 280_000, "🌌 星码使"),
+    (17, 420_000, "🌠 破空键圣"),
+    (18, 620_000, "👑 万码之王"),
+    (19, 900_000, "🪽 羽化码仙"),
+    (20, 1_300_000, "🐉 键道真君"),
+];
+
+const CAREER_REALMS: &[(u64, &str)] = &[
+    (10_000_000, "码仙境"),
+    (5_000_000, "码圣境"),
+    (1_000_000, "通玄境"),
+    (200_000, "御码境"),
+    (50_000, "飞键境"),
+    (10_000, "熟键境"),
+    (0, "凡键境"),
+];
+
+/// 按累计经验算段位。返回 (称号, 等级, 本级已得经验, 本级所需经验)。
+fn career_level(total_exp: u64) -> (&'static str, u32, u64, u64) {
+    for (index, (lv, start, title)) in CAREER_LEVELS.iter().enumerate().rev() {
+        if total_exp >= *start {
+            let end = CAREER_LEVELS
+                .get(index + 1)
+                .map(|next| next.1)
+                .unwrap_or(start + 500_000);
+            return (title, *lv, total_exp - start, end - start);
+        }
+    }
+    let first = CAREER_LEVELS[0];
+    let second = CAREER_LEVELS[1];
+    (first.2, first.0, total_exp, second.1 - first.1)
+}
+
+/// 按累计字数算境界。
+fn career_realm(total_chars: u64) -> &'static str {
+    for (base, name) in CAREER_REALMS {
+        if total_chars >= *base {
+            return name;
+        }
+    }
+    "凡键境"
+}

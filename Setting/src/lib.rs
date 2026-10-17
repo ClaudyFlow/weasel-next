@@ -12,3 +12,4 @@ pub mod config;
 pub mod form;
 pub mod metadata;
 pub mod session;
+pub mod stats;

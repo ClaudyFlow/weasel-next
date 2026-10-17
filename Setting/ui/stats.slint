@@ -1,0 +1,373 @@
+// 输入统计 —— 独立窗口（像百度输入法的「个人生涯」）
+//
+// 数据由 Rust 侧读 `%APPDATA%\Rime-Next\stat\stat.bin`（TIP 采集）后灌进来；
+// 没有数据时全部显示 0，界面照样能打开（便于先看结构）。
+
+// 一天的热力格
+export struct StatDay {
+    // 该日击键数（决定颜色深浅）
+    count: int,
+    // 悬停提示，例如 "2026-10-17 · 1,234 键"
+    tip: string,
+    // 是否今天（描边高亮）
+    today: bool,
+}
+
+// 常用字/词
+export struct StatWord {
+    word: string,
+    count: int,
+}
+
+// 一个大数字卡片
+component StatCard inherits Rectangle {
+    in property <string> title: "";
+    in property <int> value: 0;
+    in property <string> unit: "";
+    in property <color> accent: #0a3afa;
+
+    background: white;
+    border-radius: 14px;
+    min-height: 92px;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 4px;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            font-size: 15px;
+            color: #6b7280;
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            value-text := Text {
+                text: root.value;
+                font-size: 30px;
+                font-weight: 700;
+                color: root.accent;
+            }
+            Text {
+                text: root.unit;
+                font-size: 16px;
+                color: #9ca3af;
+            }
+        }
+    }
+}
+
+export component StatsWindow inherits Window {
+    title: "小狼毫Next · 输入统计";
+    width: 880px;
+    // 之前 660 装不下「卡片 + 段位 + 热力图 + 常用字」，常用字被挤出窗口底部
+    // （2026-10-17 截图实测：常用字只露出标题）。740 在 100% / 132% 缩放下都能整屏放下。
+    height: 740px;
+    background: #f4f5f7;
+
+    // ── 数据（Rust 侧设置）────────────────────────────────
+    in property <int> today-keys: 0;
+    in property <int> today-chars: 0;
+    in property <int> today-speed: 0;
+    in property <int> streak-days: 0;
+    in property <[StatDay]> days: [];
+    in property <[StatWord]> words: [];
+    // 生涯段位（20 级，来自 input_statistics.lua 的 career_levels）
+    in property <string> level-title: "🌱 初识键盘";
+    in property <int> level: 1;
+    in property <int> exp-cur: 0;
+    in property <int> exp-max: 100;
+    in property <float> exp-ratio: 0.0;
+    in property <string> exp-next: "";
+    in property <string> realm: "凡键境";
+    // 加载失败时的提示（空 = 正常）
+    in property <string> status: "";
+    // 还没采集到数据时的解释（灰字，空 = 不显示）
+    in property <string> hint: "";
+
+    callback refresh();
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 12px;
+
+        // ── 标题行 ────────────────────────────────────────
+        HorizontalLayout {
+            spacing: 12px;
+
+            VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text: "个人生涯";
+                    font-size: 26px;
+                    font-weight: 700;
+                    color: #111827;
+                }
+                Text {
+                    // 没采集到数据时，这一行换成解释（比在窗口底部塞一句灰字更容易被看到）。
+                    text: root.hint == "" ? "本机记录，不上传" : root.hint;
+                    font-size: 16px;
+                    color: #9ca3af;
+                }
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            // 刷新按钮自绘：std-widgets 的 Button 在浅色卡片上是白底浅字，
+            // 2026-10-17 截图里几乎看不见（只剩一个白框）。
+            Rectangle {
+                width: 76px;
+                height: 34px;
+                border-radius: 8px;
+                background: white;
+                border-width: 1px;
+                border-color: #d1d5db;
+
+                Text {
+                    text: "刷新";
+                    font-size: 15px;
+                    color: #374151;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                TouchArea {
+                    clicked => { root.refresh(); }
+                }
+            }
+        }
+
+        // ── 四个数字卡片 ──────────────────────────────────
+        HorizontalLayout {
+            spacing: 14px;
+
+            StatCard {
+                title: "今日击键";
+                value: root.today-keys;
+                unit: "次";
+                horizontal-stretch: 1;
+            }
+            StatCard {
+                title: "今日上屏";
+                value: root.today-chars;
+                unit: "字";
+                accent: #16a34a;
+                horizontal-stretch: 1;
+            }
+            StatCard {
+                title: "平均速度";
+                value: root.today-speed;
+                unit: "字/分";
+                accent: #d97706;
+                horizontal-stretch: 1;
+            }
+            StatCard {
+                title: "连续使用";
+                value: root.streak-days;
+                unit: "天";
+                accent: #7c3aed;
+                horizontal-stretch: 1;
+            }
+        }
+
+        // ── 生涯段位 + 进度条（20 级 + 7 境界，定义来自 input_statistics.lua）────
+        Rectangle {
+            background: white;
+            border-radius: 14px;
+
+            VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: root.level-title;
+                        font-size: 22px;
+                        font-weight: 700;
+                        color: #111827;
+                    }
+                    Text {
+                        text: "Lv." + root.level;
+                        font-size: 15px;
+                        color: #f0a030;
+                        font-weight: 600;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text {
+                        text: root.realm;
+                        font-size: 16px;
+                        color: #6b7280;
+                    }
+                }
+
+                // 进度条：底色 + 前景按比例撑开
+                Rectangle {
+                    height: 12px;
+                    border-radius: 6px;
+                    background: #e8eaee;
+                    Rectangle {
+                        width: parent.width * root.exp-ratio;
+                        height: parent.height;
+                        border-radius: 6px;
+                        background: #f0a030;
+                    }
+                }
+
+                HorizontalLayout {
+                    Text {
+                        text: root.exp-cur + " / " + root.exp-max + " 经验";
+                        font-size: 16px;
+                        color: #9ca3af;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text {
+                        text: root.exp-next;
+                        font-size: 16px;
+                        color: #9ca3af;
+                    }
+                }
+            }
+        }
+
+        // ── 近 30 天热力图 ────────────────────────────────
+        Rectangle {
+            background: white;
+            border-radius: 14px;
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+
+                Text {
+                    text: "近 5 周";
+                    font-size: 15px;
+                    font-weight: 600;
+                    color: #374151;
+                }
+
+                // 用 GridLayout 铺 10 列 × 3 行（30 天）
+                // GitHub 贡献图布局：**列 = 周，行 = 星期**（7 行 × 5 列 = 35 格）
+                // 数据按「周 × 7 + 星期」索引，Rust 侧保证数组补满 35 个。
+                HorizontalLayout {
+                    spacing: 3px;
+                    for week in 5 : VerticalLayout {
+                        spacing: 3px;
+                        for day in 7 : Rectangle {
+                            width: 16px;
+                            height: 16px;
+                            border-radius: 3px;
+                            background: root.days[week * 7 + day].count <= 0
+                                ? #ebedf0
+                                : (root.days[week * 7 + day].count < 100
+                                    ? #9be9a8
+                                    : (root.days[week * 7 + day].count < 500
+                                        ? #40c463
+                                        : (root.days[week * 7 + day].count < 1500 ? #30a14e : #216e39)));
+                            border-width: root.days[week * 7 + day].today ? 2px : 0px;
+                            border-color: #1f2328;
+                        }
+                    }
+                }
+
+                // 图例（GitHub 同款：少 → 多 五个色块）
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    Text { text: "少"; font-size: 15px; color: #9ca3af; vertical-alignment: center; }
+                    Rectangle { width: 16px; height: 16px; border-radius: 3px; background: #ebedf0; }
+                    Rectangle { width: 16px; height: 16px; border-radius: 3px; background: #9be9a8; }
+                    Rectangle { width: 16px; height: 16px; border-radius: 3px; background: #40c463; }
+                    Rectangle { width: 16px; height: 16px; border-radius: 3px; background: #30a14e; }
+                    Rectangle { width: 16px; height: 16px; border-radius: 3px; background: #216e39; }
+                    Text { text: "多"; font-size: 15px; color: #9ca3af; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text { text: "（<100 / <500 / <1500 / ≥1500 键）"; font-size: 16px; color: #9ca3af; vertical-alignment: center; }
+                }
+
+            }
+        }
+
+        // ── 常用字 Top ────────────────────────────────────
+        // 没有字频数据时整张卡片收起，不留一个空格子。
+        Rectangle {
+            background: white;
+            border-radius: 14px;
+            min-height: 108px;
+            visible: root.words.length > 0;
+
+            VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+
+                Text {
+                    text: "常用字";
+                    font-size: 15px;
+                    font-weight: 600;
+                    color: #374151;
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    for word in root.words : Rectangle {
+                        background: #f1f5f9;
+                        border-radius: 8px;
+                        min-width: 54px;
+
+                        VerticalLayout {
+                            padding: 8px;
+                            alignment: center;
+                            spacing: 2px;
+                            Text {
+                                text: word.word;
+                                font-size: 20px;
+                                font-weight: 700;
+                                color: #111827;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: word.count;
+                                font-size: 16px;
+                                color: #6b7280;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+            }
+        }
+
+        // ── 灵感来源 ─────────────────────────────────────
+        // 段位体系、境界、进度条皮肤全部照抄 input_statistics.lua（@happyDom），
+        // 这里必须写明出处。
+        Text {
+            text: "✨ 灵感来源：🐐🪶❄🌸 羊毛雪花 · input_statistic 统计插件";
+            font-size: 14px;
+            color: #9ca3af;
+            horizontal-alignment: center;
+        }
+
+        // ── 状态栏 ────────────────────────────────────────
+        Text {
+            text: root.status;
+            font-size: 16px;
+            color: #b91c1c;
+            visible: root.status != "";
+        }
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+

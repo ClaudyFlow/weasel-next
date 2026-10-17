@@ -21,3 +21,6 @@ pub use bindings::CLSID_WEASEL_TIP;
 pub use class_factory::{
     DllCanUnloadNow, DllGetClassObject, DllRegisterServer, DllUnregisterServer,
 };
+
+pub mod stats;
+
