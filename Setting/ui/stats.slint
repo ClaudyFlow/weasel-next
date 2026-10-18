@@ -1,3 +1,5 @@
+import { ScrollView, VerticalBox } from "std-widgets.slint";
+
 // 输入统计 —— 独立窗口（像百度输入法的「个人生涯」）
 //
 // 数据由 Rust 侧读 `%APPDATA%\Rime-Next\stat\stat.bin`（TIP 采集）后灌进来；
@@ -28,11 +30,11 @@ component StatCard inherits Rectangle {
 
     background: white;
     border-radius: 14px;
-    min-height: 92px;
+    min-height: 64px;
 
     VerticalLayout {
         padding: 14px;
-        spacing: 4px;
+        spacing: 2px;
         alignment: start;
 
         Text {
@@ -45,7 +47,7 @@ component StatCard inherits Rectangle {
             alignment: start;
             value-text := Text {
                 text: root.value;
-                font-size: 30px;
+                font-size: 28px;
                 font-weight: 700;
                 color: root.accent;
             }
@@ -53,20 +55,23 @@ component StatCard inherits Rectangle {
                 text: root.unit;
                 font-size: 16px;
                 color: #9ca3af;
+                vertical-alignment: bottom;
             }
         }
     }
 }
 
-export component StatsWindow inherits Window {
-    title: "小狼毫Next · 输入统计";
-    width: 880px;
+// 可内嵌页面：设置主界面的「主页」直接放它。
+export component StatsPage inherits Rectangle {
+    background: #f4f5f7;
+    // Rectangle 会撑满（灰底铺满），这是「灰底拉满」要求的代价；不要再改成 VerticalBox。
+    // 必须限高：它嵌在设置主界面的 VerticalBox 里，不限高会按内容撑到 700px，
+    // 把底部的「保存并部署 / 关闭」挤出窗口（2026-10-17 实测）。
+    // 按内容高度，不留底部空白（用户 2026-10-18：下面空白删干净）
     // 之前 660 装不下「卡片 + 段位 + 热力图 + 常用字」，常用字被挤出窗口底部
     // （2026-10-17 截图实测：常用字只露出标题）。740 在 100% / 132% 缩放下都能整屏放下。
-    height: 740px;
-    background: #f4f5f7;
-
     // ── 数据（Rust 侧设置）────────────────────────────────
+    in property <string> quarter-label: "";
     in property <int> today-keys: 0;
     in property <int> today-chars: 0;
     in property <int> today-speed: 0;
@@ -86,11 +91,21 @@ export component StatsWindow inherits Window {
     // 还没采集到数据时的解释（灰字，空 = 不显示）
     in property <string> hint: "";
 
+    // 热力格边长：由使用方按窗口宽度算好传进来。
+    // 不能在页面里写 root.width —— 格子宽度会决定卡片高度、卡片高度又决定页面高度，
+    // 而页面宽度来自布局，Slint 判成绑定环直接编译失败（2026-10-19 实测）。
+    // 公式：卡片内宽 = 窗口宽 − 页面 padding(14×2) − 卡片 padding(14×2) − 52 个 3px 间隙。
+    in property <length> heat-cell: 20px;
+
     callback refresh();
 
     VerticalLayout {
-        padding: 20px;
+        padding: 14px;
+        // 底部只留一点点：灵感来源是页面最后一行，要贴着窗口下沿
+        // （用户 2026-10-19：「文字贴紧底部」）。
+        padding-bottom: 8px;
         spacing: 12px;
+        alignment: start;   // 内容靠上，别把「灵感来源」推到最底
 
         // ── 标题行 ────────────────────────────────────────
         HorizontalLayout {
@@ -100,13 +115,12 @@ export component StatsWindow inherits Window {
                 spacing: 2px;
                 Text {
                     text: "个人生涯";
-                    font-size: 26px;
+                    font-size: 28px;
                     font-weight: 700;
                     color: #111827;
                 }
                 Text {
-                    // 没采集到数据时，这一行换成解释（比在窗口底部塞一句灰字更容易被看到）。
-                    text: root.hint == "" ? "本机记录，不上传" : root.hint;
+                    text: root.hint == "" ? "本机记录，不上传（作者本人暂时没有这个技术水平）" : root.hint;
                     font-size: 16px;
                     color: #9ca3af;
                 }
@@ -230,34 +244,34 @@ export component StatsWindow inherits Window {
             }
         }
 
-        // ── 近 30 天热力图 ────────────────────────────────
+        // ── 整年热力图 ────────────────────────────────────
         Rectangle {
             background: white;
             border-radius: 14px;
-            vertical-stretch: 1;
 
             VerticalLayout {
                 padding: 14px;
                 spacing: 8px;
 
                 Text {
-                    text: "近 5 周";
+                    text: root.quarter-label;
                     font-size: 15px;
                     font-weight: 600;
                     color: #374151;
                 }
 
-                // 用 GridLayout 铺 10 列 × 3 行（30 天）
-                // GitHub 贡献图布局：**列 = 周，行 = 星期**（7 行 × 5 列 = 35 格）
-                // 数据按「周 × 7 + 星期」索引，Rust 侧保证数组补满 35 个。
+                // GitHub 贡献图布局：**列 = 周，行 = 星期**（7 行 × 53 列 = 371 格，整一年）
+                // 数据按「周 × 7 + 星期」索引，Rust 侧保证数组补满 371 个。
+                // 尺寸不再写死 17px：按 heat-cell 实时计算，横向撑满卡片（贴到两端）。
                 HorizontalLayout {
                     spacing: 3px;
-                    for week in 5 : VerticalLayout {
+                    alignment: start;
+                    for week in 53 : VerticalLayout {
                         spacing: 3px;
                         for day in 7 : Rectangle {
-                            width: 16px;
-                            height: 16px;
-                            border-radius: 3px;
+                            width: root.heat-cell;
+                            height: root.heat-cell;
+                            border-radius: 2px;
                             background: root.days[week * 7 + day].count <= 0
                                 ? #ebedf0
                                 : (root.days[week * 7 + day].count < 100
@@ -271,18 +285,17 @@ export component StatsWindow inherits Window {
                     }
                 }
 
-                // 图例（GitHub 同款：少 → 多 五个色块）
+                // 图例（GitHub 同款：少 → 多 五个色块）—— 用户 2026-10-19：整行居中
                 HorizontalLayout {
-                    spacing: 4px;
-                    alignment: start;
+                    spacing: 2px;
+                    alignment: center;
                     Text { text: "少"; font-size: 15px; color: #9ca3af; vertical-alignment: center; }
-                    Rectangle { width: 16px; height: 16px; border-radius: 3px; background: #ebedf0; }
-                    Rectangle { width: 16px; height: 16px; border-radius: 3px; background: #9be9a8; }
-                    Rectangle { width: 16px; height: 16px; border-radius: 3px; background: #40c463; }
-                    Rectangle { width: 16px; height: 16px; border-radius: 3px; background: #30a14e; }
-                    Rectangle { width: 16px; height: 16px; border-radius: 3px; background: #216e39; }
+                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #ebedf0; }
+                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #9be9a8; }
+                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #40c463; }
+                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #30a14e; }
+                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #216e39; }
                     Text { text: "多"; font-size: 15px; color: #9ca3af; vertical-alignment: center; }
-                    Rectangle { horizontal-stretch: 1; }
                     Text { text: "（<100 / <500 / <1500 / ≥1500 键）"; font-size: 16px; color: #9ca3af; vertical-alignment: center; }
                 }
 
@@ -290,12 +303,13 @@ export component StatsWindow inherits Window {
         }
 
         // ── 常用字 Top ────────────────────────────────────
-        // 没有字频数据时整张卡片收起，不留一个空格子。
-        Rectangle {
+        // 没有字频数据时整张卡片不进布局。注意不能用 `visible: false`：
+        // Slint 里那只是不画，min-height 108px + 12px 间距照样占位，
+        // 会在热力图下面留一条 120px 的空灰边（2026-10-19 实测）。
+        if root.words.length > 0 : Rectangle {
             background: white;
             border-radius: 14px;
             min-height: 108px;
-            visible: root.words.length > 0;
 
             VerticalLayout {
                 padding: 14px;
@@ -339,9 +353,8 @@ export component StatsWindow inherits Window {
             }
         }
 
-        // ── 灵感来源 ─────────────────────────────────────
-        // 段位体系、境界、进度条皮肤全部照抄 input_statistics.lua（@happyDom），
-        // 这里必须写明出处。
+        // 灵感来源：放在页面最下方、卡片之外的灰底上（用户 2026-10-19：
+        // 从热力图卡片里拿出来，落到下面那块灰色区域）。
         Text {
             text: "✨ 灵感来源：🐐🪶❄🌸 羊毛雪花 · input_statistic 统计插件";
             font-size: 14px;
@@ -349,15 +362,68 @@ export component StatsWindow inherits Window {
             horizontal-alignment: center;
         }
 
-        // ── 状态栏 ────────────────────────────────────────
-        Text {
-            text: root.status;
-            font-size: 16px;
-            color: #b91c1c;
-            visible: root.status != "";
-        }
+    }
+    }
+// 独立窗口包装：`/stat` 直接开这个。内容全在 StatsPage 里，这里只做属性透传。
+export component StatsWindow inherits Window {
+    title: "小狼毫Next · 输入统计";
+    preferred-width: 1120px;
+    preferred-height: 740px;
+    // 热力格按窗口宽度算尺寸，窗口别缩到算出来是负数的程度；
+    // 660 是 1000px 宽时「卡片 + 段位 + 热力图 + 常用字」的实际内容高度。
+    min-width: 1000px;
+    min-height: 660px;
+
+    in property <int> today-keys: 0;
+    in property <string> quarter-label: "";
+    in property <int> today-chars: 0;
+    in property <int> today-speed: 0;
+    in property <int> streak-days: 0;
+    in property <[StatDay]> days: [];
+    in property <[StatWord]> words: [];
+    in property <string> level-title: "🌱 初识键盘";
+    in property <int> level: 1;
+    in property <int> exp-cur: 0;
+    in property <int> exp-max: 100;
+    in property <float> exp-ratio: 0.0;
+    in property <string> exp-next: "";
+    in property <string> realm: "凡键境";
+    in property <string> status: "";
+    in property <string> hint: "";
+    callback refresh();
+
+    // 热力格边长：53 列 + 52 个 3px 间隙正好铺满卡片内宽（贴到两端）。
+    // 用 init / changed width 赋值而不是属性绑定 —— 绑定的话「格子宽 → 卡片高 →
+    // 页面宽 → 格子宽」会被 Slint 判成绑定环（2026-10-19 编译实测）。
+    in-out property <length> heat-cell: 20px;
+    init => { root.heat-cell = (root.width - 212px) / 53; }
+    changed width => { root.heat-cell = (root.width - 212px) / 53; }
+
+    StatsPage {
+        quarter-label: root.quarter-label;
+        // 格子尺寸由窗口算好传进来（见 StatsWindow 的 changed width）。
+        heat-cell: root.heat-cell;
+        today-keys: root.today-keys;
+        today-chars: root.today-chars;
+        today-speed: root.today-speed;
+        streak-days: root.streak-days;
+        days: root.days;
+        words: root.words;
+        level-title: root.level-title;
+        level: root.level;
+        exp-cur: root.exp-cur;
+        exp-max: root.exp-max;
+        exp-ratio: root.exp-ratio;
+        exp-next: root.exp-next;
+        realm: root.realm;
+        status: root.status;
+        hint: root.hint;
+        refresh => { root.refresh(); }
     }
 }
+
+
+
 
 
 

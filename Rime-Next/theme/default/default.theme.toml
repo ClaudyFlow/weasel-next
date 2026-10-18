@@ -973,3 +973,34 @@ hilited_comment_text_color = "0xffffff"
 hilited_mark_color = "0x00000000"
 nextpage_color = "0x00000000"
 prevpage_color = "0x00000000"
+
+# ── 星露谷／Stardew Valley ────────────────────────────────────────────────
+# 色值直接采样自星露谷的对话框 UI（用户的 KanBan 面板截图）：
+#   羊皮纸黄 #f6d78d / #ffe9a7、深棕木头 #4d2819、深绿文字 #355e3b
+# 颜色格式是官方的 0xBBGGRR（**不是** RGB，注意字节序）。
+[schemes."stardew"]
+name = "星露谷／Stardew Valley"
+author = "Weasel-Next"
+back_color = "0x8dd7f6"                      # #f6d78d 羊皮纸黄
+border_color = "0x19284d"                    # #4d2819 深棕木头
+shadow_color = "0x00000000"
+text_color = "0x19284d"                      # #4d2819 深棕
+candidate_text_color = "0x19284d"
+candidate_back_color = "0x00000000"
+candidate_border_color = "0x00000000"
+candidate_shadow_color = "0x00000000"
+label_color = "0x3b5e35"                     # #355e3b 深绿（序号）
+comment_text_color = "0x3b5e35"              # 深绿注释
+hilited_text_color = "0xa7e9ff"              # #ffe9a7 亮黄
+hilited_back_color = "0x3b5e35"              # #355e3b 深绿底
+hilited_border_color = "0x00000000"
+hilited_shadow_color = "0x00000000"
+hilited_candidate_text_color = "0xa7e9ff"    # 亮黄文字
+hilited_candidate_back_color = "0x3b5e35"    # 深绿高亮块
+hilited_candidate_border_color = "0x00000000"
+hilited_candidate_shadow_color = "0x00000000"
+hilited_label_color = "0xa7e9ff"
+hilited_comment_text_color = "0xa7e9ff"
+hilited_mark_color = "0x00000000"
+nextpage_color = "0x3b5e35"
+prevpage_color = "0x3b5e35"

@@ -301,6 +301,7 @@ FunctionEnd
   Delete /REBOOTOK "$INSTDIR\Weasel-Next-Engine.exe"
   Delete /REBOOTOK "$INSTDIR\Weasel-Next-Renderer.exe"
   Delete /REBOOTOK "$INSTDIR\Weasel-Next-Setting.exe"
+  Delete /REBOOTOK "$INSTDIR\shuangpin-schema.exe"
   Delete /REBOOTOK "$INSTDIR\rime.dll"
   ; weasel_tip.dll 是旧名字，升级时退休掉（新名字是 Weasel-Next.dll）
   Delete /REBOOTOK "$INSTDIR\weasel_tip.dll"
@@ -330,6 +331,9 @@ Section "Weasel-Next" SEC_MAIN
   !insertmacro ManagedFile "${RELEASE_DIR}\Weasel-Next-Server.exe" "Weasel-Next-Server.exe"
   !insertmacro ManagedFile "${RELEASE_DIR}\Weasel-Next-Engine.exe" "Weasel-Next-Engine.exe"
   !insertmacro ManagedFile "${RELEASE_DIR}\Weasel-Next-Renderer.exe" "Weasel-Next-Renderer.exe"
+  ; 自定义双拼解析器：把 schema\shuangpin\*.toml 转成 rime 认的 .schema.yaml。
+  ; 随包分发，用户机器上不需要 Python / Rust。
+  !insertmacro ManagedFile "${RELEASE_DIR}\shuangpin-schema.exe" "shuangpin-schema.exe"
   !insertmacro ManagedFile "${PROJECT_ROOT}\Engine\src\styles-LICENSE.txt" "styles-LICENSE.txt"
   !insertmacro ManagedFile "${PROJECT_ROOT}\LICENSE" "LICENSE"
   !insertmacro ManagedFile "${PROJECT_ROOT}\weasel.toml" "weasel.toml"

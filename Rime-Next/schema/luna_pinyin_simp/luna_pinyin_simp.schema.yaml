@@ -34,3 +34,7 @@ key_binder:
   bindings/+:
     - { when: always, accept: Control+Shift+4, toggle: zh_simp }
     - { when: always, accept: Control+Shift+dollar, toggle: zh_simp }
+
+__patch:
+  # 语言模型：简体方案用 hans 预设（grammar.yaml），覆盖从 luna_pinyin 继承来的 hant
+  - grammar:/hans?

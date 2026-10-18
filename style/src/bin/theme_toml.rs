@@ -169,12 +169,9 @@ fn main() {
     }
     let _ = writeln!(out, "config_version = \"{}\"", escape(&config.config_version));
     let _ = writeln!(out, "color_scheme = \"{}\"", escape(&config.style.color_scheme));
-    match &config.style.color_scheme_dark {
-        Some(dark) => {
-            let _ = writeln!(out, "color_scheme_dark = \"{}\"", escape(dark));
-        }
-        None => out.push_str("# color_scheme_dark = \"\"   # 官方默认没有暗色方案\n"),
-    }
+    // 只有一套配色（用户 2026-10-18 要求：不要明暗两套、不要夜间配色）。
+    // `color_scheme_dark` 不再写出；旧文件里残留的那行仍能被解析，但运行时不使用。
+    out.push_str("# 只有一套配色：不做明暗两套，也不跟随系统深浅色切换（用户 2026-10-18）。\n");
 
     if !skin_only {
         write_style(&mut out, &config);

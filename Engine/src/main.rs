@@ -417,6 +417,9 @@ async fn run(args: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Er
         return std::thread::Builder::new()
             .name("rime-deploy".into())
             .spawn(move || {
+                // 部署期间让常驻引擎静音（跨进程 `.deploying` 标记，用户 2026-10-18 要求）。
+                // 这条是 `--deploy`（含 `--deploy --silent`）路径，不走 deploy_job。
+                let _deploying = crate::deploy_job::DeployingMarker::new();
                 let _data_lock = data_lock::DataLock::acquire(&paths.user_data)?;
                 init_logging(&paths, "deploy")?;
                 let deployed = librime::Librime::deploy(&paths.executable_directory, &paths.user_data);

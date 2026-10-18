@@ -22,11 +22,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// 热力图：7 行（周日→周六）× 5 列（周），共 35 格。
+/// 热力图：7 行（周日→周六）× 53 列（周），共 371 格 —— 整年。
 ///
 /// 与 GitHub 贡献图同一套排法：**列 = 周、行 = 星期（周日在上）**，
-/// 最右一列是本周。Slint 侧按 `week * 7 + day` 索引，所以数组必须恒为 35 个。
-pub const GRID_WEEKS: usize = 5;
+/// 最右一列是本周。Slint 侧按 `week * 7 + day` 索引，所以数组必须恒为 301 个。
+pub const GRID_WEEKS: usize = 53;
 /// 热力图格子总数。
 pub const GRID_CELLS: usize = GRID_WEEKS * 7;
 /// 「常用字」最多显示几个。
@@ -90,6 +90,8 @@ pub struct Snapshot {
     pub today_speed: u32,
     /// 连续使用天数（含今天；今天还没打字就从昨天往前数）。
     pub streak_days: u32,
+    /// 「2026 年第 4 季度」这种标题，Rust 算好给 Slint 用。
+    pub quarter_label: String,
     /// 累计击键。
     pub total_keys: u64,
     /// 累计上屏字数。
@@ -370,15 +372,23 @@ pub fn snapshot(entries: &[DayEntry], today: (i64, u32, u32)) -> Snapshot {
         cursor -= 1;
     }
 
-    // GitHub 排法：列 = 周，行 = 周日→周六，最右一列是本周。
-    let today_weekday = sunday_index(today_days);
-    let this_sunday = today_days - today_weekday;
-    let today_cell = (GRID_WEEKS as i64 - 1) * 7 + today_weekday;
+    // GitHub 排法：列 = 周，行 = 周日→周六。
+    // 用户要求「从 1 月 1 日算」——所以范围是**今年 1 月 1 日所在周**开始的 13 周，
+    // 而不是「最近 13 周」倒推。这样跨年后自动归零，和日历季度对齐。
+    // 用户要求「2026 年第 N 季度」——所以范围是**当前季度**（1-3/4-6/7-9/10-12 月），
+    // 起始 = 季度第一个月的 1 日所在周的周日。
+    // 用户 2026-10-18：「季度如果少就做成整年」——13 列太少铺不满宽度，
+    // 改成整年 53 周（1 月 1 日所在周起算），格子刚好铺满。
+    let (year, _, _) = civil_from_days(today_days);
+    let jan1 = days_from_civil(year, 1, 1);
+    let start_sunday = jan1 - sunday_index(jan1);
+    snapshot.quarter_label = format!("{} 年", year);
+    let today_cell = today_days - start_sunday;
     let mut cells: Vec<DayCell> = (0..GRID_CELLS)
         .map(|index| {
             let week = (index / 7) as i64;
             let day = (index % 7) as i64;
-            let date_days = this_sunday - (GRID_WEEKS as i64 - 1 - week) * 7 + day;
+            let date_days = start_sunday + week * 7 + day;
             DayCell {
                 count: 0,
                 tip: format!("{} · 0 键", format_date(date_days)),
@@ -396,11 +406,11 @@ pub fn snapshot(entries: &[DayEntry], today: (i64, u32, u32)) -> Snapshot {
             continue;
         };
         let days = days_from_civil(date.0, date.1, date.2);
-        let weeks_ago = (this_sunday - (days - sunday_index(days))) / 7;
-        if !(0..GRID_WEEKS as i64).contains(&weeks_ago) {
+        let week_index = (days - sunday_index(days) - start_sunday) / 7;
+        if !(0..GRID_WEEKS as i64).contains(&week_index) {
             continue;
         }
-        let cell = (GRID_WEEKS as i64 - 1 - weeks_ago) * 7 + sunday_index(days);
+        let cell = week_index * 7 + sunday_index(days);
         if let Some(slot) = cells.get_mut(cell as usize) {
             slot.count = entry.keys.min(u32::MAX as u64) as u32;
             slot.tip = format!(
@@ -858,3 +868,6 @@ chars = 39
         assert_eq!(thousands(1_234_567), "1,234,567");
     }
 }
+
+
+

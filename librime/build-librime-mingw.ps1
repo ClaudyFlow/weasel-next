@@ -160,6 +160,23 @@ function Build-Librime {
         throw "找不到 Rust 核心静态库：$CoreLib（先 cargo build --release --target x86_64-pc-windows-gnu）"
     }
     $pluginPath = (Resolve-Path -LiteralPath (Join-Path $root 'plugin\librime')).Path.Replace('\', '/')
+
+    # === octagram（语言模型插件）必须放进 <librime>\plugins\ ===
+    # 2026-10-18 核实：librime 顶层 CMakeLists 会用 plugins/ 里发现的模块**覆盖**
+    # RIME_SETUP_EXTRA_MODULES，从 -D 传进去的模块名会被顶掉 → 模块在 DLL 加载时注册了，
+    # 却永远不会被 LoadModules 初始化（"grammar" 组件就不存在，grammar.yaml 白写）。
+    # 放进 plugins/ 才会进 RIME_EXTRA_MODULES=(lua)(octagram)，并随 BUILD_MERGED_PLUGINS 合并进 rime.dll。
+    $octagramSrc = Join-Path $root 'librime\octagram'
+    if (-not (Test-Path -LiteralPath $octagramSrc)) {
+        throw "找不到 octagram 插件源码：$octagramSrc"
+    }
+    $octagramDst = Join-Path $Librime 'plugins\octagram'
+    if (-not (Test-Path -LiteralPath $octagramDst)) {
+        New-Item -ItemType Directory -Path $octagramDst -Force | Out-Null
+    }
+    Copy-Item -Path (Join-Path $octagramSrc '*') -Destination $octagramDst -Recurse -Force
+    Write-Host "已同步 octagram 插件到 $octagramDst" -ForegroundColor Cyan
+
     $markerBegin = '# >>> rime-speed-stats input_stat plugin (build-librime-mingw.ps1) >>>'
     $markerEnd = '# <<< rime-speed-stats input_stat plugin <<<'
     $cmakeLists = Join-Path $Librime 'src\CMakeLists.txt'
@@ -204,6 +221,7 @@ function Build-Librime {
         "-DCMAKE_PREFIX_PATH=$prefix" `
         "-DCMAKE_INSTALL_PREFIX=$(Join-Path $Librime 'dist-mingw')" `
         '-DBUILD_STATIC=ON' '-DBUILD_SHARED_LIBS=ON' '-DBUILD_TEST=OFF' '-DENABLE_LOGGING=ON' `
+        '-DBUILD_TOOLS=OFF' `
         '-DRIME_SETUP_EXTRA_MODULES=input_stat' `
         "-DRIME_INPUT_STAT_CORE_LIB=$CoreLib" `
         "-DBOOST_ROOT=$BoostRoot" "-DBOOST_LIBRARYDIR=$boostLibs" `

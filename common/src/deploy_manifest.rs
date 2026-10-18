@@ -87,6 +87,57 @@ pub fn state_path(user_data_dir: &Path) -> PathBuf {
     user_data_dir.join(STATE_FILE)
 }
 
+// ---------------------------------------------------------------- 部署中标记（静音）
+
+/// 「正在部署」标记文件名（放在用户目录根下，与 `deploy.toml` 同级）。
+///
+/// 部署是**另一个进程**（`Weasel-Next-Engine.exe --deploy/--deploy-ui`）在做，常驻引擎
+/// 只能靠文件知道自己不该出声 —— 键声/上屏音在部署期间应当静音。
+pub const DEPLOYING_MARKER: &str = ".deploying";
+
+/// 标记的有效期：超过它就当"崩溃残留"清掉。
+///
+/// 部署本身是秒级到十几秒，给足 5 分钟；否则部署进程被强杀会留下标记，
+/// 键声就永远静音了。
+pub const DEPLOYING_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// `<用户目录>/.deploying`。
+pub fn deploying_marker(user_data_dir: &Path) -> PathBuf {
+    user_data_dir.join(DEPLOYING_MARKER)
+}
+
+/// 标记"开始部署"。
+pub fn mark_deploying(user_data_dir: &Path) -> io::Result<()> {
+    fs::write(deploying_marker(user_data_dir), b"deploying")
+}
+
+/// 清掉"开始部署"标记（部署结束/失败都要清）。
+pub fn clear_deploying(user_data_dir: &Path) {
+    let _ = fs::remove_file(deploying_marker(user_data_dir));
+}
+
+/// 现在是否正在部署。
+///
+/// 过期的标记按"没在部署"处理并顺手删掉 —— 部署进程如果中途崩掉，标记会留在盘上，
+/// 不做过期保护的话键声会一直静音。
+pub fn is_deploying(user_data_dir: &Path) -> bool {
+    let path = deploying_marker(user_data_dir);
+    let Ok(metadata) = fs::metadata(&path) else {
+        return false;
+    };
+    let fresh = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| std::time::SystemTime::now().duration_since(modified).ok())
+        .is_none_or(|age| age < DEPLOYING_TTL);
+    if fresh {
+        true
+    } else {
+        let _ = fs::remove_file(&path);
+        false
+    }
+}
+
 /// 本地时间 `YYYY-MM-DD HH:MM:SS`（rime 的 `installation.yaml` 用 UTC，这里给人看，
 /// 用本地时间更直观；取不到系统时间时退化成空串，不影响比对逻辑）。
 fn now_string() -> String {
@@ -351,6 +402,52 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    /// 部署中标记：立起来引擎就静音，部署结束清掉；过期的残留当没在部署。
+    #[test]
+    fn deploying_marker_round_trip_and_expiry() {
+        let user = temp("deploying");
+        assert!(!is_deploying(&user), "没标记时应当不是在部署");
+        mark_deploying(&user).unwrap();
+        assert!(is_deploying(&user), "立了标记应当算在部署");
+        clear_deploying(&user);
+        assert!(!is_deploying(&user), "清掉之后应当恢复");
+
+        // 过期标记（模拟部署进程被强杀留下的残留）要被当成"没在部署"并删除
+        mark_deploying(&user).unwrap();
+        let marker = deploying_marker(&user);
+        let stale = std::time::SystemTime::now() - DEPLOYING_TTL - std::time::Duration::from_secs(60);
+        set_modified(&marker, stale);
+        assert!(!is_deploying(&user), "过期标记不应继续静音");
+        assert!(!marker.exists(), "过期标记应被顺手删掉");
+    }
+
+    /// 把文件修改时间改成 `when`（测试用；Windows 上用 `SetFileTime`）。
+    fn set_modified(path: &Path, when: std::time::SystemTime) {
+        use std::os::windows::io::AsRawHandle;
+        #[repr(C)]
+        #[derive(Default)]
+        struct FileTime {
+            low: u32,
+            high: u32,
+        }
+        unsafe extern "system" {
+            fn SetFileTime(handle: *mut core::ffi::c_void, creation: *const FileTime, access: *const FileTime, write: *const FileTime) -> i32;
+        }
+        let seconds = when
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u64;
+        // Windows FILETIME：1601-01-01 起 100ns 计数；Unix 纪元差 11644473600 秒
+        let ticks = (seconds + 11_644_473_600) * 10_000_000;
+        let file_time = FileTime {
+            low: (ticks & 0xffff_ffff) as u32,
+            high: (ticks >> 32) as u32,
+        };
+        let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+        let ok = unsafe { SetFileTime(file.as_raw_handle() as *mut _, std::ptr::null(), std::ptr::null(), &file_time) };
+        assert_ne!(ok, 0, "SetFileTime 失败");
     }
 
     /// 记录写在用户根目录，格式是"首行时间 + 一行一个文件夹"。

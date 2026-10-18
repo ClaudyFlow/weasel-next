@@ -13,7 +13,9 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 try {
     $compiler = (Get-Command makensis -CommandType Application -ErrorAction Stop).Source
     # Read the same Cargo version used by the native version resources.
-    $manifest = Get-Content -LiteralPath (Join-Path $projectRoot 'tip\Cargo.toml') -Raw
+    # ⚠️ 目录名是 `Tip`（大写）：源码目录去前缀时改过名（提交 c7659ee），
+    # 这里若还写小写 `tip`，会读到同名残留目录里的**陈旧**版本号，或者直接报文件不存在。
+    $manifest = Get-Content -LiteralPath (Join-Path $projectRoot 'Tip\Cargo.toml') -Raw
     $versionMatch = [regex]::Match($manifest, '(?m)^version\s*=\s*"(\d+\.\d+\.\d+)"\s*$')
     if (-not $versionMatch.Success) {
         throw 'TIP Cargo.toml must have a numeric major.minor.patch version.'
@@ -32,6 +34,9 @@ try {
         'target\release\Weasel-Next-Engine.exe',
         'target\release\Weasel-Next-Renderer.exe',
         'target\release\Weasel-Next-Setting.exe',
+        # 自定义双拼的解析器：把 schema\shuangpin\*.toml 生成成 rime 认的 .schema.yaml。
+        # 必须随包分发 —— 用户机器上没有 Python / Rust 工具链，没有它就没法改键位。
+        'target\release\shuangpin-schema.exe',
         'target\release\Weasel-Next.dll',
         'artifact\smoke\rime.dll',
         'Rime-Next\default.yaml',

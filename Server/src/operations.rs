@@ -211,6 +211,10 @@ fn deploy(services: &mut OperationServices) -> OperationOutcome {
                 }
             }
         }
+        // 部署期间静音：**停引擎之前**先立 `.deploying` 标记。
+        // 引擎是唯一播键声/上屏音的地方，停它之前那次收尾提交仍然会响一声
+        // （用户 2026-10-18 要求部署时不要出声）。引擎按键路径每 500ms 查一次该标记。
+        let _deploying = DeployingGuard::new(&services.paths.user_data);
         service_supervisor::shutdown_server(services)?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -442,3 +446,28 @@ fn restart_components(services: &mut OperationServices) -> OperationOutcome {
 #[cfg(test)]
 #[path = "../tests/unit/operations.rs"]
 mod tests;
+
+/// 部署期间的 `.deploying` 标记。
+///
+/// 立起来之后常驻引擎就不再出键声/上屏音；`Drop` 保证失败、提前返回、panic 展开
+/// 都会清掉标记 —— 否则声音会被永久静音（部署进程崩在中途也走这里）。
+struct DeployingGuard {
+    user_data: std::path::PathBuf,
+}
+
+impl DeployingGuard {
+    fn new(user_data: &std::path::Path) -> Self {
+        let user_data = user_data.to_path_buf();
+        if let Err(error) = weasel_common::deploy_manifest::mark_deploying(&user_data) {
+            // broker 侧没有 tracing 依赖，用 stderr 记一笔（broker 日志会带上）。
+            eprintln!("broker: 写部署标记失败，本次部署期间不会静音：{error}");
+        }
+        Self { user_data }
+    }
+}
+
+impl Drop for DeployingGuard {
+    fn drop(&mut self) {
+        weasel_common::deploy_manifest::clear_deploying(&self.user_data);
+    }
+}

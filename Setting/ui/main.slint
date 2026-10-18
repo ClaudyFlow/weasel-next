@@ -1,26 +1,39 @@
 import { Button, VerticalBox, HorizontalBox, ComboBox, ScrollView, LineEdit, TextEdit, Switch, Palette } from "std-widgets.slint";
+// ColorScheme 是内建枚举（不需要 import）；上一棒从 std-widgets.slint 导它 → 编译报
+// "No exported type called 'ColorScheme'"，2026-10-19 实测。
 import { AppOptions, AppEntry, IconAction } from "app-options.slint";
 import { ColorEditor } from "color-editor.slint";
 import { WasmModules, WasmEntry } from "wasm-modules.slint";
 import { ColorSchemesPage, SchemeRow } from "color-schemes.slint";
+import { SchemaPicker, SchemaRow } from "schemas.slint";
+import { StatsPage, StatDay, StatWord } from "stats.slint";
+export { StatsWindow, StatDay, StatWord } from "stats.slint";
+export { DeployProgressWindow } from "progress.slint";
 export { ColorCodec } from "color-editor.slint";
-export struct SettingField { source-index: int, section: string, shown: bool, title: string, key: string, description: string, choices: [string], selected: int, checked: bool, text: string, text-input: bool, boolean: bool, overridden: bool, enum-number: bool, color-input: bool, allow-system-color: bool, adaptive-color: bool, multiline: bool }
+export struct SettingField { source-index: int, category: int, section: string, shown: bool, title: string, key: string, description: string, choices: [string], selected: int, checked: bool, text: string, text-input: bool, boolean: bool, overridden: bool, enum-number: bool, color-input: bool, allow-system-color: bool, adaptive-color: bool, multiline: bool }
+export struct NavItem { label: string, idx: int }
 export component SettingsWindow inherits Window {
     title: "小狼毫Next：设置";
     default-font-family: "Segoe UI";
     in property <bool> mica-enabled: false;
-    background: root.mica-enabled ? transparent : Palette.background;
+    background: #ffffff;
+    // 白底必须配浅色主题，否则 Palette.foreground 还是深色主题的白色 → 白底白字。
     icon: @image-url("../../Rime-Next/icon/weasel.ico");
-    preferred-width: 760px;
-    preferred-height: 640px;
-    min-width: 500px;
-    min-height: 400px;
-    in property <string> config-path;
+    preferred-width: 1280px;
+    // 高度贴着内容收：再少一点统计页就装不下，再多一点底部又会多出一条空灰边。
+    preferred-height: 682px;
+    min-width: 1000px;
+    min-height: 500px;
     in property <string> status;
     in property <bool> editable;
     in property <bool> dirty;
     in property <[SettingField]> fields;
     in property <[SettingField]> visible-fields;
+    // 当前页签该显示的字段行（Rust 侧 `refresh_page_fields` 筛好）。
+    // 不能改用 `for … { if … }` 在界面上过滤：空行仍参与父布局的 spacing，
+    // 内容少的页会白裂几百像素（2026-10-18 实测）。
+    in property <[SettingField]> page-fields;
+    callback page-selected(int);
     in property <bool> invalid;
     in property <bool> update-available: false;
     in-out property <bool> update-checked: false;
@@ -40,6 +53,13 @@ export component SettingsWindow inherits Window {
     in property <color> scheme-preview-comment: #888888;
     callback scheme-picked(string);
     callback scheme-refresh();
+    // 方案选单页（Rust 侧读 `weasel_style::switcher`，与官方对话框同一份数据）
+    in property <[SchemaRow]> schema-rows;
+    in property <string> schema-status;
+    callback schema-toggle(string);
+    callback schema-apply();
+    callback schema-refresh();
+    callback schema-open-dialog();
     callback module-action(string, string, string, string) -> string;
     callback app-add(string) -> bool;
     callback app-remove(string);
@@ -49,237 +69,404 @@ export component SettingsWindow inherits Window {
     callback loaded();
     callback save(bool);
     callback request-close();
+    // 托盘菜单里的两项收进主界面：两个都是官方模板的 Win32 对话框，
+    // ── 左侧标签栏 + 「主页」= 个人记录（用户 2026-10-17 要求）────────────
+    in-out property <int> current-page: 0;
+    in property <[NavItem]> nav-items: [
+        { label: "主页", idx: 0 },
+        { label: "界面风格", idx: 1 },
+        { label: "方案选单", idx: 2 },
+        { label: "常规", idx: 3 },
+        // 「应用选项」「外观与行为」两页已删除（用户 2026-10-18 要求）：
+        // 前者是 app_options（按程序覆盖输入模式），后者只有启用了带配置的主题才有内容，
+        // 平时都是空页。数据层没删，只是不再占页签。
+        { label: "更新", idx: 4 }
+    ];
+    // 统计页的数据（Rust 侧灌；未接数据时全 0）
+    in property <int> stat-today-keys: 0;
+    in property <int> stat-today-chars: 0;
+    in property <int> stat-today-speed: 0;
+    in property <int> stat-streak-days: 0;
+    in property <[StatDay]> stat-days: [];
+    in property <[StatWord]> stat-words: [];
+    in property <string> stat-level-title: "";
+    in property <int> stat-level: 1;
+    in property <int> stat-exp-cur: 0;
+    in property <int> stat-exp-max: 100;
+    in property <float> stat-exp-ratio: 0.0;
+    in property <string> stat-exp-next: "";
+    in property <string> stat-realm: "";
+    in property <string> stat-status: "";
+    // Rust 侧用自身进程加 `/switcher`、`/style` 再起一个。
+    in property <string> stat-quarter-label: "";
+    // 主页热力格边长：53 列 + 52 个 3px 间隙铺满卡片内宽（贴到两端）。
+    // 用 init / changed width 赋值而非属性绑定，绑定会和布局形成绑定环（编译实测）。
+    private property <length> stats-heat-cell: 20px;
+    // 底色全部写死浅色（#ffffff 卡片 / #f4f5f7 页面），调色板必须一起钉在浅色。
+    // 系统是深色时 Palette.foreground 会是白的，设置页整片白底白字、看着像空白页
+    // （2026-10-19 实测）。
+    init => { self.stats-heat-cell = (self.width - 212px) / 53; Palette.color-scheme = ColorScheme.light; }
+    changed width => { self.stats-heat-cell = (self.width - 212px) / 53; }
+    callback open-switcher();
+    callback open-style();
+    callback refresh-stats();
     VerticalBox {
-        padding: 24px;
+        // 左右 padding 归零：让「主页」的灰底（StatsPage）能横向铺满整个窗口，
+        // 各子块自己带 padding（用户 2026-10-18：宽度拉满，没到也拉满，后面渲染成灰色）。
+        padding: 0px;
         padding-top: 8px;
         spacing: 12px;
         HorizontalBox {
             height: 48px;
             padding: 0px;
+            padding-left: 24px;
             // 给 DWM 原生标题栏按钮区域留出空间。
             padding-right: 144px;
-            Text { text: "小狼毫Next 设置"; font-size: 22px; vertical-alignment: center; }
+            Text { color: #1f2328; text: "小狼毫Next 设置"; font-size: 22px; vertical-alignment: center; }
         }
-        Text { text: root.config-path; wrap: word-wrap; }
-        ScrollView {
-            VerticalBox {
-                padding: 0px;
-                // 为浮动滚动条预留空间，避免覆盖卡片和右侧按钮。
-                padding-right: 14px;
-                spacing: 6px;
-                for field in root.visible-fields: VerticalBox {
-                    padding: 0px;
-                    spacing: 8px;
-                    if field.section != "": VerticalBox {
-                        padding: 0px;
-                        padding-top: field.section == "常规" ? 0px : 20px;
-                        spacing: 0px;
-                        Text { text: field.section; font-size: 20px; font-weight: 600; }
-                    }
-                    if field.key == "app_options": AppOptions {
-                        enabled: root.editable;
-                        entries: root.apps;
-                        add() => { root.new-app-name = ""; root.app-add-error = ""; add-popup.show(); }
-                        remove(name) => { root.app-remove(name); }
-                        edit(name, key, value, reset) => { root.app-edit(name, key, value, reset); }
-                    }
-                    if field.key == "modules": WasmModules {
-                        enabled: root.editable;
-                        entries: root.wasm-modules;
-                        action(kind, id, key, value) => { return root.module-action(kind, id, key, value); }
-                    }
-                    if root.schemes.length > 0: VerticalBox {
-                        padding: 0px;
-                        spacing: 8px;
-                        ColorSchemesPage {
-                            schemes: root.schemes;
-                            active-id: root.active-scheme;
-                            status: root.scheme-status;
-                            editable: root.editable;
-                            preview-back: root.scheme-preview-back;
-                            preview-border: root.scheme-preview-border;
-                            preview-text: root.scheme-preview-text;
-                            preview-hilited-back: root.scheme-preview-hilited-back;
-                            preview-hilited-text: root.scheme-preview-hilited-text;
-                            preview-comment: root.scheme-preview-comment;
-                            picked(id) => { root.scheme-picked(id); }
-                            refresh() => { root.scheme-refresh(); }
-                        }
-                    }
-                    if field.multiline && field.key != "app_options" && field.key != "modules" && field.key != "color_schemes": Rectangle {
-                        background: Palette.control-background;
-                        border-radius: 6px;
-                        vertical-stretch: 0;
-                        VerticalBox {
-                            padding: 16px; spacing: 10px;
-                            HorizontalBox {
-                                padding: 0px; spacing: 12px;
-                                VerticalBox {
-                                    padding: 0px; spacing: 4px;
-                                    Text { text: field.title; font-size: 17px; font-weight: 600; }
-                                    Text { text: field.key; font-size: 12px; opacity: 0.65; }
-                                    Text { text: field.description; font-size: 12px; wrap: word-wrap; opacity: 0.75; }
-                                }
-                                IconAction {
-                                    icon: @image-url("reset_settings.svg");
-                                    label: "恢复继承";
-                                    enabled: root.editable && field.overridden;
-                                    clicked => { root.changed(field.source-index, 0, ""); }
-                                }
-                            }
-                            TextEdit {
-                                height: 120px;
-                                enabled: root.editable;
-                                text <=> field.text;
-                                edited => { root.changed(field.source-index, 1, self.text); }
-                            }
-                        }
-                    }
-                    if !field.multiline && field.key != "app_options" && field.key != "modules": Rectangle {
-                      vertical-stretch: 0;
-                      border-radius: 6px;
-                      background: Palette.control-background;
-                      border-width: 1px;
-                      border-color: Palette.foreground.with-alpha(0.08);
-                    HorizontalBox {
-                      padding: 16px;
-                      spacing: 12px;
-                      VerticalBox {
-                        padding: 0px;
-                        spacing: 4px;
-                        horizontal-stretch: 1;
-                        Text { text: field.title; font-size: 17px; font-weight: 600; wrap: word-wrap; }
-                        Text { text: field.key; font-size: 12px; opacity: 0.65; wrap: word-wrap; }
-                        if field.description != "": Text { text: field.description; font-size: 12px; opacity: 0.75; wrap: word-wrap; }
-                      }
-                      if field.color-input: ColorEditor {
-                        allow-system: field.allow-system-color;
-                        adaptive: field.adaptive-color;
-                        min-height: 32px;
-                        enabled: root.editable;
-                        value: field.text;
-                        edited(value) => { root.changed(field.source-index, 1, value); }
-                      }
-                      if !field.color-input: Rectangle {
-                        width: field.enum-number && field.selected == field.choices.length - 1 ? 250px : field.boolean ? 44px : field.text-input ? 210px : 160px;
-                        min-height: 32px;
-                        horizontal-stretch: 0;
-                    HorizontalLayout {
-                        width: parent.width;
-                        height: 32px;
-                        y: (parent.height - self.height) / 2;
-                        spacing: 10px;
-                        padding: 0px;
-                    if field.boolean: Switch {
-                        width: 44px;
-                        height: 32px;
-                        enabled: root.editable;
-                        checked <=> field.checked;
-                        vertical-stretch: 0;
-                        toggled => { root.changed(field.source-index, self.checked ? 2 : 1, ""); }
-                    }
-                    if !field.boolean && !field.text-input: ComboBox {
-                        width: 160px;
-                        height: 32px;
-                        enabled: root.editable;
-                        model: field.choices;
-                        current-index <=> field.selected;
-                        vertical-stretch: 0;
-                        horizontal-stretch: 0;
-                        selected(value) => { root.changed(field.source-index, self.current-index + 1, field.text); }
-                    }
-                    if field.text-input: LineEdit {
-                        width: parent.width;
-                        height: 32px;
-                        enabled: root.editable;
-                        preferred-width: 210px;
-                        vertical-stretch: 0;
-                        horizontal-stretch: 0;
-                        text <=> field.text;
-                        edited => { root.changed(field.source-index, 1, self.text); }
-                    }
-                    if field.enum-number && field.selected == field.choices.length - 1: LineEdit {
-                        width: 80px;
-                        height: 32px;
-                        enabled: root.editable;
-                        input-type: decimal;
-                        text <=> field.text;
-                        edited => { root.changed(field.source-index, field.choices.length, self.text); }
-                    }
-                    }
-                      }
-                      Rectangle {
-                        width: 32px;
-                        min-height: 32px;
-                        horizontal-stretch: 0;
-                      reset := Button {
-                        y: (parent.height - self.height) / 2;
-                        enabled: root.editable && field.overridden;
-                        width: 32px;
-                        height: 32px;
-                        vertical-stretch: 0;
-                        horizontal-stretch: 0;
-                        accessible-label: "清除覆盖，恢复继承";
-                        clicked => { root.changed(field.source-index, 0, ""); }
-                      }
-                      Image {
-                        source: @image-url("reset_settings.svg");
-                        width: 18px;
-                        height: 18px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        colorize: Palette.foreground;
-                        opacity: reset.enabled ? 0.8 : 0.3;
-                        accessible-role: none;
-                      }
-                      }
-                    }
-                    }
+        // ── 标签栏（用户要求：第一个叫「主页」，就是个人记录）──────────────
+        HorizontalBox {
+            height: 34px;
+            padding: 0px;
+            padding-left: 24px;
+            padding-right: 24px;
+            spacing: 4px;
+            for item in root.nav-items : Rectangle {
+                width: 96px;
+                height: 32px;
+                border-radius: 6px;
+                background: root.current-page == item.idx ? #e4e7ec : transparent;
+                Text {
+                    text: item.label;
+                    font-size: 14px;
+                    color: root.current-page == item.idx ? #1f2328 : #57606a;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
                 }
+                ta := TouchArea { clicked => { root.current-page = item.idx; root.page-selected(item.idx); } }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            // 操作按钮放在标签栏右侧：不占额外高度，底部也就不会多出一条操作条。
+            // std-widgets 的 Button 在白底上是白底白字（几乎看不见），所以自绘。
+            Rectangle {
+                width: 104px;
+                height: 28px;
+                border-radius: 6px;
+                background: white;
+                border-width: 1px;
+                border-color: #d1d5db;
+                Text {
+                    text: "保存并部署";
+                    font-size: 13px;
+                    color: root.editable && !root.invalid ? #374151 : #c0c4cc;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                TouchArea {
+                    clicked => { if (root.editable && !root.invalid) { root.save(true); } }
+                }
+            }
+            Rectangle {
+                width: 64px;
+                height: 28px;
+                border-radius: 6px;
+                background: white;
+                border-width: 1px;
+                border-color: #d1d5db;
+                Text {
+                    text: "关闭";
+                    font-size: 13px;
+                    color: #374151;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                TouchArea { clicked => { root.request-close(); } }
+            }
+        }
+
+        // 顶部状态文字整行删掉（用户 2026-10-18：「已切换到 xxx」这行不要显示）。
+        // 它以前既显示切换配色的结果、也显示保存/报错；现在这些结果改由各自页面里的
+        // 状态行表达（配色页有「37 套配色 · 当前 xxx」，方案页有「N 个可用方案」）。
+
+        // ── 主页：个人记录（统计页，可直接内嵌）──────────────────────────
+        // 页面是 VerticalBox 的最后一个子项并且吃掉剩余高度：窗口再高，
+        // 多出来的也是页面灰底本身，不会出现「白条」。
+        // 用 if 而不是 visible：Slint 里 visible:false 只是不画，布局位置照占，
+        // 会和「设置页」互相挤占空间。
+        if root.current-page == 0 : StatsPage {
+            today-keys: root.stat-today-keys;
+            // 主页横向 padding 为 0，页面宽 = 窗口宽；53 列 + 52 个 3px 间隙刚好铺满卡片。
+            heat-cell: root.stats-heat-cell;
+            quarter-label: root.stat-quarter-label;
+            today-chars: root.stat-today-chars;
+            refresh => { root.refresh-stats(); }
+            today-speed: root.stat-today-speed;
+            streak-days: root.stat-streak-days;
+            days: root.stat-days;
+            words: root.stat-words;
+            level-title: root.stat-level-title;
+            level: root.stat-level;
+            exp-cur: root.stat-exp-cur;
+            exp-max: root.stat-exp-max;
+            exp-ratio: root.stat-exp-ratio;
+            exp-next: root.stat-exp-next;
+            realm: root.stat-realm;
+            status: root.stat-status;
+        }
+        // ── 界面风格（tab 1）：配色方案页（官方 /style 对话框的 Slint 版）────────
+        // 整页给 ColorSchemesPage，列表才能吃满剩余高度；塞在设置页的 ScrollView 里
+        // 时没有确定高度，内部配色列表会塌成一行（memo 里记过这个坑）。
+        if root.current-page == 1 : VerticalLayout {
+            padding: 12px;
+            padding-top: 0px;
+            spacing: 8px;
+            if root.schemes.length > 0 : ColorSchemesPage {
+                schemes: root.schemes;
+                active-id: root.active-scheme;
+                status: root.scheme-status;
+                editable: root.editable;
+                preview-back: root.scheme-preview-back;
+                preview-border: root.scheme-preview-border;
+                preview-text: root.scheme-preview-text;
+                preview-hilited-back: root.scheme-preview-hilited-back;
+                preview-hilited-text: root.scheme-preview-hilited-text;
+                preview-comment: root.scheme-preview-comment;
+                picked(id) => { root.scheme-picked(id); }
+                refresh() => { root.scheme-refresh(); }
+            }
+            // 一条配色都读不到时别留一整页空白，说清楚是路径问题。
+            if root.schemes.length == 0 : Text {
+                text: "没有读到任何配色：检查程序文件夹的 Rime-Next/theme 与用户目录的 theme。";
+                font-size: 13px;
+                color: #5f6368;
+                wrap: word-wrap;
+            }
+        }
+        // ── 方案选单（tab 2）：可用方案列表 + 勾选 + 保存并部署（官方 /switcher 的 Slint 版）──
+        if root.current-page == 2 : VerticalLayout {
+            padding: 12px;
+            padding-top: 0px;
+            spacing: 8px;
+            SchemaPicker {
+                rows: root.schema-rows;
+                status: root.schema-status;
+                editable: root.editable;
+                toggled(id) => { root.schema-toggle(id); }
+                apply() => { root.schema-apply(); }
+                refresh() => { root.schema-refresh(); }
+                open-dialog() => { root.schema-open-dialog(); }
+            }
+        }
+        // ── 其余页签：原来的设置界面（字段表单）────────────────────────
+        if root.current-page >= 3 : VerticalLayout {
+            padding: 20px;
+            padding-top: 0px;
+            spacing: 8px;
+            // 用户 2026-10-18：不要显示那一行 `C:\Users\…\weasel.custom.toml` 路径。
+            ScrollView {
                 VerticalBox {
+                    // 剩余高度不能分给子项：默认 alignment: stretch 会把空白的
+                    // 字段行/标题块按比例撑开，「应用选项」「更新」这种内容少的页
+                    // 就在标题与卡片之间裂出一大段空白（实测截图）。
+                    alignment: start;
                     padding: 0px;
-                    padding-top: 20px;
-                    spacing: 8px;
-                    Text { text: "其他"; font-size: 20px; font-weight: 600; }
-                    Rectangle {
-                        vertical-stretch: 0;
-                        border-radius: 6px;
-                        background: Palette.control-background;
-                        border-width: 1px;
-                        border-color: Palette.foreground.with-alpha(0.08);
-                        HorizontalBox {
-                            padding: 16px;
-                            spacing: 12px;
-                            VerticalBox {
+                    // 为浮动滚动条预留空间，避免覆盖卡片和右侧按钮。
+                    padding-right: 14px;
+                    spacing: 0px;
+                    // 行间距靠行内 padding，不靠父布局 spacing（spacing: 0 见下）。
+                    for field in root.page-fields: VerticalBox {
+                        if true : VerticalBox {
+                            padding: 0px;
+                            padding-top: 6px;
+                            spacing: 8px;
+                            if field.section != "": VerticalBox {
+                                padding: 0px;
+                                padding-top: field.section == "常规" ? 0px : 20px;
+                                spacing: 0px;
+                                Text { text: field.section; font-size: 20px; font-weight: 600; }
+                            }
+                            if field.key == "app_options": AppOptions {
+                                enabled: root.editable;
+                                entries: root.apps;
+                                add() => { root.new-app-name = ""; root.app-add-error = ""; add-popup.show(); }
+                                remove(name) => { root.app-remove(name); }
+                                edit(name, key, value, reset) => { root.app-edit(name, key, value, reset); }
+                            }
+                            if field.key == "modules": WasmModules {
+                                enabled: root.editable;
+                                entries: root.wasm-modules;
+                                action(kind, id, key, value) => { return root.module-action(kind, id, key, value); }
+                            }
+                            if field.multiline && field.key != "app_options" && field.key != "modules" && field.key != "color_schemes": Rectangle {
+                                background: Palette.control-background;
+                                border-radius: 6px;
+                                vertical-stretch: 0;
+                                VerticalBox {
+                                    padding: 16px; spacing: 10px;
+                                    HorizontalBox {
+                                        padding: 0px; spacing: 12px;
+                                        VerticalBox {
+                                            padding: 0px; spacing: 4px;
+                                            Text { text: field.title; font-size: 17px; font-weight: 600; }
+                                            Text { text: field.key; font-size: 12px; opacity: 0.65; }
+                                            Text { text: field.description; font-size: 12px; wrap: word-wrap; opacity: 0.75; }
+                                        }
+                                        IconAction {
+                                            icon: @image-url("reset_settings.svg");
+                                            label: "恢复继承";
+                                            enabled: root.editable && field.overridden;
+                                            clicked => { root.changed(field.source-index, 0, ""); }
+                                        }
+                                    }
+                                    TextEdit {
+                                        height: 120px;
+                                        enabled: root.editable;
+                                        text <=> field.text;
+                                        edited => { root.changed(field.source-index, 1, self.text); }
+                                    }
+                                }
+                            }
+                            if !field.multiline && field.key != "app_options" && field.key != "modules": Rectangle {
+                              vertical-stretch: 0;
+                              border-radius: 6px;
+                              background: Palette.control-background;
+                              border-width: 1px;
+                              border-color: Palette.foreground.with-alpha(0.08);
+                            HorizontalBox {
+                              padding: 16px;
+                              spacing: 12px;
+                              VerticalBox {
                                 padding: 0px;
                                 spacing: 4px;
                                 horizontal-stretch: 1;
-                                Text { text: "自动检查更新"; font-size: 17px; font-weight: 600; }
-                                Text { text: "WinSparkle · 当前用户"; font-size: 12px; opacity: 0.65; }
-                                Text {
-                                    text: root.update-status != "" ? root.update-status : "定期检查新版本。";
-                                    font-size: 12px;
-                                    opacity: 0.75;
-                                    wrap: word-wrap;
-                                }
-                            }
-                            Switch {
+                                Text { text: field.title; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+                                Text { text: field.key; font-size: 12px; opacity: 0.65; wrap: word-wrap; }
+                                if field.description != "": Text { text: field.description; font-size: 12px; opacity: 0.75; wrap: word-wrap; }
+                              }
+                              if field.color-input: ColorEditor {
+                                allow-system: field.allow-system-color;
+                                adaptive: field.adaptive-color;
+                                min-height: 32px;
+                                enabled: root.editable;
+                                value: field.text;
+                                edited(value) => { root.changed(field.source-index, 1, value); }
+                              }
+                              if !field.color-input: Rectangle {
+                                width: field.enum-number && field.selected == field.choices.length - 1 ? 250px : field.boolean ? 44px : field.text-input ? 210px : 160px;
+                                min-height: 32px;
+                                horizontal-stretch: 0;
+                            HorizontalLayout {
+                                width: parent.width;
+                                height: 32px;
+                                y: (parent.height - self.height) / 2;
+                                spacing: 10px;
+                                padding: 0px;
+                            if field.boolean: Switch {
                                 width: 44px;
                                 height: 32px;
-                                enabled: root.editable && root.update-available;
-                                checked <=> root.update-checked;
-                                toggled => { root.update-changed(self.checked); }
+                                enabled: root.editable;
+                                checked <=> field.checked;
+                                vertical-stretch: 0;
+                                toggled => { root.changed(field.source-index, self.checked ? 2 : 1, ""); }
+                            }
+                            if !field.boolean && !field.text-input: ComboBox {
+                                width: 160px;
+                                height: 32px;
+                                enabled: root.editable;
+                                model: field.choices;
+                                current-index <=> field.selected;
+                                vertical-stretch: 0;
+                                horizontal-stretch: 0;
+                                selected(value) => { root.changed(field.source-index, self.current-index + 1, field.text); }
+                            }
+                            if field.text-input: LineEdit {
+                                width: parent.width;
+                                height: 32px;
+                                enabled: root.editable;
+                                preferred-width: 210px;
+                                vertical-stretch: 0;
+                                horizontal-stretch: 0;
+                                text <=> field.text;
+                                edited => { root.changed(field.source-index, 1, self.text); }
+                            }
+                            if field.enum-number && field.selected == field.choices.length - 1: LineEdit {
+                                width: 80px;
+                                height: 32px;
+                                enabled: root.editable;
+                                input-type: decimal;
+                                text <=> field.text;
+                                edited => { root.changed(field.source-index, field.choices.length, self.text); }
+                            }
+                            }
+                              }
+                              Rectangle {
+                                width: 32px;
+                                min-height: 32px;
+                                horizontal-stretch: 0;
+                              reset := Button {
+                                y: (parent.height - self.height) / 2;
+                                enabled: root.editable && field.overridden;
+                                width: 32px;
+                                height: 32px;
+                                vertical-stretch: 0;
+                                horizontal-stretch: 0;
+                                accessible-label: "清除覆盖，恢复继承";
+                                clicked => { root.changed(field.source-index, 0, ""); }
+                              }
+                              Image {
+                                source: @image-url("reset_settings.svg");
+                                width: 18px;
+                                height: 18px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                colorize: Palette.foreground;
+                                opacity: reset.enabled ? 0.8 : 0.3;
+                                accessible-role: none;
+                              }
+                              }
+                            }
+                            }
+                        }
+                    }
+                    if root.current-page == 4 : VerticalBox {
+                        padding: 0px;
+                        padding-top: 20px;
+                        spacing: 8px;
+                        Text { text: "其他"; font-size: 20px; font-weight: 600; }
+                        Rectangle {
+                            vertical-stretch: 0;
+                            border-radius: 6px;
+                            background: Palette.control-background;
+                            border-width: 1px;
+                            border-color: Palette.foreground.with-alpha(0.08);
+                            HorizontalBox {
+                                padding: 16px;
+                                spacing: 12px;
+                                VerticalBox {
+                                    padding: 0px;
+                                    spacing: 4px;
+                                    horizontal-stretch: 1;
+                                    Text { text: "自动检查更新"; font-size: 17px; font-weight: 600; }
+                                    Text { text: "WinSparkle · 当前用户"; font-size: 12px; opacity: 0.65; }
+                                    Text {
+                                        text: root.update-status != "" ? root.update-status : "定期检查新版本。";
+                                        font-size: 12px;
+                                        opacity: 0.75;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                                Switch {
+                                    width: 44px;
+                                    height: 32px;
+                                    enabled: root.editable && root.update-available;
+                                    checked <=> root.update-checked;
+                                    toggled => { root.update-changed(self.checked); }
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        Text { text: root.status; wrap: word-wrap; }
-        HorizontalBox {
-            Button { text: "仅保存"; enabled: root.editable && root.dirty && !root.invalid; clicked => { root.save(false); } }
-            Button { text: "保存并应用"; enabled: root.editable && !root.invalid; clicked => { root.save(true); } }
-            Button { text: "关闭"; clicked => { root.request-close(); } }
         }
     }
     add-popup := PopupWindow {
@@ -297,7 +484,7 @@ export component SettingsWindow inherits Window {
             VerticalBox {
                 padding: 20px;
                 spacing: 12px;
-                Text { text: "添加应用"; font-size: 20px; font-weight: 600; }
+                Text { color: #1f2328; text: "添加应用"; font-size: 20px; font-weight: 600; }
                 app-name := LineEdit {
                     placeholder-text: "程序文件名，例如 notepad.exe";
                     text <=> root.new-app-name;
@@ -305,6 +492,7 @@ export component SettingsWindow inherits Window {
                     init => { self.focus(); }
                 }
                 Text {
+                    color: #1f2328;
                     text: root.app-add-error == "" ? "请输入程序文件名（例如 notepad.exe），不要包含路径。" : root.app-add-error;
                     font-size: 12px;
                     wrap: word-wrap;
@@ -321,3 +509,14 @@ export component SettingsWindow inherits Window {
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+

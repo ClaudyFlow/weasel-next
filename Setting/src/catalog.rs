@@ -198,9 +198,9 @@ pub fn load(paths: &RuntimePaths, document: &Document) -> Result<Catalog, String
         let metadata = if let Some(path) = candidates.iter().find(|p| p.exists()) {
             wasm_metadata(&read(path, 32 * 1024 * 1024, &mut budget)?)?
         } else {
-            catalog
-                .notices
-                .push(format!("{id} 模块不存在，使用 JSON 编辑"));
+            // 用户 2026-10-18 三次要求删掉这行：没装 wasm 模块是常态，
+            // 不该在设置界面上刷四行「glass/orbit/statusbar/weasellui 模块不存在」。
+            // 真要排查请查日志，不占界面。
             None
         };
         let metadata = match metadata {

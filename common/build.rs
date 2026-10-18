@@ -194,19 +194,36 @@ fn build_identity() {
         std::env::var("TARGET").unwrap()
     );
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    // ⚠️⚠️ 这个列表直接决定**增量编译能不能用**。`common` 是所有 crate 的依赖，
+    // 它一重编，Engine/Server/Renderer/Tip/Setting 全部跟着重编。
+    //
+    // 三条硬教训（2026-10-17 实测，每次都是这个文件）：
+    //
+    // 1) **绝不监视 `.git/index`**。本 build 脚本自己就调 `git status --porcelain`（见上），
+    //    而 `git status` 会刷新 index 的 stat 缓存 ⇒ 注册它 = **自己触发自己**：
+    //    每次构建都重跑 build.rs ⇒ 全量重编。分支/标签变化看 HEAD 与 refs 就够。
+    //
+    // 2) **绝不监视"其他 crate 的源码目录"**（`Tip`/`Server`/`Engine`/`Renderer`/`Setting`）。
+    //    那些目录里的任何改动都跟本 crate 的输出无关，却会让 common 重编 ⇒ 全量重编。
+    //    想知道"仓库脏不脏"，下面的 `git status` 已经给出 `WEASEL_BUILD_STATE` 了，
+    //    不需要靠目录监视来实现。（上一轮我把 `Setting` 也加进去过，等于让增量编译彻底失效。）
+    //
+    // 3) 目录名要与当前实际目录一致；不存在的路径不要注册
+    //    （原先写的 `tip`/`broker`/`renderer`/`server` 是改名前的旧名字）。
+    //
+    // 结论：**只保留真正影响本 crate 编译产物的东西** —— git 的 revision 来源，
+    // 加上 common 自己的源码目录（cargo 本来就会监视它，这里显式写出便于理解）。
     for path in [
         ".git/HEAD",
-        ".git/index",
         ".git/refs",
         ".git/packed-refs",
-        "tip",
-        "broker",
         "common",
-        "renderer",
-        "server",
         "build_support",
         "Cargo.lock",
     ] {
-        println!("cargo:rerun-if-changed={}", root.join(path).display());
+        let full = root.join(path);
+        if full.exists() {
+            println!("cargo:rerun-if-changed={}", full.display());
+        }
     }
 }

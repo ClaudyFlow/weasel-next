@@ -621,13 +621,12 @@ impl WeaselConfig {
             .unwrap_or_default()
     }
 
-    /// 当前生效配色（暗色模式可传 `dark = true` 走 `color_scheme_dark`）。
-    pub fn active_scheme(&self, dark: bool) -> ColorScheme {
-        if dark {
-            if let Some(name) = &self.style.color_scheme_dark {
-                return self.scheme(name);
-            }
-        }
+    /// 当前生效配色：**只有一套**，不分明暗。
+    ///
+    /// 用户 2026-10-18 明确要求「不要明暗两套、不要夜间配色」，所以 `dark` 参数保留只为
+    /// 不动调用方签名，取值一律走顶层 `color_scheme`；`color_scheme_dark` 仍能被解析
+    /// （老配置不报错），但运行时不使用它。
+    pub fn active_scheme(&self, _dark: bool) -> ColorScheme {
         self.scheme(&self.style.color_scheme)
     }
 }

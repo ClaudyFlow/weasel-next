@@ -13,3 +13,8 @@ toml = "1"
 [[bin]]
 name = "theme-toml"
 path = "src/bin/theme_toml.rs"
+
+[[bin]]
+name = "shuangpin-schema"
+path = "src/bin/shuangpin_schema.rs"
+

@@ -130,9 +130,11 @@ mod tests {
         };
         fs::create_dir_all(&paths.user_data).unwrap();
         let path = paths.user_data.join("weasel.custom.toml");
+        // 夹具必须是 TOML：这份用户补丁在 TOML 化改造后就不读 YAML 了
+        // （原来这里是 `ascii_mode: true` + 缩进嵌套，解析直接报错）。
         fs::write(
             &path,
-            b"ascii_mode: true\nthemeSettings:\n  future:\n    value: 42\n",
+            b"ascii_mode = true\n\n[themeSettings.future]\nvalue = 42\n",
         )
         .unwrap();
         let mut doc = Document::load(&paths).unwrap();

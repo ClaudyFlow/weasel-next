@@ -435,20 +435,55 @@ pub(crate) mod sound {
         exe.parent().map(PathBuf::from)
     }
 
+    /// 部署进行中？读用户目录里的 `.deploying` 标记（部署跑在另一个进程里）。
+    ///
+    /// 按键路径上不能每次去 `stat`，带 500ms 缓存：部署开始/结束最多晚半秒生效，
+    /// 对"部署时别响"足够，也不会拖慢打字。
+    fn deploying() -> bool {
+        static CACHE: OnceLock<Mutex<Option<(std::time::Instant, bool)>>> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| Mutex::new(None));
+        let mut guard = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((at, value)) = *guard
+            && at.elapsed() < std::time::Duration::from_millis(500)
+        {
+            return value;
+        }
+        let value = weasel_common::process::RuntimePaths::discover()
+            .map(|paths| weasel_common::deploy_manifest::is_deploying(&paths.user_data))
+            .unwrap_or(false);
+        *guard = Some((std::time::Instant::now(), value));
+        value
+    }
+
     /// 仅供单元测试：暴露解析入口（生产路径仍然只通过 [`config`] 调用）。
     #[cfg(test)]
     pub(crate) fn parse_for_test(
         text: &str,
         dir: &PathBuf,
     ) -> (bool, Option<PathBuf>, Option<PathBuf>) {
-        let config = parse(text, Some(dir));
+        let config = parse_merged(text, "", Some(dir));
         (config.enabled, config.key.clone(), config.commit.clone())
     }
 
-    /// 从 TOML 文本里取 `sound` 表（`asset` 决定相对路径的基准目录）。
+    /// 仅供单元测试：验证「程序默认 + 用户补丁」的叠加顺序。
+    #[cfg(test)]
+    pub(crate) fn parse_merged_for_test(
+        host: &str,
+        user: &str,
+    ) -> (bool, Option<PathBuf>, Option<PathBuf>) {
+        let config = parse_merged(host, user, None);
+        (config.enabled, config.key.clone(), config.commit.clone())
+    }
+
+    /// 把**程序文件夹**的 `weasel.toml` 与**用户目录**的 `weasel.custom.toml` 叠起来。
     ///
-    /// 只认这几个键，其余忽略；解析失败一律退化为"未开启"。
-    fn parse(text: &str, dir: Option<&PathBuf>) -> Config {
+    /// 设置界面的「启用声音」开关写的是用户目录那份（`[sound] enabled = false`），
+    /// 而以前这里只读程序文件夹的 `weasel.toml` ⇒ 用户在界面上关了，声音照响
+    /// （2026-10-18 用户实测报"禁用呢"）。现在按字段叠加：用户那份优先，缺的字段
+    /// 沿用程序那份，和 `Server/src/settings.rs` 的叠加顺序一致。
+    fn parse_merged(host_text: &str, user_text: &str, dir: Option<&PathBuf>) -> Config {
         #[derive(serde::Deserialize)]
         struct Host {
             #[serde(default)]
@@ -456,10 +491,10 @@ pub(crate) mod sound {
             #[serde(default)]
             asset: Option<String>,
         }
-        #[derive(serde::Deserialize)]
+        #[derive(serde::Deserialize, Default)]
         struct HostSound {
             #[serde(default)]
-            enabled: bool,
+            enabled: Option<bool>,
             #[serde(default)]
             key: Option<String>,
             #[serde(default)]
@@ -504,23 +539,50 @@ pub(crate) mod sound {
             }
         }
 
-        let Ok(host) = toml::from_str::<Host>(text) else {
-            return Config::default();
-        };
-        let Some(sound) = host.sound else {
-            return Config::default();
-        };
-        let base = resolve_base(host.asset.as_deref(), dir);
+        fn load(text: &str) -> Option<Host> {
+            if text.trim().is_empty() {
+                return None;
+            }
+            toml::from_str::<Host>(text).ok()
+        }
+
+        let host = load(host_text);
+        let user = load(user_text);
+        let asset = host
+            .as_ref()
+            .and_then(|host| host.asset.as_deref())
+            .or_else(|| user.as_ref().and_then(|user| user.asset.as_deref()));
+        let base = resolve_base(asset, dir);
+        // 程序那份先铺底，用户那份逐字段覆盖（`enabled = false` 也能盖掉 `true`）。
+        let mut sound = HostSound::default();
+        for source in [
+            host.as_ref().and_then(|host| host.sound.as_ref()),
+            user.as_ref().and_then(|user| user.sound.as_ref()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(enabled) = source.enabled {
+                sound.enabled = Some(enabled);
+            }
+            if source.key.is_some() {
+                sound.key = source.key.clone();
+            }
+            if source.commit.is_some() {
+                sound.commit = source.commit.clone();
+            }
+        }
         Config {
-            enabled: sound.enabled,
+            enabled: sound.enabled.unwrap_or(false),
             key: resolve_path(sound.key.as_ref(), &base),
             commit: resolve_path(sound.commit.as_ref(), &base),
         }
     }
 
-    /// 读配置；`weasel.toml` 未变化时复用缓存（按 mtime 判断）。
+    /// 读配置；程序 `weasel.toml` 或用户 `weasel.custom.toml` 变化时重建（按 mtime 判断）。
     fn config() -> Config {
-        static CACHE: OnceLock<Mutex<(Option<SystemTime>, Config)>> = OnceLock::new();
+        static CACHE: OnceLock<Mutex<(Option<(Option<SystemTime>, Option<SystemTime>)>, Config)>> =
+            OnceLock::new();
         let cell = CACHE.get_or_init(|| Mutex::new((None, Config::default())));
         let Some(dir) = runtime_dir() else {
             return Config::default();
@@ -534,17 +596,33 @@ pub(crate) mod sound {
                 dir.join("weasel.json")
             }
         };
-        let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        // 用户在设置界面里改的是**用户目录**那份补丁（`[sound] enabled = false`）。
+        let user_path = weasel_common::process::RuntimePaths::discover()
+            .ok()
+            .map(|paths| paths.user_data.join("weasel.custom.toml"));
+        let mtime = |candidate: &Option<PathBuf>| {
+            candidate
+                .as_ref()
+                .and_then(|path| std::fs::metadata(path).and_then(|meta| meta.modified()).ok())
+        };
+        let stamp = (
+            std::fs::metadata(&path).and_then(|meta| meta.modified()).ok(),
+            mtime(&user_path),
+        );
         let Ok(mut cache) = cell.lock() else {
             return Config::default();
         };
-        if cache.0 == modified {
+        if cache.0 == Some(stamp) {
             return cache.1.snapshot();
         }
         let text = std::fs::read_to_string(&path).unwrap_or_default();
-        let parsed = parse(&text, Some(&dir));
+        let user_text = user_path
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .unwrap_or_default();
+        let parsed = parse_merged(&text, &user_text, Some(&dir));
         let snapshot = parsed.snapshot();
-        cache.0 = modified;
+        cache.0 = Some(stamp);
         cache.1 = parsed;
         snapshot
     }
@@ -1008,6 +1086,11 @@ pub(crate) mod sound {
     pub(super) fn play_for_response(response: &super::KeyEventResponse) {
         let config = config();
         if !config.enabled {
+            return;
+        }
+        // 部署进行中一律静音（用户 2026-10-18 要求）：部署由另一个进程跑，
+        // 只能靠用户目录里的 `.deploying` 标记跨进程判断，见 deploy_manifest。
+        if deploying() {
             return;
         }
         if !response.commit_text.is_empty() {
@@ -1508,6 +1591,12 @@ impl Engine {
                         response.token = client.route.token.clone();
                         response.revision = client.revision;
                         if anchor_reset {
+                            // 临时诊断（2026-10-18 候选窗不显示）：开始等宿主给插入点。
+                            tracing::info!(
+                                session_id = client_id,
+                                revision = response.revision,
+                                "诊断: 开始等锚点"
+                            );
                             client.waiting_for_layout = Some(response.revision);
                         } else if response.state_updated && !response.composing {
                             client.waiting_for_layout = None;
@@ -1875,6 +1964,16 @@ impl Processor<Work> for Engine {
                     client.waiting_for_layout,
                     client.latest_layout_revision,
                 );
+                // 临时诊断（2026-10-18 候选窗不显示）：布局更新到底来没来、为什么被判不合格。
+                tracing::info!(
+                    session_id = client_id,
+                    revision = ?update.revision,
+                    waiting = ?client.waiting_for_layout,
+                    accepted = ?client.latest_layout_revision,
+                    matching,
+                    anchor_valid = ?update.anchor.as_ref().map(|anchor| anchor.valid),
+                    "诊断: 布局更新"
+                );
                 if matching {
                     if let Some(revision) = update.revision {
                         client.latest_layout_revision = Some(revision);
@@ -1941,6 +2040,7 @@ impl Processor<Work> for Engine {
 #[cfg(test)]
 mod sound_parse_tests {
     use super::sound::parse_for_test;
+    use super::sound::parse_merged_for_test;
     use std::fs;
 
     /// 相对 asset 应从 exe 目录逐级向上找同名目录，子路径相对它解析。
@@ -1955,15 +2055,17 @@ mod sound_parse_tests {
         fs::write(sound_dir.join("typewriter-bell.wav"), b"x").unwrap();
         fs::write(sound_dir.join("typewriter-key.wav"), b"x").unwrap();
 
-        let yaml = r#"
-asset: Rime-Next
+        // ⚠️ 配置现在是 TOML：下面必须是合法 TOML（`key = "..."` 要带引号）。
+        // 2026-10-18 之前这两条测试还喂着 YAML，解析必然失败 → 一直是红的。
+        let config_text = r#"
+asset = "Rime-Next"
 
-sound:
-  enabled: true
-  key: sound/typewriter-key.wav
-  commit: sound/typewriter-bell.wav
+[sound]
+enabled = true
+key = "sound/typewriter-key.wav"
+commit = "sound/typewriter-bell.wav"
 "#;
-        let (enabled, key, commit) = parse_for_test(yaml, &exe_dir);
+        let (enabled, key, commit) = parse_for_test(config_text, &exe_dir);
         assert!(enabled, "enabled 应为 true");
         let key = key.expect("key 应解析出路径");
         let commit = commit.expect("commit 应解析出路径");
@@ -1973,19 +2075,36 @@ sound:
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// 用户在设置界面里关掉声音：用户目录那份必须盖掉程序那份的 `enabled = true`。
+    ///
+    /// 2026-10-18 实际踩到：界面写了 `weasel.custom.toml` 的 `enabled = false`，
+    /// 引擎却只读程序文件夹的 `weasel.toml`（`enabled = true`）⇒ 开关点了没用。
+    #[test]
+    fn user_custom_disables_sound_over_program_default() {
+        let host = "[sound]\nenabled = true\nkey = \"sound/typewriter-key.wav\"\n";
+        let user = "[sound]\nenabled = false\n";
+        let (enabled, key, _commit) = parse_merged_for_test(host, user);
+        assert!(!enabled, "用户 weasel.custom.toml 的 enabled = false 必须生效");
+        assert_eq!(
+            key.unwrap(),
+            std::path::PathBuf::from("sound/typewriter-key.wav"),
+            "用户没写的字段应沿用程序那份"
+        );
+    }
+
     /// 未配置 asset 时退回 exe 目录（安装后的布局）。
     #[test]
     fn sound_parse_falls_back_to_exe_directory() {
         let exe_dir = std::env::temp_dir().join(format!("weasel-noasset-{}", std::process::id()));
         let _ = fs::remove_dir_all(&exe_dir);
         fs::create_dir_all(exe_dir.join("sound")).unwrap();
-        let yaml = r#"
-sound:
-  enabled: true
-  key: sound/k.wav
-  commit: sound/b.wav
+        let config_text = r#"
+[sound]
+enabled = true
+key = "sound/k.wav"
+commit = "sound/b.wav"
 "#;
-        let (_, key, commit) = parse_for_test(yaml, &exe_dir);
+        let (_, key, commit) = parse_for_test(config_text, &exe_dir);
         assert_eq!(key.unwrap(), exe_dir.join("sound").join("k.wav"));
         assert_eq!(commit.unwrap(), exe_dir.join("sound").join("b.wav"));
         let _ = fs::remove_dir_all(&exe_dir);

@@ -13,9 +13,16 @@ pub const ABOUT: u32 = 1009;
 pub const DIAGNOSTICS: u32 = 1010;
 pub const SETTINGS: u32 = 1011;
 pub const CHECK_UPDATES: u32 = 1012;
+pub const STATISTICS: u32 = 1013;
+pub const SWITCHER: u32 = 1014;
+pub const STYLE: u32 = 1015;
 
 pub const ITEMS: &[(u32, &str)] = &[
     (SETTINGS, "设置 (&S)"),
+    // 「输入统计」「界面风格」「方案选单」都收进设置主界面（用户 2026-10-18：
+    // 这三个是设置里的功能，不要放到右键菜单）。STATISTICS / STYLE / SWITCHER 三个
+    // 命令 id 仍然保留 —— 语言栏/旧客户端可能还在发它们，`menu_actions` 照旧能处理，
+    // 只是菜单里不再列出。
     (USER_DIRECTORY, "用户文件夹 (&U)"),
     (PROGRAM_DIRECTORY, "程序文件夹 (&P)"),
     (LOG_DIRECTORY, "日志文件夹 (&L)"),

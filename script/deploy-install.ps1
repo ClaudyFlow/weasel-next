@@ -1,4 +1,5 @@
 # deploy-install.ps1 — 编译并直接安装到安装路径
+
 #
 # 用法（普通权限即可，内部会用 sudo 提权做写入）：
 #   powershell -ExecutionPolicy Bypass -File script\deploy-install.ps1
@@ -26,6 +27,22 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $stage = Join-Path $root 'target\release'   # 直接取编译输出（不再经 artifact\smoke，避免装到旧产物）
+
+# ★ 第一步就重新生成双拼方案：把 `schema\shuangpin\*.toml` 的键位"烤"进 `.schema.yaml`。
+#
+# 必须放在部署/编译**之前** —— 否则方案生成晚于部署，这次部署编译的还是旧内容。
+# 生成器自己会：优先读用户目录的 TOML、写到用户目录的 schema，**不需要提权**。
+# 用户明确要求："不需要内置小鹤，用户文件夹有就行" —— 所以仓库里**不放**方案文件，
+# 全靠这一步在用户机器上生成。
+$generatorEarly = Join-Path $stage 'shuangpin-schema.exe'
+if (Test-Path $generatorEarly) {
+    Write-Host '重新生成双拼方案（TOML → schema.yaml）...'
+    & $generatorEarly
+    if ($LASTEXITCODE -ne 0) { Write-Warn2 '双拼方案生成失败（TOML 语法错？）' }
+} else {
+    Write-Host ('跳过双拼生成：找不到 ' + $generatorEarly)
+}
+
 $clsid = 'HKLM\Software\Classes\CLSID\{16A7AEA9-9EE6-4540-8020-E384C0489BB1}\InprocServer32'
 
 function Write-Step($text) { Write-Host "== $text" -ForegroundColor Cyan }
@@ -133,6 +150,14 @@ $elevated = @(
     ('del /f /q "{0}\weasel_tip.previous.dll" 2>nul' -f $InstallDir),
     ('del /f /q "{0}\Weasel-Next-Engine.previous.exe" 2>nul' -f $InstallDir),
     ('del /f /q "{0}\weasel_tip.previous-*.dll" 2>nul' -f $InstallDir),
+    # 改名前的旧二进制：`WeaselNextService` 计划任务启动的是 weasel-broker.exe。
+    # 直接删掉会让计划任务下次登录起不来（实测 schtasks /Change 在本机也被拒），
+    # 所以这里用**新服务端的副本**占住这个名字 —— 托盘菜单由新二进制提供，不再是旧菜单；
+    # 另外三个（weasel-server / weasel-settings / weasel-renderer）彻底删掉。
+    ('copy /y "{0}\Weasel-Next-Server.exe" "{0}\weasel-broker.exe"' -f $InstallDir),
+    ('del /f /q "{0}\weasel-server.exe" 2>nul' -f $InstallDir),
+    ('del /f /q "{0}\weasel-settings.exe" 2>nul' -f $InstallDir),
+    ('del /f /q "{0}\weasel-renderer.exe" 2>nul' -f $InstallDir),
     ('reg add "{0}" /ve /t REG_SZ /d "{1}\Weasel-Next.dll" /f' -f $clsid, $InstallDir)
 )
 $log = Invoke-ElevatedScript -Lines $elevated
@@ -198,6 +223,43 @@ foreach ($f in 'Weasel-Next-Server.exe', 'Weasel-Next-Engine.exe', 'Weasel-Next-
 }
 $total = (Get-ChildItem $InstallDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
 Write-Ok ('共 {0:N1} MB' -f ($total / 1MB))
+
+# 5.5) ★ 事后核对：提权那步失败时上面照样会打印"文件已同步"，
+# 所以**必须**比 hash/mtime 才知道到底换没换。2026-10-17 被这个假象骗过两次：
+# 脚本报成功、退出码 0，而安装目录的 Weasel-Next-Setting.exe 一整天都是旧的。
+Write-Step '核对文件是否真的换成了本次构建'
+$mismatched = @()
+# ⚠️ 这个列表必须**覆盖所有会被复制的东西**，漏一个就会假报"全部一致"。
+# 2026-10-17 实际踩到：漏了 `rime.dll`，于是脚本报"全部与本次构建一致 ✓"，
+# 而安装目录里的 rime.dll 还是旧版（10,088,960 vs 新构建 10,091,520），
+# 导致"改了 librime 却没生效"又白查一轮。
+$stagePairs = @(
+    @{ Src = 'Weasel-Next-Server.exe';        Dst = 'Weasel-Next-Server.exe' },
+    @{ Src = 'Weasel-Next-Engine.exe';        Dst = 'Weasel-Next-Engine.exe' },
+    @{ Src = 'Weasel-Next-Renderer.exe';      Dst = 'Weasel-Next-Renderer.exe' },
+    @{ Src = 'Weasel-Next-Setting.exe';       Dst = 'Weasel-Next-Setting.exe' },
+    @{ Src = 'weasel_theme_official.dll';     Dst = 'weasel_theme_official.dll' },
+    @{ Src = 'weasel_tip.dll';                Dst = 'Weasel-Next.dll' },
+    # rime.dll 从 artifact\smoke 复制（不在 target\release 里）
+    @{ Src = '..\artifact\smoke\rime.dll';    Dst = 'rime.dll' }
+)
+foreach ($pair in $stagePairs) {
+    $src = Join-Path $stage $pair.Src
+    $dst = Join-Path $InstallDir $pair.Dst
+    if (-not (Test-Path $src)) { continue }
+    $same = (Test-Path $dst) -and
+            ((Get-FileHash $src -Algorithm MD5).Hash -eq (Get-FileHash $dst -Algorithm MD5).Hash)
+    if (-not $same) { $mismatched += $pair.Dst }
+}
+if ($mismatched.Count -eq 0) {
+    Write-Ok '全部与本次构建一致 ✓'
+} else {
+    Write-Warn2 ('以下文件**没有**换成本次构建：' + ($mismatched -join ', '))
+    Write-Warn2 '原因通常是提权没被确认（UAC 点了取消），或文件被运行中的进程占用。'
+    Write-Warn2 '请重跑本脚本，并在 UAC 弹窗上点"是"。'
+    throw '部署未真正生效：安装目录里还有旧文件（比对 hash 失败）'
+}
+
 # ★ 只打包 rime.lua 这个接口到**用户文件夹**（插件本体不进包 ✓ 用户自己放 ✓）
 $luaSrc = Join-Path $PSScriptRoot '..\Rime-Next\plugin\rime.lua'   # ★ 打包源（按用户要求 ✓）
 $luaDst = Join-Path $env:APPDATA 'Rime-Next\plugin'
@@ -206,3 +268,62 @@ if (Test-Path $luaSrc) {
     Copy-Item $luaSrc $luaDst -Force
     Write-Host ('rime.lua 已安装 → ' + $luaDst)
 }
+
+# ★ 自定义双拼方案 → **用户文件夹**（用户要能改；程序文件夹是只读的，写进去等于不能用）
+#
+# 为什么不是只放程序文件夹：
+#   * 程序文件夹需要提权才能改，普通用户改不了；
+#   * 重装会被覆盖，用户改的键位就没了；
+#   * `list_schemas` 同名时**用户那份优先**，所以真正生效的是用户目录这份。
+# 程序文件夹里也留一份作为"出厂备份"（删坏了能恢复），但**要改的是用户目录这份**。
+$shuangpinSrc = Join-Path $PSScriptRoot '..\Rime-Next\schema'
+$userSchemaDir = Join-Path $env:APPDATA 'Rime-Next\schema'
+if (Test-Path $shuangpinSrc) {
+    $copied = @()
+    foreach ($dir in Get-ChildItem $shuangpinSrc -Directory -ErrorAction SilentlyContinue) {
+        # 只同步"双拼类"方案。
+        # ⚠️ 判断用目录名，别拿 TOML 内容去 `-match` —— `xiaohe.toml` 里有
+        # `dict = "luna_pinyin"`，那样会把 luna_pinyin / luna_pinyin_simp 也误判成自定义方案
+        # （实测确实复制了 3 个）。双拼的 schema_id 一律以 `double_pinyin` 开头。
+        if ($dir.Name -notlike 'double_pinyin*') { continue }
+        $dst = Join-Path $userSchemaDir $dir.Name
+        New-Item -ItemType Directory -Force -Path $dst | Out-Null
+        Copy-Item (Join-Path $dir.FullName '*') $dst -Recurse -Force
+        $copied += $dir.Name
+    }
+    if ($copied.Count -gt 0) {
+        Write-Host ('自定义方案已安装到用户文件夹 → ' + $userSchemaDir)
+        Write-Host ('   ' + ($copied -join ', '))
+    }
+}
+
+# ★ 双拼的 TOML 键位定义也送到用户文件夹（那份才是用户能改的源）
+$shuangpinTomlSrc = Join-Path $PSScriptRoot '..\Rime-Next\schema\shuangpin'
+$shuangpinTomlDst = Join-Path $env:APPDATA 'Rime-Next\schema\shuangpin'
+if (Test-Path $shuangpinTomlSrc) {
+    New-Item -ItemType Directory -Force -Path $shuangpinTomlDst | Out-Null
+    foreach ($toml in Get-ChildItem $shuangpinTomlSrc -Filter '*.toml' -ErrorAction SilentlyContinue) {
+        $target = Join-Path $shuangpinTomlDst $toml.Name
+        if (-not (Test-Path $target)) {
+            Copy-Item $toml.FullName $target -Force
+            Write-Host ('双拼键位定义已安装 → ' + $target)
+        }
+    }
+}
+
+# ★ 重新生成双拼方案：把 `schema\shuangpin\*.toml` 的键位"烤"进 `.schema.yaml`。
+#
+# 为什么必须在这里调：librime 只认 `.schema.yaml`，它没有任何机制在运行时读 TOML。
+# 所以"改 TOML → 生效"必须经过这一步转换；放在部署流程里，用户点一次部署就完成了。
+# 生成器自己会：优先读用户目录的 TOML、写到用户目录的 schema，**不需要提权**。
+$generator = Join-Path $stage 'shuangpin-schema.exe'
+if (Test-Path $generator) {
+    Write-Host '重新生成双拼方案（TOML → schema.yaml）...'
+    & $generator
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn2 '双拼方案生成失败，上面有具体原因（TOML 语法错？）'
+    }
+} else {
+    Write-Host ('跳过双拼生成：找不到 ' + $generator)
+}
+

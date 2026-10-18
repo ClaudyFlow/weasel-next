@@ -241,7 +241,7 @@ pub fn show(shared: &Path, user: &Path) -> Result<(), String> {
 ///
 /// 部署必须由掌握引擎生死的 broker 做 —— 引擎单实例，设置程序自己拉起第二个只会得到
 /// `AlreadyRunning`（实测）。broker 的命令处理见 `broker\src\tray.rs:177/236`。
-fn request_deploy() {
+pub fn request_deploy() {
     const DEPLOY_COMMAND: u32 = 1001; // weasel_common::command_menu::DEPLOY
     const BROKER_WINDOW_CLASS: &str = "weasel-next-broker";
 
@@ -795,3 +795,4 @@ fn read_hotkeys(shared: &Path) -> Option<String> {
 const LVIS_SELECTED_STATE: u32 = 0x0002;
 /// `MB_ICONWARNING`（与 dialogs.rs 里的常量同值）。
 const MB_ICONWARNING_: u32 = 0x0030;
+

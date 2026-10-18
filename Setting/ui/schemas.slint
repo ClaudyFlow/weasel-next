@@ -1,0 +1,156 @@
+// 方案选单页：对应官方 SwitcherSettingsDialog（可用方案列表 + 勾选 + 简介）。
+//
+// 官方是 Win32 对话框模板（DialogBoxParamW），Slint 事件循环里嵌不了模态框，所以这里
+// 用同一份数据层 `weasel_style::switcher` 重画成页面：勾选后写 `schema/schema.toml`
+// 并请 broker 重新部署 —— 与官方「方案选单设定」的 OnOK 走同一条落盘路径
+// （不自己写 default.custom.yaml；librime 侧直接读 schema.toml 的 schemas = [...]）。
+
+import { Button, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+/// 列表里的一行（`weasel_style::switcher::SchemaInfo` + 当前方案标记）。
+export struct SchemaRow {
+    /// 方案 id（`<方案>.schema.yaml` 的文件名主干）。
+    id: string,
+    /// 显示名（`schema/name`，缺失时退回 id）。
+    name: string,
+    /// 作者（`schema/author`）。
+    author: string,
+    /// 简介（`schema/description`）。
+    description: string,
+    /// 是否已勾选进方案选单。
+    selected: bool,
+    /// 是否是当前使用的方案。
+    active: bool,
+}
+
+/// 一行方案：左侧勾选框，中间名字与作者，右侧「使用中」标记。
+component SchemaItem inherits Rectangle {
+    in property <SchemaRow> entry;
+    callback toggled(string);
+
+    height: 56px;
+    border-radius: 6px;
+    background: touch.has-hover ? #f2f4f7 : transparent;
+
+    HorizontalBox {
+        padding: 8px;
+        spacing: 10px;
+        // 勾选框：没有用 std-widgets 的 CheckBox（它的文字排版会把整行撑高）
+        Rectangle {
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: entry.selected ? #1a73e8 : #c4c8ce;
+            background: entry.selected ? #1a73e8 : #ffffff;
+            Text {
+                text: entry.selected ? "✓" : "";
+                color: #ffffff;
+                font-size: 12px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        VerticalBox {
+            padding: 0px;
+            spacing: 2px;
+            // 名字列给固定宽度：两列都 horizontal-stretch:1 时中间会裂开一大段空白。
+            width: 240px;
+            alignment: center;
+            Text {
+                text: entry.name;
+                font-size: 14px;
+                color: #202124;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: entry.author == "" ? entry.id : entry.id + " · " + entry.author;
+                font-size: 11px;
+                color: #5f6368;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        Text {
+            text: entry.description;
+            font-size: 11px;
+            color: #80868b;
+            horizontal-stretch: 1;
+            // 不换行、超长省略：换行会把固定 56px 的行撑破，两行的字叠在一起。
+            overflow: elide;
+            vertical-alignment: center;
+        }
+        if entry.active : Rectangle {
+            width: 56px;
+            height: 22px;
+            border-radius: 11px;
+            background: #e8f0fe;
+            Text {
+                text: "使用中";
+                color: #1a73e8;
+                font-size: 11px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.toggled(root.entry.id); }
+    }
+}
+
+/// 方案选单页本体。
+export component SchemaPicker inherits VerticalBox {
+    in property <[SchemaRow]> rows;
+    in property <string> status;
+    in property <bool> editable: true;
+    callback toggled(string);
+    callback apply();
+    callback refresh();
+    callback open-dialog();
+
+    padding: 12px;
+    spacing: 10px;
+
+    // 顶部：状态 + 三个动作。官方对话框只有「确定/取消」，这里把「重新读取」和
+    // 「官方对话框…」也放出来 —— Win32 版本有快捷键设置（switcher/hotkeys），
+    // Slint 这页只做勾选，快捷键仍然去官方对话框改。
+    HorizontalBox {
+        spacing: 8px;
+        Text {
+            text: root.status;
+            font-size: 12px;
+            color: #5f6368;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Button { text: "重新读取"; enabled: root.editable; clicked => { root.refresh(); } }
+        Button { text: "官方对话框…"; enabled: root.editable; clicked => { root.open-dialog(); } }
+        Button { text: "保存并部署"; enabled: root.editable; clicked => { root.apply(); } }
+    }
+    Text {
+        text: "勾选要出现在方案选单里的方案，列表顺序就是选单顺序（第一条是默认方案）。改完点「保存并部署」让引擎生效。";
+        font-size: 12px;
+        color: #5f6368;
+        wrap: word-wrap;
+    }
+
+    // 方案列表：竖排 ScrollView 里必须给外层容器可拉伸高度，否则列表会塌成一行。
+    Rectangle {
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: #dadce0;
+        background: #ffffff;
+        vertical-stretch: 1;
+        ScrollView {
+            VerticalBox {
+                for row in root.rows : SchemaItem {
+                    entry: row;
+                    toggled(id) => { root.toggled(id); }
+                }
+            }
+        }
+    }
+}

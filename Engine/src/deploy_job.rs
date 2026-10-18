@@ -198,12 +198,45 @@ pub fn diagnostic(message: &str) {
     tracing::info!(message, "部署诊断");
 }
 
+/// 部署执行期间在用户目录留一个 `.deploying` 标记。
+///
+/// 部署跑在**独立进程**里，常驻引擎看不到它的状态；标记文件是唯一的跨进程信号。
+/// 引擎按键路径据此让键声/上屏音静音（用户 2026-10-18 要求「部署时不要响」）。
+/// `Drop` 保证失败/提前返回也会清掉，不会把声音永久静音。
+pub(crate) struct DeployingMarker {
+    user_data: Option<PathBuf>,
+}
+
+impl DeployingMarker {
+    pub(crate) fn new() -> Self {
+        let Ok(paths) = weasel_common::process::RuntimePaths::discover() else {
+            return Self { user_data: None };
+        };
+        if let Err(error) = weasel_common::deploy_manifest::mark_deploying(&paths.user_data) {
+            diagnostic(&format!("写部署标记失败：{error}"));
+        }
+        Self {
+            user_data: Some(paths.user_data),
+        }
+    }
+}
+
+impl Drop for DeployingMarker {
+    fn drop(&mut self) {
+        if let Some(user_data) = &self.user_data {
+            weasel_common::deploy_manifest::clear_deploying(user_data);
+        }
+    }
+}
+
 /// 执行部署子进程，并将有限日志预览、遥测和最终状态发送给接收方。
 ///
 /// 此函数拥有单实例守卫直到部署结果确定。提供 UI 接收器时，由 UI 生命周期负责接收
 /// 完成状态；无界面模式则最多等待两秒刷出标准输出遥测，避免继承的管道无限阻塞退出。
 pub fn run(ui: Option<Arc<dyn UiSink>>, guard: SingleInstance) -> DeployComplete {
     diagnostic("deployment worker started");
+    // 先立标记再干活：常驻引擎看到它就静音，直到本函数返回。
+    let _deploying = DeployingMarker::new();
     let telemetry = crate::deploy_telemetry::Telemetry::stdout();
     let mut output_log = match OutputLog::create() {
         Ok(log) => {

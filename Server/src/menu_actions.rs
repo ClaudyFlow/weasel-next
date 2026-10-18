@@ -16,7 +16,7 @@ use windows_strings::{HSTRING, PCWSTR, w};
 /// 路径发现、目录创建或不支持的命令以错误返回，调用方负责向用户展示。
 fn target(command: u32) -> Result<HSTRING, String> {
     match command {
-        SETTINGS => {
+        SETTINGS | STATISTICS | SWITCHER | STYLE => {
             let paths = RuntimePaths::discover().map_err(|e| e.to_string())?;
             let executable = paths.executable_directory.join("Weasel-Next-Setting.exe");
             if !executable.is_file() {
@@ -46,7 +46,10 @@ fn target(command: u32) -> Result<HSTRING, String> {
 /// 不带参数会打开旧的设置界面，这正是"右键出来不是官方设置"的原因。
 fn parameters(command: u32) -> Option<HSTRING> {
     match command {
-        SETTINGS => Some(HSTRING::from("/style")),
+        // 设置 = 主界面（**无参数**），不能传 /style —— 那是"界面风格"对话框。
+        STYLE => Some(HSTRING::from("/style")),
+        STATISTICS => Some(HSTRING::from("/stat")),
+        SWITCHER => Some(HSTRING::from("/switcher")),
         _ => None,
     }
 }
@@ -61,12 +64,20 @@ pub fn open(command: u32) {
             let result = (|| -> Result<(), String> {
                 let target = target(command)?;
                 let _apartment = ComApartment::initialize_sta().map_err(|e| e.to_string())?;
+                // ⚠️ 这里必须**真的把 `parameters()` 传下去**。原来 lpParameters 写的是 `None`，
+                // 于是"设置"打开的是无参数界面（旧界面），而不是 `/style`；
+                // "输入统计"更是压根进不去。这个 bug 一直藏着，因为参数函数本身写对了。
+                let params = parameters(command);
+                let params_ptr = match &params {
+                    Some(value) => PCWSTR(value.as_ptr()),
+                    None => PCWSTR::null(),
+                };
                 let result = unsafe {
                     ShellExecuteW(
                         None,
                         w!("open"),
                         PCWSTR(target.as_ptr()),
-                        None,
+                        params_ptr,
                         None,
                         SW_SHOWNORMAL,
                     )

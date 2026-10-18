@@ -77,9 +77,23 @@ impl State {
                 ("ascii_mode", "默认英文模式"),
                 ("inline_preedit", "内联预编辑"),
             ] {
-                let checked = snapshot
-                    .app_bool(name, key)
-                    .map_err(|error| format!("{name}.{key}: {error}"))?;
+                // `ascii_mode` 的全局键就在宿主配置里，`app_bool` 能回退到它；
+                // `inline_preedit` 的全局值却是**主题文件**的 `style/inline_preedit`
+                // （见 `weasel_style::theme::inline_preedit`），宿主配置里没有这个键。
+                // 之前两个都用 `app_bool`，于是每个带 app_options 的配置都会在这里抛
+                // "missing required configuration value inline_preedit" → `show()`
+                // 整个失败 → 主界面停在只读（2026-10-17 用户看到的就是这个）。
+                let checked = match key {
+                    "inline_preedit" => snapshot
+                        .app_option_bool(name, key)
+                        .map_err(|error| format!("{name}.{key}: {error}"))?
+                        // 未指定时跟随主题；主题默认关闭，这里按"未勾选"显示，
+                        // 下面的说明写清"继承主题"，别让勾选框冒充真值。
+                        .unwrap_or(false),
+                    _ => snapshot
+                        .app_bool(name, key)
+                        .map_err(|error| format!("{name}.{key}: {error}"))?,
+                };
                 options.push(AppOption {
                     key: key.into(),
                     title: title.into(),
@@ -91,6 +105,9 @@ impl State {
                             "用户指定；恢复继承会清除此覆盖。"
                         } else if config.get(key).is_some() {
                             "程序配置已指定此应用选项。"
+                        } else if key == "inline_preedit" {
+                            // 这个键的全局值不在宿主配置里，不能写"继承全局设置"。
+                            "未指定：跟随主题的 style/inline_preedit（主题默认关闭）。"
                         } else {
                             "未指定：继承全局设置，随全局设置变化。"
                         },
@@ -136,6 +153,8 @@ impl State {
             {
                 rows.push(SettingField {
                     source_index: self.fields.len() as i32,
+                    // 分区序号：Slint 侧只有分区首行带 section 名，按 tab 过滤必须靠它。
+                    category: index as i32,
                     section: if offset == 0 {
                         section.title.clone().into()
                     } else {
@@ -181,6 +200,7 @@ impl State {
             .into(),
         );
         ui.set_fields(model.into());
+        refresh_page_fields(ui);
         self.show_apps(ui)?;
         wasm_modules::show(self, ui)?;
         Ok(())
@@ -197,7 +217,35 @@ impl State {
                 }
             }
         }
+        refresh_page_fields(ui);
     }
+}
+
+/// 该页签是否显示这一行字段（按目录分区序号 `category` 分派）。
+///
+/// 页签只有三页有字段：3 常规 / 4 更新（更新页只有固定的「其他」块，没有字段）。
+/// 「应用选项」（app_options）与「外观与行为」（主题分区）两页已按用户要求删除，
+/// 所以这两类字段不再出现在任何页签里 —— 数据层和编辑逻辑都还在，只是没有入口。
+fn page_shows(page: i32, row: &SettingField) -> bool {
+    match page {
+        3 => row.category == 0 && row.key != "app_options",
+        _ => false,
+    }
+}
+
+/// 重算当前页签的字段模型 `page-fields`。
+///
+/// 不能让 Slint 在 `for` 里用 `if` 过滤：`for` 每轮都会生成一个元素，被过滤掉的那行
+/// 虽然高 0，父布局的 spacing 仍按行数累加 —— 内容少的页会白裂出两三百像素空白
+/// （2026-10-18 实测）。在这里筛好模型，界面上就没有空行。
+fn refresh_page_fields(ui: &SettingsWindow) {
+    let page = ui.get_current_page();
+    let model = ui.get_fields();
+    let rows: Vec<SettingField> = (0..model.row_count())
+        .filter_map(|index| model.row_data(index))
+        .filter(|row| row.shown && page_shows(page, row))
+        .collect();
+    ui.set_page_fields(Rc::new(VecModel::from(rows)).into());
 }
 /// 初始化原生窗口后启动 Slint 事件循环；配置目录在后台线程读取。
 ///
@@ -205,19 +253,14 @@ impl State {
 /// 返回窗口初始化、线程创建或事件循环产生的错误。
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 官方习惯：命令行参数选择要打开的对话框（/style、/switcher、/dict）。
-    // 命中时只弹对话框，不启动 Slint 主界面。
+    // 命中时只弹对话框，不启动 Slint 主界面；**不带参数 = Slint 主界面**。
+    //
+    // ⚠️ 这里曾经写成「无参数就换成 /switcher」，与 `Server/src/menu_actions.rs`
+    // 的约定正好相反 —— 那里「设置」故意不传参数，指望落到主界面。结果托盘点
+    // 「设置」弹出来的是方案选单对话框，用户 2026-10-17 21:11 报过
+    // 「设置界面没显示，直接是这个」。别再改回去。
     {
-        // 不带参数时默认打开官方的「方案选单设定」：先选方案，再选皮肤。
-    // 旧的 Slint 界面容易被误认为"设置还是旧版"，退居二线：需要它时传 /legacy。
-    let args: Vec<String> = {
-        // （/legacy 由下面的分支识别：命中时跳过对话框，直接进 Slint 界面）
-        let raw: Vec<String> = std::env::args().skip(1).collect();
-        if raw.is_empty() {
-            vec!["/switcher".to_string()]
-        } else {
-            raw
-        }
-    };
+        let args: Vec<String> = std::env::args().skip(1).collect();
         let script_dir = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
@@ -232,7 +275,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if dialogs::run_from_args(&args, &shared, &user) {
             return Ok(());
         }
-    }    slint::BackendSelector::new()
+    }
+    slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name("skia".into())
         .with_winit_window_attributes_hook(|attributes| {
@@ -254,19 +298,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .select()?;
     let window = SettingsWindow::new()?;
+    // 设置主页 = 个人记录：把采集数据灌进内嵌的 StatsPage。
+    apply_stats_to_settings(&window);
     wire_skins(&window);
+    wire_schemas(&window);
+    {
+        // 切页签时重算当前页的字段模型（筛选放在 Rust 侧，界面上不留空行）。
+        let weak = window.as_weak();
+        window.on_page_selected(move |_| {
+            if let Some(window) = weak.upgrade() {
+                refresh_page_fields(&window);
+            }
+        });
+    }
+    {
+        // 主页上的「刷新」：重读 stat.bin 再灌一遍（和 /stat 窗口的刷新同源）。
+        let weak = window.as_weak();
+        window.on_refresh_stats(move || {
+            if let Some(window) = weak.upgrade() {
+                apply_stats_to_settings(&window);
+            }
+        });
+    }
+    wire_official_dialogs(&window);
     // 首帧就以透明背景初始化渲染表面；apply 失败时恢复纯色。
     window.set_mica_enabled(backdrop::supported());
     colors::install(&window);
     let paths = RuntimePaths::discover()?;
-    window.set_config_path(
-        paths
-            .user_data
-            .join("weasel.custom.toml")
-            .display()
-            .to_string()
-            .into(),
-    );
+    // 用户 2026-10-18：界面上不再显示 `%APPDATA%\Rime-Next\weasel.custom.toml` 那行路径。
     let state = Rc::new(RefCell::new(None::<State>));
     {
         let state = state.clone();
@@ -712,11 +771,259 @@ fn push_skins(ui: &SettingsWindow, skins: &skins::Skins) {
         ui.set_scheme_preview_comment(row.comment_color);
     }
 }
+// ------------------------------------------------------- 方案选单页（tab 2）
+
+/// 方案选单页：读可用方案 → 勾选 → 写 `schema/schema.toml` → 请 broker 重新部署。
+///
+/// 数据层与官方 `/switcher` 对话框是同一份（`weasel_style::switcher`），落盘也走
+/// `write_schema_toml`（保留原有的 `active`），所以两条路径不会互相踩。官方对话框
+/// 里的快捷键设置这页不做，留一个「官方对话框…」按钮跳过去。
+fn wire_schemas(ui: &SettingsWindow) {
+    let script_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_default();
+    let probe = script_dir.join("theme").join("default").join("default.theme.toml");
+    let shared = skins::resolve_shared_dir(&script_dir, &probe);
+    let user = std::env::var_os("APPDATA")
+        .map(|appdata| std::path::PathBuf::from(appdata).join("Rime-Next"))
+        .unwrap_or_default();
+    // 首次运行把出厂 `default.yaml` 的 schema_list 抄进用户目录那份 schema.toml
+    // （官方对话框也这样起手）；漏了这一步界面会显示"一个都没勾"。
+    let _ = weasel_style::switcher::seed_schema_table(&shared, &user);
+
+    let rows = Rc::new(RefCell::new(Vec::<weasel_style::switcher::SchemaInfo>::new()));
+    reload_schemas(ui, &shared, &user, &rows);
+
+    // 勾选/取消：只改内存，点「保存并部署」才写盘（与官方"确定才生效"一致）。
+    {
+        let ui_weak = ui.as_weak();
+        let rows = rows.clone();
+        let shared = shared.clone();
+        let user = user.clone();
+        ui.on_schema_toggle(move |id| {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            {
+                let mut rows = rows.borrow_mut();
+                if let Some(row) = rows.iter_mut().find(|row| row.id == id.as_str()) {
+                    row.selected = !row.selected;
+                }
+            }
+            push_schemas(&ui, &shared, &user, &rows);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let rows = rows.clone();
+        let user = user.clone();
+        ui.on_schema_apply(move || {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            let ids: Vec<String> = rows
+                .borrow()
+                .iter()
+                .filter(|row| row.selected)
+                .map(|row| row.id.clone())
+                .collect();
+            // 官方 OnOK：一项都没选就报错，不写文件。
+            if ids.is_empty() {
+                ui.set_schema_status("至少要选用一项。".into());
+                return;
+            }
+            let path = user.join("schema").join("schema.toml");
+            match weasel_style::switcher::write_schema_toml(&path, &ids) {
+                Ok(()) => {
+                    ui.set_schema_status(
+                        format!("已保存 {} 个方案，正在请 broker 重新部署…", ids.len()).into(),
+                    );
+                    // 部署必须由掌握引擎生死的 broker 做（引擎单实例，自己拉第二个只会
+                    // 得到 AlreadyRunning）；与官方对话框 OnOK 之后是同一个动作。
+                    switcher_dialog::request_deploy();
+                }
+                Err(error) => {
+                    ui.set_schema_status(format!("写入方案选单失败：{error}").into());
+                }
+            }
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let rows = rows.clone();
+        let shared = shared.clone();
+        let user = user.clone();
+        ui.on_schema_refresh(move || {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            reload_schemas(&ui, &shared, &user, &rows);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_schema_open_dialog(move || {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            if let Err(error) = open_official("/switcher") {
+                ui.set_schema_status(format!("无法打开方案选单：{error}").into());
+            }
+        });
+    }
+}
+
+/// 重新读一遍可用方案（失败只更新状态栏，不清空已有列表）。
+fn reload_schemas(
+    ui: &SettingsWindow,
+    shared: &std::path::Path,
+    user: &std::path::Path,
+    rows: &Rc<RefCell<Vec<weasel_style::switcher::SchemaInfo>>>,
+) {
+    match weasel_style::switcher::list_schemas(shared, user) {
+        Ok(list) => *rows.borrow_mut() = list,
+        Err(error) => ui.set_schema_status(format!("读取方案列表失败：{error}").into()),
+    }
+    push_schemas(ui, shared, user, rows);
+}
+
+/// 把方案列表推给界面（当前方案从 `schema.toml` 的 `active` 读）。
+fn push_schemas(
+    ui: &SettingsWindow,
+    shared: &std::path::Path,
+    user: &std::path::Path,
+    rows: &Rc<RefCell<Vec<weasel_style::switcher::SchemaInfo>>>,
+) {
+    let active = weasel_style::switcher::read_schema_table(shared, user).active;
+    let rows = rows.borrow();
+    let selected = rows.iter().filter(|row| row.selected).count();
+    let model: Vec<SchemaRow> = rows
+        .iter()
+        .map(|row| SchemaRow {
+            id: row.id.as_str().into(),
+            name: row.name.as_str().into(),
+            author: row.author.as_str().into(),
+            description: row
+                .description
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .into(),
+            selected: row.selected,
+            active: active.as_deref() == Some(row.id.as_str()),
+        })
+        .collect();
+    ui.set_schema_rows(Rc::new(VecModel::from(model)).into());
+    ui.set_schema_status(format!("{} 个可用方案 · 已勾选 {} 个", rows.len(), selected).into());
+}
+
+// ------------------------------------------------------- 界面与方案（官方对话框）
+
+/// 主界面的「界面风格…」「方案选单…」两个按钮。
+///
+/// 托盘菜单里原来各有一项，用户要求收进设置（「这不是设置的部分吗」）。两条都是
+/// 官方模板的 Win32 对话框，见 [`open_official`]。
+fn wire_official_dialogs(ui: &SettingsWindow) {
+    {
+        let weak = ui.as_weak();
+        ui.on_open_switcher(move || {
+            if let Some(ui) = weak.upgrade() {
+                if let Err(error) = open_official("/switcher") {
+                    ui.set_status(format!("无法打开方案选单：{error}").into());
+                }
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_open_style(move || {
+            if let Some(ui) = weak.upgrade() {
+                if let Err(error) = open_official("/style") {
+                    ui.set_status(format!("无法打开界面风格：{error}").into());
+                }
+            }
+        });
+    }
+}
+
+/// 另起一个自身进程，带上 `/style` 或 `/switcher` 打开官方模板对话框。
+///
+/// 这两个对话框都是 `DialogBoxParamW` 的 Win32 模态模板，需要由本线程的消息循环驱动；
+/// 主界面已经跑在 Slint 事件循环里，不能在同一个线程里再嵌一个模态对话框，
+/// 所以只能再启动一个自身进程（与官方"一个 exe 多个开关"的做法一致）。
+///
+/// ⚠️ 两个进程都会写 `weasel.custom.toml`：对话框里保存后，主界面里未保存的草稿会
+/// 被它判为"文件已被其他程序修改"。这是有意的保守行为，不要改成静默覆盖。
+fn open_official(flag: &str) -> Result<(), String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    std::process::Command::new(executable)
+        .arg(flag)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
 /// 打开「输入统计」窗口。`/stat` 走这里。
 ///
 /// 数据来自 `%APPDATA%\Rime-Next\stat\stat.bin`（TIP 采集，见 `Tip/src/stats.rs`；
 /// 旧的 `stats\*.toml` 只读兜底）。读文件/算数字都在 `weasel_settings::stats` 里，
 /// 这里只做「数据 → Slint 属性」的搬运。
+/// 把采集数据灌进设置主界面的「主页」（内嵌的 `StatsPage`）。
+///
+/// 和 [`show_stats`] 用**同一套** `weasel_settings::stats::load()` + `snapshot()`，
+/// 只是属性名多了 `stat-` 前缀 —— `SettingsWindow` 上那 15 个属性是转发给内嵌
+/// `StatsPage` 的副本，所以必须两边都灌。
+fn apply_stats_to_settings(window: &SettingsWindow) {
+    let (entries, warnings) = weasel_settings::stats::load();
+    let snapshot =
+        weasel_settings::stats::snapshot(&entries, weasel_settings::stats::today_local());
+
+    let (title, level, exp_cur, exp_max) = career_level(snapshot.total_exp);
+    window.set_stat_level_title(title.into());
+    window.set_stat_level(level as i32);
+    window.set_stat_exp_cur(exp_cur as i32);
+    window.set_stat_exp_max(exp_max as i32);
+    window.set_stat_exp_ratio(if exp_max > 0 {
+        exp_cur as f32 / exp_max as f32
+    } else {
+        0.0
+    });
+    window.set_stat_exp_next(
+        format!("还差 {} 升下一级", exp_max.saturating_sub(exp_cur)).into(),
+    );
+    window.set_stat_realm(career_realm(snapshot.total_chars).into());
+
+    window.set_stat_quarter_label(snapshot.quarter_label.clone().into());
+    window.set_stat_today_keys(snapshot.today_keys.min(i32::MAX as u64) as i32);
+    window.set_stat_today_chars(snapshot.today_chars.min(i32::MAX as u64) as i32);
+    window.set_stat_today_speed(snapshot.today_speed as i32);
+    window.set_stat_streak_days(snapshot.streak_days as i32);
+
+    let day_cells: Vec<StatDay> = snapshot
+        .days
+        .iter()
+        .map(|cell| StatDay {
+            count: cell.count as i32,
+            tip: cell.tip.as_str().into(),
+            today: cell.today,
+        })
+        .collect();
+    window.set_stat_days(slint::ModelRc::new(slint::VecModel::from(day_cells)));
+
+    let words: Vec<StatWord> = snapshot
+        .words
+        .iter()
+        .map(|(word, count)| StatWord {
+            word: word.as_str().into(),
+            count: (*count).min(i32::MAX as u64) as i32,
+        })
+        .collect();
+    window.set_stat_words(slint::ModelRc::new(slint::VecModel::from(words)));
+
+    window.set_stat_status(
+        if let Some(first) = warnings.first() {
+            format!("统计文件 {first} 读取有问题").into()
+        } else if snapshot.has_data {
+            "".into()
+        } else {
+            "还没有采集到数据：替换掉 TIP（Weasel-Next.dll）后打的字才会开始累计。".into()
+        },
+    );
+}
+
 pub fn show_stats() -> Result<(), String> {
     let ui = StatsWindow::new().map_err(|error| error.to_string())?;
     let weak = ui.as_weak();
@@ -746,6 +1053,7 @@ pub fn show_stats() -> Result<(), String> {
         );
         ui.set_realm(career_realm(snapshot.total_chars).into());
 
+        ui.set_quarter_label(snapshot.quarter_label.clone().into());
         ui.set_today_keys(snapshot.today_keys.min(i32::MAX as u64) as i32);
         ui.set_today_chars(snapshot.today_chars.min(i32::MAX as u64) as i32);
         ui.set_today_speed(snapshot.today_speed as i32);
@@ -1016,3 +1324,5 @@ fn career_realm(total_chars: u64) -> &'static str {
     }
     "凡键境"
 }
+
+

@@ -23,7 +23,7 @@ end
 boot_log("=== rime.lua 开始加载 ===")
 
 -- 插件清单（外壳文件夹名 = 模块名）
-local PLUGINS = { "input_staticstic" }
+local PLUGINS = { "input_statistics" }
 
 for _, name in ipairs(PLUGINS) do
   local dirs = {}

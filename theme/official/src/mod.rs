@@ -236,7 +236,7 @@ impl Graphics {
         for i in 0..count {
             let item = &view.items[i];
             // 序号：官方来自 rime 的 labels（"1" "2" …续页继续累加），再套 style/label_format
-            let label = m.format_label(&(view.page_start + i as u32 + 1).to_string());
+            let label = m.format_label(&(i as u32 + 1).to_string());
             measured.label.push(if m.label_font_valid {
                 self.measure(&label, &self.formats.label, m)
             } else {
@@ -1496,3 +1496,4 @@ mod tests {
         );
     }
 }
+

@@ -80,7 +80,8 @@ pub const ANTIALIAS_CHOICES: &[StyleChoice] = &[
 /// 全部样式键，顺序与官方 `GetStyleKeys()` 一致。
 pub const KEYS: &[StyleKey] = &[
     StyleKey { key: "style/color_scheme", zh_hans: "配色方案", zh_hant: "配色方案", en: "Color scheme", ty: StyleValueType::Theme, choices: &[] },
-    StyleKey { key: "style/color_scheme_dark", zh_hans: "暗色主题", zh_hant: "暗色主題", en: "Dark theme", ty: StyleValueType::Theme, choices: &[] },
+    // 「暗色主题」（style/color_scheme_dark）已移除：用户 2026-10-18 要求只有一套配色、
+    // 不要夜间配色。老配置里那行仍能读，但界面上不再提供、运行时也不再使用。
     StyleKey { key: "style/layout/type", zh_hans: "布局方向", zh_hant: "佈局方向", en: "Layout direction", ty: StyleValueType::Enum, choices: LAYOUTTYPE_CHOICES },
     StyleKey { key: "style/layout/align_type", zh_hans: "对齐方式", zh_hant: "對齊方式", en: "Alignment", ty: StyleValueType::Enum, choices: ALIGNTYPE_CHOICES },
     StyleKey { key: "style/preedit_type", zh_hans: "编码显示方式", zh_hant: "編碼顯示方式", en: "Preedit display", ty: StyleValueType::Enum, choices: PREEDITTYPE_CHOICES },

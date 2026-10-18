@@ -254,6 +254,39 @@ impl Drop for LayoutProbe {
         }
     }
 }
+impl LayoutProbe {
+    /// 当前选区（插入点）的屏幕矩形；宿主不认组合范围时的第一兜底。
+    ///
+    /// 与模式提示同一套取法：取默认选区 → 按活动端折叠 → 查文本几何。
+    fn selection_rect(&self, ec: TfEditCookie) -> Option<RECT> {
+        let mut selection = TF_SELECTION::default();
+        let mut fetched = 0;
+        let selected = unsafe {
+            let result = self.state.context.GetSelection(
+                ec,
+                bindings::TF_DEFAULT_SELECTION,
+                1,
+                &mut selection,
+                &mut fetched,
+            );
+            let selected = std::mem::ManuallyDrop::take(&mut selection.range);
+            if result.is_err() || fetched != 1 {
+                return None;
+            }
+            selected
+        }?;
+        let anchor = if selection.style.ase == TF_AE_START {
+            TF_ANCHOR_START
+        } else {
+            TF_ANCHOR_END
+        };
+        if unsafe { selected.Collapse(ec, anchor) }.is_err() {
+            return None;
+        }
+        let view = unsafe { self.state.context.GetActiveView() }.ok()?;
+        text_rect(&view, ec, &selected)
+    }
+}
 impl ITfEditSession_Impl for LayoutProbe_Impl {
     /// 使用 TSF 读 cookie 查询当前组合几何，并在 RPC 发送前复核其有效性。
     /// 暂时无法取得文本几何时静默放弃本次更新，不影响键入。
@@ -293,13 +326,27 @@ impl ITfEditSession_Impl for LayoutProbe_Impl {
             // Query current geometry, not a range captured before queued edits.
             let view = unsafe { self.state.context.GetActiveView()? };
             let range = composition_target_range(&composition, ec)?;
-            let mut rect = RECT::default();
-            let mut clipped = BOOL(0);
-            if unsafe { view.GetTextExt(ec, &range, &mut rect, &mut clipped) }.is_err() {
-                // Transient geometry failure must not flood the key/log queue.
+            // 兜底锚点（2026-10-18 实测）：窄范围/折叠范围在部分宿主（Chromium/Electron
+            // 这类自绘编辑框）上 `GetTextExt` 会直接失败，或者只给 0×0 的退化矩形。
+            // 以前这里一失败就 `return Ok(())`，**一个布局更新都不发** —— 引擎那边在
+            // `waiting_for_layout` 里等锚点，等不到就只发"隐藏 + 空候选"的帧，而键已经
+            // 被吃掉了，用户看到的就是「打不了字」。所以按
+            // 「窄组合范围 → 整个组合范围 → 当前选区（插入点）」逐级退让，
+            // 只要能拿到一个有高度的矩形就把候选窗放出去。
+            let rect = text_rect(&view, ec, &range)
+                .or_else(|| {
+                    unsafe { composition.GetRange() }
+                        .ok()
+                        .and_then(|whole| text_rect(&view, ec, &whole))
+                })
+                .or_else(|| self.selection_rect(ec))
+                .or_else(|| view_fallback_rect(&view));
+            let Some(rect) = rect else {
+                // 连插入点都拿不到：不要静默丢弃，交给引擎按"锚点无效"处理，
+                // 至少它不会把这次等待拖到组合结束。
+                send_invalid_layout(self, token)?;
                 return Ok(());
-            }
-            let rect = physical_text_rect(&view, rect);
+            };
             if self.generation.load(Ordering::Acquire) != self.requested_generation
                 || self.state.applied_layout_revision.load(Ordering::Acquire) != applied_revision
                 || !self.state.matches(Some(token))?
@@ -416,6 +463,57 @@ impl LayoutProbe_Impl {
             });
         Ok(())
     }
+}
+
+/// 查询某个范围的屏幕物理矩形；拿不到或退化（零高度，放不下候选窗）时返回 `None`。
+///
+/// 折叠插入点只要求高度 > 0，宽度可以是 0（`right == left` 就是普通插入点）。
+fn text_rect(view: &ITfContextView, ec: TfEditCookie, range: &ITfRange) -> Option<RECT> {
+    let mut rect = RECT::default();
+    let mut clipped = BOOL(0);
+    if unsafe { view.GetTextExt(ec, range, &mut rect, &mut clipped) }.is_err() {
+        return None;
+    }
+    let rect = physical_text_rect(view, rect);
+    (rect.bottom > rect.top && rect.right >= rect.left).then_some(rect)
+}
+
+/// 最后兜底：用编辑视图自身的屏幕矩形左上角当锚点。
+///
+/// 宿主连插入点都不给时，候选窗至少出现在编辑区里，而不是"干脆不出现"
+/// （不出现时键已经被吃掉，等于打不了字）。
+fn view_fallback_rect(view: &ITfContextView) -> Option<RECT> {
+    let rect = unsafe { view.GetScreenExt() }.ok()?;
+    let rect = physical_text_rect(view, rect);
+    if rect.bottom <= rect.top {
+        return None;
+    }
+    let left = rect.left;
+    let top = rect.top;
+    Some(RECT {
+        left,
+        top,
+        right: left,
+        bottom: top + 24,
+    })
+}
+
+/// 锚点彻底拿不到时也要发一次布局更新，避免引擎一直以为"几何还在路上"。
+fn send_invalid_layout(probe: &LayoutProbe, token: &ContextToken) -> Result<()> {
+    let update = LayoutUpdate {
+        session_id: probe.state.id,
+        token: Some(token.clone()),
+        revision: Some(probe.state.applied_layout_revision.load(Ordering::Acquire)),
+        mode_indicator_request_id: None,
+        anchor: None,
+    };
+    probe
+        .state
+        .rpc
+        .try_lock()
+        .map_err(|_| Error::from_hresult(boundary::E_FAIL))?
+        .send_layout_update(update);
+    Ok(())
 }
 
 /// 将文本视图返回的宿主 DPI 坐标转换为渲染端使用的物理屏幕像素。

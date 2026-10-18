@@ -700,7 +700,7 @@ impl Painter<'_> {
             if !transparent(label_color) && !row.label.is_null() {
                 let label = self
                     .m
-                    .format_label(&(self.view.page_start + i as u32 + 1).to_string());
+                    .format_label(&(i as u32 + 1).to_string());
                 self.text_out(&row.label, &label, label_color, &self.formats.label)?;
             }
             if !transparent(text_color) {
@@ -850,4 +850,6 @@ impl Painter<'_> {
         }
     }
 }
+
+
 

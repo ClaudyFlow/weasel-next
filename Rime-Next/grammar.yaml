@@ -1,0 +1,24 @@
+# Rime configuration - grammar（语言模型 preset）
+#
+# 供方案里的 `__patch: - grammar:/hans?` / `- grammar:/hant?` 引用。
+# `?` = 本文件不存在时静默跳过（librime 的 optional preset），所以老安装不会因此报错。
+#
+# 这些 preset 会被合并进方案的**根节点**，效果等价于在方案里写：
+#     grammar:
+#       language: zh-hans-t-essay-bgw
+# librime 的 octagram（grammar 组件）在组句/调序时读 `grammar/language`，
+# 然后按 <数据目录>/model/<language>.gram 找模型（用户目录优先，其次程序文件夹）。
+#
+# 模型文件（4 个，放在 %APPDATA%\Rime-Next\model\ 或 <程序>\Rime-Next\model\）：
+#   zh-hans-t-essay-bgw.gram   206 MB   ← 默认用这个（词级，质量最好）
+#   zh-hans-t-essay-bgc.gram    29 MB   ← 字级，小、快，效果弱一些
+#   zh-hant-t-essay-bgw.gram   208 MB
+#   zh-hant-t-essay-bgc.gram    30 MB
+# 换模型只改这里的 language，不用动方案。
+hans:
+  grammar:
+    language: zh-hans-t-essay-bgw
+
+hant:
+  grammar:
+    language: zh-hant-t-essay-bgw

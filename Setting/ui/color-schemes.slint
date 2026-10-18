@@ -222,6 +222,8 @@ export component ColorSchemesPage inherits VerticalBox {
         border-width: 1px;
         border-color: #dadce0;
         background: #ffffff;
+        // 只靠 stretch 吃满剩余高度：写死 min-height 会把整页顶出窗口，
+        // 最后一行被窗口底边裁掉（用户 2026-10-18 报「下面不全」）。
         vertical-stretch: 1;
         ScrollView {
             VerticalBox {

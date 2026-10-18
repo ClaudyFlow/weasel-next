@@ -43,6 +43,10 @@ pub fn apply(ui: &SettingsWindow) {
 /// 非 Win32 句柄或 DWM 调用失败会返回错误；自定义框架安装失败只记录日志，材质
 /// 配置仍视为成功，因为它不影响已完成的 DWM 设置。
 fn configure(window: &slint::winit_030::winit::window::Window) -> Result<(), String> {
+    // 界面底色全部写死浅色（#ffffff 卡片、#f4f5f7 页面），所以调色板必须固定在浅色。
+    // 之前是「跟随系统」：系统切到深色后 Palette.foreground 变白，
+    // 设置页文字变成白底白字、整页看着是空的（2026-10-19 修）。
+    window.set_theme(Some(slint::winit_030::winit::window::Theme::Light));
     let handle = window.window_handle().map_err(|e| e.to_string())?;
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
         return Err("非 Win32 窗口".into());

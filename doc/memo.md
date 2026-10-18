@@ -406,3 +406,86 @@ Lua 插件的落位（按官方约定 ✓）：
 2. 候选窗**先不做真折射**：用 D2D 内置高斯模糊（CLSID_D2D1GaussianBlur）+ 顶部高光 + 边缘亮线，观感即可接近官方，成本几乎为零。
 3. 真要做液态玻璃，再加背景抓取（Windows.Graphics.Capture 抓候选窗背后那条区域），并且**必须节流**，不要每帧全屏抓。
 4. 参数宁保守：候选窗是打字时盯着看的小面板，折射过强直接伤害可读性（苹果自家 Liquid Glass 也因可读性挨过批评）。
+
+## 设置入口与「界面风格 / 方案选单」收进主界面（2026-10-17 23:2x）
+
+* **托盘「设置」= `Weasel-Next-Setting.exe` 无参数 = Slint 主界面**。
+  `Server/src/menu_actions.rs::parameters(SETTINGS)` 故意返回 `None`；`Setting/src/main.rs`
+  里**绝不能**再把无参数改写成 `/switcher`。2026-10-17 之前正是这样：点「设置」弹的是官方
+  方案选单对话框，用户 21:11 报「设置界面没显示，直接是这个」。当时三份检查点都写着
+  「无参数 = Slint 主界面」，与代码**相反** —— 别再凭检查点这句话去改。
+* **界面风格 / 方案选单**从托盘菜单收进主界面顶部「界面与方案」卡片，两个按钮。
+  两者都是官方模板的 Win32 对话框（`DialogBoxParamW`），Slint 事件循环里建不了，
+  按钮回调走 `Setting/src/main.rs::open_official()`：`std::process::Command` 再起一个
+  自身进程，参数分别是 `/style`、`/switcher`。
+* **配色页只该建一次**：`ColorSchemesPage` 原先写在 `for field in visible-fields` 循环里，
+  于是每个字段都渲染一份（截图里一段界面能看到两三个白块）。现在移到滚动区末尾的
+  「配色方案」区，并给它固定高度 —— 竖排 ScrollView 里不给高度，内部配色列表会塌成一行。
+* **`app_options` 的 `inline_preedit` 不能用 `ConfigSnapshot::app_bool`**：它的"全局值"在
+  主题文件（`style/inline_preedit`），宿主配置里没有这个键，`app_bool` 会以
+  `missing required configuration value inline_preedit` 失败 → `State::show()` 整个失败 →
+  主界面停在只读（开关点了不动、保存灰着）。用 `app_option_bool(...).unwrap_or(false)`。
+* **验证口径**：Win32 对话框用 `EnumWindows` 按 PID/类名 `#32770` 查，别按标题猜；
+  主界面截图用 `PrintWindow(PW_RENDERFULLCONTENT)`，滚动不可靠时先向上滚 60 格到顶再点。
+  点按钮前用 `SetForegroundWindow` + `ClientToScreen(0,0)` 换算坐标（图像坐标 ≈ 客户区 + (9,5)）。
+  **2026-10-18 补**：`C:\Code\click.ps1` 的 PostMessage 点击对 Slint 设置窗口**无效**（连点两次页签都没切）；
+  必须用真鼠标事件：`ClientToScreen` 拿客户区原点 → `SetCursorPos` → `mouse_event(LBUTTONDOWN/UP)`。
+
+## 简词 / 语言模型 / 自定义双拼（2026-10-18 核过一遍，记结论）
+
+### 词库没词也能出词 —— 不需要额外实现
+* `luna_pinyin.dict.yaml`（70,771 行）里既有词、也有**单字条目**。实测「没做」**不在词典**，但「没」「做」在；
+  输入 `mei zuo` 照样上屏「没做」——这是 `script_translator` 的**跨字组合**（整串查不到词就切段用单字组合）。
+  ⇒ 用户问的"识别不同字的组合"是 Rime 的既有行为，不用写代码。
+* `eassy`（细胞词库）只影响**排序**：`Rime-Next\eassy\default\default.eassy.toml`（`"〇" = 981` 这种 词→频次）
+  部署时归并成 `eassy\essay.txt`（2026-10-18 实测 5,093,882 字节），作为 `vocabulary` 参与 Grammar 打分，**不产生候选**。
+
+### 简词 = 简拼（用户 2026-10-18 明确要的就是这个）
+* 全拼（`luna_pinyin` / `luna_pinyin_simp`）：`speller/algebra.__patch` 引 `pinyin:/abbreviation`，
+  落到 `Rime-Next\pinyin.yaml` 的 `abbrev/^([a-z]).+$/$1/`（首字母）+ `abbrev/^([zcs]h).+$/$1/`（zh/ch/sh）
+  ⇒ 规则**是通的**（`nh` 应出「你好」）。⚠️ 2026-10-18 尚未实测成功（自动测试切输入法没落到我们的 IME，
+  用 `Win+Space` 时 Win 键本身会被 TIP 记成按键，产生假阳性；判据要用引擎日志里的 `composition=xx`）。
+* 双拼（`double_pinyin_flypy` / `double_pinyin_ziranma`）：生成的 schema 里 `speller/algebra` 是**普通列表**
+  （`__include` 深合并时列表整体替换），只有键位映射，**没有 abbrev ⇒ 双拼没有简拼**。
+  要加得改 `style/src/bin/shuangpin_schema.rs` 的模板，并注意与键位映射的先后顺序冲突（双拼两键 = 一个音节）。
+
+### 语言模型（用户放了 4 个，**一个都没被用上**）
+* 文件在 `%APPDATA%\Rime-Next\model\`（普通目录，**不是**上面说的 junction）：
+  `zh-hans-t-essay-bgw.gram`(206 MB)、`zh-hant-t-essay-bgw.gram`(208 MB)、`zh-hans-t-essay-bgc.gram`(29 MB)、`zh-hant-t-essay-bgc.gram`(30 MB)。
+* 程序文件夹 `Rime-Next\model\` 为空；仓库 `Rime-Next\model\` 不存在。
+* 方案里只有 `__patch: - grammar:/hant?`（**可选**引用），而 **`grammar.yaml` 不存在**（程序文件夹/仓库/官方 data 都没有）
+  ⇒ patch 被跳过 ⇒ `filters` 只有 `simplifier`/`uniquifier`，**没有 grammar** ⇒ 4 个模型完全不参与打分。
+* 接上要做的：新建 `Rime-Next\grammar.yaml`（`hans`/`hant` 两个预设，`language:` 指向上面的名字），
+  并确认 librime 的 grammar 组件怎么定位 `<language>.gram`（搜索路径顺序 / 是否要 `model\` 前缀）、认哪些配置键、filter 注册名。
+  简体方案（`luna_pinyin_simp`）应指向 `hans`（现在从 `luna_pinyin` 继承的是 `hant`）。
+
+### 自定义双拼是怎么做的（已实现，2026-10-18 复核）
+* **唯一手改源**：`Rime-Next\schema\shuangpin\<名字>.toml`（现有 `xiaohe.toml` 小鹤、`ziranma.toml` 自然码）。
+  结构：`[schema]`（`id` / `name` / `version` / `author` / `dict` / `prism` / `simp_option` / `base`）
+  + `[initials]`（只有 `zh` `ch` `sh` 这类两字母声母要写）+ `[finals]`（韵母→键位，**顺序随便写**）。
+* **生成器**：`style/src/bin/shuangpin_schema.rs` → `shuangpin-schema.exe`（随安装包分发）。
+  它把 TOML 的键位填进**固定的 algebra 模板**：规则顺序 = 官方 `rime-double-pinyin` 的顺序，**长韵母必须先于短韵母**
+  （否则 `liang` 会被 `ang` 规则先命中，变成 `lih`）。产物是 `<用户目录>\Rime-Next\schema\<id>\<id>.schema.yaml`。
+  * 找 TOML 的搜索顺序：用户目录 `schema\shuangpin\` → 用户目录 `shuangpin\`（旧位置）→
+    程序文件夹 `Rime-Next\schema\shuangpin\` → 程序文件夹旧位置 → 仓库（开发时兜底）。
+  * 生成的 schema 用 `__include: <base>.schema:/` **深合并**继承 `luna_pinyin_simp` 骨架，
+    只覆盖 `algebra` / `translator` / `simplifier`。
+    ⚠️ 里面**不能**写 `patch:` —— 那是 `.custom.yaml` 专用语法，写进 `.schema.yaml` 会 `invalid schema definition` 导致部署失败。
+* **生效路径**：`script\deploy-install.ps1` 一开头就跑生成器（必须早于部署/编译），
+  然后把 `Rime-Next\schema\double_pinyin*` 目录和 `schema\shuangpin\*.toml` 拷到**用户目录**
+  （TOML 只在目标不存在时拷，避免覆盖用户改过的键位），再跑一次生成器写到用户目录。
+  librime 只认 `.schema.yaml`；同名时**用户目录那份优先**。
+* **改键位的正确姿势**：改 `%APPDATA%\Rime-Next\schema\shuangpin\<名字>.toml` → 设置界面「保存并部署」
+  （或手动跑 `shuangpin-schema.exe`）→ 新键位生效。程序文件夹里那份只是出厂备份。
+* `script\gen-shuangpin.py` 是同一套逻辑的 Python 版，但里面写的是**旧路径** `Rime-Next\shuangpin`（没有 `schema\` 这一层），
+  以 Rust 版为准；两份别同时维护。
+
+## 输入法链路的两条硬约定（2026-10-18 实测定下来）
+
+* **候选窗不能因为拿不到插入点就"吃键不显示"**：引擎在新组合开始时清锚点并等 TIP 送几何（`waiting_for_layout`），
+  等不到就只发"隐藏 + 空列表"帧；而 TIP 以前 `GetTextExt` 一失败就静默不发 ⇒ 某些宿主里打字完全没反应。
+  现在 TIP 按「窄组合范围 → 整个组合范围 → 当前选区 → 视图矩形」逐级兜底，必须一直保留这条退让链。
+* **TIP 的 DLL 是加载进每个宿主进程的**：换了 `Weasel-Next.dll` 后，**打字的那个程序必须关掉重开**才用上新代码
+  （explorer / QQ / 浏览器 / 聊天客户端都算）。
+* **设置界面写的是用户补丁**（`%APPDATA%\Rime-Next\weasel.custom.toml`），引擎读配置时必须**叠加**它，
+  否则界面上关掉的东西不生效（2026-10-18 的「启用声音」就是这么假的：引擎只读程序文件夹的 `weasel.toml`）。

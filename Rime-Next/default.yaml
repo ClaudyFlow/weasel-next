@@ -3,15 +3,14 @@
 
 config_version: '0.40'
 
+# 出厂只带一套方案：明月拼音·简体（luna_pinyin_simp）。
+#
+# 用户要求（2026-10-17）：**不管怎么安装，方案有且只有明月简体** ——
+# 不给"一次全来八个"，也不允许取消到空。其余方案的源文件仍留在
+# `schema\<名字>\` 里（编译词典时会被引用，也便于以后恢复），
+# 但**不在出厂清单里**，所以不会出现在方案菜单、也不会被编译。
 schema_list:
-  - schema: luna_pinyin
   - schema: luna_pinyin_simp
-  - schema: luna_pinyin_fluency
-  - schema: bopomofo
-  - schema: bopomofo_tw
-  - schema: cangjie5
-  - schema: stroke
-  - schema: terra_pinyin
 
 switcher:
   caption: 〔方案選單〕
