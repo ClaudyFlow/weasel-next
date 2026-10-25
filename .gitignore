@@ -9,3 +9,8 @@ plugin/librime/tests/*.exe
 *.bak*
 !Rime-Next/model/*.7z
 !Rime-Next/model/*.7z.*
+
+# librime-next 已独立成库：https://github.com/ClaudyFlow/librime-next
+# 它在本目录里是一个**嵌套 git 仓库**，若被 `git add` 会变成没有 .gitmodules
+# 的 gitlink（父仓库克隆后拉不到内容）。这里显式忽略；需要的话按 submodule 接。
+/librime-next/
