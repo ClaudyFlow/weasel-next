@@ -14,3 +14,9 @@ plugin/librime/tests/*.exe
 # 它在本目录里是一个**嵌套 git 仓库**，若被 `git add` 会变成没有 .gitmodules
 # 的 gitlink（父仓库克隆后拉不到内容）。这里显式忽略；需要的话按 submodule 接。
 /librime-next/
+
+# 目录重组实验的遗留变体（正式文件是 yuhao_pinyin.dict.yaml，权重不同，勿入库）
+Rime-Next/schema/yuhao_pinyin/*.yuhao-folder-variant
+
+# 误放进输入法音效目录的音乐文件（7MB，无任何配置引用；音效目录只放按键音）
+Rime-Next/sound/Smile. DK - Butterfly.mp3

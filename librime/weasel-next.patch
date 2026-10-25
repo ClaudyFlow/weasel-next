@@ -1,16 +1,3 @@
-diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index bfc704f..49fa848 100644
---- a/src/CMakeLists.txt
-+++ b/src/CMakeLists.txt
-@@ -177,7 +177,7 @@ endif()
- 
- # >>> rime-speed-stats input_stat plugin (build-librime-mingw.ps1) >>>
- if(RIME_INPUT_STAT_CORE_LIB)
--  add_subdirectory("C:/code/Weasel-Next/plugin/librime" "${CMAKE_BINARY_DIR}/rime-input-stat")
-+  add_subdirectory("C:/Code/Weasel-Next/plugin/librime" "${CMAKE_BINARY_DIR}/rime-input-stat")
-   target_link_libraries(rime rime-input-stat)  # plain 签名：librime 自己第 84 行用的是 plain
-   # RIME_MODULE_INITIALIZER 在 GCC/Clang 下是 __attribute__((constructor))：只要插件对象
-   # 被链进来，注册就会在 DLL 加载时自动发生。但静态库对象默认不会被拉入（librime 传下来的
 diff --git a/src/rime/core_module.cc b/src/rime/core_module.cc
 index 43c3cb0..b0f84c9 100644
 --- a/src/rime/core_module.cc
@@ -25,66 +12,93 @@ index 43c3cb0..b0f84c9 100644
  
    auto config_builder =
 diff --git a/src/rime/dict/dict_compiler.cc b/src/rime/dict/dict_compiler.cc
-index f8049b0..263f1e4 100644
+index f8049b0..e9356dbd575462c086efafdec7bed77b862efd13 100644
 --- a/src/rime/dict/dict_compiler.cc
 +++ b/src/rime/dict/dict_compiler.cc
-@@ -51,6 +51,26 @@ static bool get_dict_files_from_settings(vector<path>* dict_files,
+@@ -44,14 +44,56 @@ static bool load_dict_settings_from_file(DictSettings* settings,
+   return success;
+ }
+ 
++// [Weasel-Next 补丁] 词典源文件只认分类路径（2026-10-25 起**无扁平回退**，系列文件夹版）：
++//   裸 id    "yuling"       → <root>/schema/yuling/yuling.dict.yaml
++//   裸 id    "yuling.five"  → <root>/schema/yuling/five/yuling.five.dict.yaml
++//   路径风格 "schema/yuhao/yuling.quick"
++//                           → <root>/schema/yuhao/yuling.quick.dict.yaml
++//        （import_tables 允许写显式相对路径；含 '/' 时不套系列规则，2026-10-25）
++// source_resolver 的类型后缀是空串，解析器的归类规则不会命中，故在这里手工算。
++// 系列规则与 resource.cc 的 series_subdir 一致：id 的每个 '.' 对应一级文件夹。
++// 先用户目录后共享目录。找不到返回空路径（调用方负责报错）。
++static path classified_dict_source(const string& dict_name) {
++  const auto file_name = dict_name + ".dict.yaml";
++  const auto& user = Service::instance().deployer().user_data_dir;
++  const auto& shared = Service::instance().deployer().shared_data_dir;
++  const bool explicit_path =
++      dict_name.find('/') != string::npos || dict_name.find('\\') != string::npos;
++  for (const auto* root : {&user, &shared}) {
++    if (root->empty())
++      continue;
++    path nested;
++    if (explicit_path) {
++      nested = *root / file_name;
++    } else {
++      nested = *root / "schema";
++      // 点号分段：每个点号对应一级文件夹（yuling.five → yuling/five）
++      size_t start = 0;
++      for (size_t i = 0; i <= dict_name.size(); ++i) {
++        if (i == dict_name.size() || dict_name[i] == '.') {
++          if (i > start)
++            nested /= dict_name.substr(start, i - start);
++          start = i + 1;
++        }
++      }
++      nested /= file_name;
++    }
++    if (std::filesystem::exists(nested)) {
++      return nested;
++    }
++  }
++  return {};
++}
++
+ static bool get_dict_files_from_settings(vector<path>* dict_files,
+                                          DictSettings& settings,
+                                          ResourceResolver* source_resolver) {
+   if (auto tables = settings.GetTables()) {
      for (auto it = tables->begin(); it != tables->end(); ++it) {
        string dict_name = As<ConfigValue>(*it)->str();
-       auto dict_file = source_resolver->ResolvePath(dict_name + ".dict.yaml");
-+  // [Weasel-Next 补丁] 同 Compile：用户目录没有时去共享数据目录按分类路径找，再退回扁平。
-+  if (!std::filesystem::exists(dict_file)) {
-+    const auto& shared = Service::instance().deployer().shared_data_dir;
-+    if (!shared.empty()) {
-+      auto folder = dict_name;
-+      const auto dot = folder.find_last_of('.');
-+      if (dot != string::npos && dot > 0) {
-+        folder = folder.substr(0, dot);   // cangjie5.base → cangjie5（与解析器的归类规则一致）
-+      }
-+      const auto nested = shared / "schema" / folder / (dict_name + ".dict.yaml");
-+      if (std::filesystem::exists(nested)) {
-+        dict_file = nested;
-+      } else {
-+        const auto flat = shared / (dict_name + ".dict.yaml");
-+        if (std::filesystem::exists(flat)) {
-+          dict_file = flat;
-+        }
-+      }
-+    }
-+  }
-       if (!std::filesystem::exists(dict_file)) {
+-      auto dict_file = source_resolver->ResolvePath(dict_name + ".dict.yaml");
+-      if (!std::filesystem::exists(dict_file)) {
++      auto dict_file = classified_dict_source(dict_name);
++      if (dict_file.empty()) {
++        dict_file = source_resolver->ResolvePath(dict_name + ".dict.yaml");
          LOG(ERROR) << "source file '" << dict_file << "' does not exist.";
          return false;
-@@ -82,6 +102,28 @@ bool DictCompiler::Compile(const path& schema_file) {
+       }
+@@ -81,8 +123,9 @@ bool DictCompiler::Compile(const path& schema_file) {
+   LOG(INFO) << "compiling dictionary for " << schema_file;
    bool build_table_from_source = true;
    DictSettings settings;
-   auto dict_file = source_resolver_->ResolvePath(dict_name_ + ".dict.yaml");
-+  // [Weasel-Next 补丁] 用户目录没有时，去共享数据目录（程序文件夹）按分类路径找：
-+  //   <shared>/schema/<词典>/<词典>.dict.yaml，再退回扁平的 <shared>/<词典>.dict.yaml。
-+  // 原实现只问用户目录，所以"数据只在共享目录 + 分类布局"时永远找不到词典。
-+  if (!std::filesystem::exists(dict_file)) {
-+    const auto& shared = Service::instance().deployer().shared_data_dir;
-+    if (!shared.empty()) {
-+      auto folder = dict_name_;
-+      const auto dot = folder.find_last_of('.');
-+      if (dot != string::npos && dot > 0) {
-+        folder = folder.substr(0, dot);   // cangjie5.base → cangjie5（与解析器的归类规则一致）
-+      }
-+      const auto nested = shared / "schema" / folder / (dict_name_ + ".dict.yaml");
-+      if (std::filesystem::exists(nested)) {
-+        dict_file = nested;
-+      } else {
-+        const auto flat = shared / (dict_name_ + ".dict.yaml");
-+        if (std::filesystem::exists(flat)) {
-+          dict_file = flat;
-+        }
-+      }
-+    }
-+  }
-   if (!std::filesystem::exists(dict_file)) {
+-  auto dict_file = source_resolver_->ResolvePath(dict_name_ + ".dict.yaml");
+-  if (!std::filesystem::exists(dict_file)) {
++  auto dict_file = classified_dict_source(dict_name_);
++  if (dict_file.empty()) {
++    dict_file = source_resolver_->ResolvePath(dict_name_ + ".dict.yaml");
      LOG(ERROR) << "source file '" << dict_file << "' does not exist.";
      build_table_from_source = false;
-@@ -210,6 +252,19 @@ bool DictCompiler::Compile(const path& schema_file) {
+   } else if (!load_dict_settings_from_file(&settings, dict_file)) {
+@@ -164,8 +207,9 @@ bool DictCompiler::Compile(const path& schema_file) {
+     auto pack_table = tables_[table_index];
+     EntryCollector collector(std::move(syllabary));
+     DictSettings settings;
+-    auto dict_file = source_resolver_->ResolvePath(pack_name + ".dict.yaml");
+-    if (!std::filesystem::exists(dict_file)) {
++    auto dict_file = classified_dict_source(pack_name);
++    if (dict_file.empty()) {
++      dict_file = source_resolver_->ResolvePath(pack_name + ".dict.yaml");
+       if (pack_table->Exists())
+         LOG(INFO) << "pack source file '" << dict_file
+                   << "' does not exist, using prebuilt table '"
+@@ -210,6 +254,19 @@ bool DictCompiler::Compile(const path& schema_file) {
  static path relocate_target(const path& source_path,
                              ResourceResolver* target_resolver) {
    auto resource_id = source_path.filename().to_utf8_string();
@@ -118,7 +132,7 @@ index 7131fa8..15fb2cf 100644
  
    r.Register("tabledb", new DbComponent<TableDb>);
 diff --git a/src/rime/lever/deployment_tasks.cc b/src/rime/lever/deployment_tasks.cc
-index 7f4c9b1..74de1ac 100644
+index 7f4c9b1..c821c31a439ad904e52ac419c3e39cc39424f311 100644
 --- a/src/rime/lever/deployment_tasks.cc
 +++ b/src/rime/lever/deployment_tasks.cc
 @@ -25,6 +25,9 @@
@@ -182,6 +196,120 @@ index 7f4c9b1..74de1ac 100644
      build_schema(schema_id);
      the<Config> schema_config(schema_component->Create(schema_id));
      if (!schema_config)
+@@ -247,6 +268,36 @@ bool WorkspaceUpdate::Run(Deployer* deployer) {
+   LOG(INFO) << "finished updating schemas: " << success << " success, "
+             << failure << " failure.";
+ 
++  // [Weasel-Next 补丁] 把 `schema/schema.toml` 的勾选清单**写回**输出配置的 `schema_list`。
++  //
++  // 不加这段的话：`schema_list`（方案菜单 / 轮切用的清单）永远来自出厂 `default.yaml`，
++  // 而"编译哪些方案"来自 `schema.toml` —— **两套数据源**，于是用户在「方案选单设定」里
++  // 勾了方案也切不到、看着像"又变回全选"。
++  //
++  // 时序：本任务在 `WorkspaceUpdate`（生成 build/default.yaml）之后运行，
++  // 所以这里保存不会被覆盖。输出的仍是 `default.yaml`（librime 的编译产物格式），
++  // 但**输入只有 `schema.toml` 一处**，不再需要 `default.custom.yaml` 中转。
++  if (!schema_ids.empty()) {
++    an<ConfigList> list = New<ConfigList>();
++    for (const string& schema_id : schema_ids) {
++      an<ConfigMap> entry = New<ConfigMap>();
++      entry->Set("schema", New<ConfigValue>(schema_id));
++      list->Append(entry);
++    }
++    if (config->SetItem("schema_list", list)) {
++      path output_file = deployer->staging_dir / "default.yaml";
++      if (config->SaveToFile(output_file)) {
++        LOG(INFO) << "[Weasel-Next] schema_list 已按 schema.toml 写回："
++                  << schema_ids.size() << " 项 -> " << output_file.u8string();
++      } else {
++        LOG(WARNING) << "[Weasel-Next] schema_list 写回失败: "
++                     << output_file.u8string();
++      }
++    } else {
++      LOG(WARNING) << "[Weasel-Next] 无法设置 schema_list";
++    }
++  }
++
+   the<Config> user_config(Config::Require("user_config")->Create("user"));
+   // TODO: store as 64-bit number to avoid the year 2038 problem
+   user_config->SetInt("var/last_build_time", (int)time(NULL));
+@@ -451,20 +502,68 @@ bool ConfigFileUpdate::Run(Deployer* deployer) {
+   return true;
+ }
+ 
++// [Weasel-Next 补丁] 分类布局下枚举方案源文件（2026-10-25 系列文件夹版）：
++//   递归扫 <root>/schema/，只认 <系列…>/<id>.schema.yaml，且相对 schema/ 的目录链
++//   必须逐段等于 id 按 '.' 分段：
++//     yuling      → schema/yuling/yuling.schema.yaml
++//     yuling.five → schema/yuling/five/yuling.five.schema.yaml
++//   不等即跳过 —— 少任何一级，该文件任何 ID 都解析不到（解析器按同一恒等式找）。
++//   schema/ 根下的扁平文件同样不认（2026-10-25 起无扁平回退）。
++//   排序只为结果确定（directory_iterator 顺序不保证）。
++static vector<path> classified_schema_sources(const path& root) {
++  vector<path> files;
++  const path schema_dir = root / "schema";
++  std::error_code ec;
++  if (!fs::is_directory(schema_dir, ec))
++    return files;
++  for (fs::recursive_directory_iterator it(schema_dir, ec), end; it != end;
++       it.increment(ec)) {
++    if (ec)
++      break;
++    const path entry(it->path());
++    if (!fs::is_regular_file(entry, ec))
++      continue;
++    const string name = entry.filename().to_utf8_string();
++    const string suffix = ".schema.yaml";
++    if (name.size() <= suffix.size() ||
++        name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
++      continue;
++    const string id = name.substr(0, name.size() - suffix.size());
++    // 期望的目录链：id 按 '.' 分段
++    vector<string> expected;
++    size_t start = 0;
++    for (size_t i = 0; i <= id.size(); ++i) {
++      if (i == id.size() || id[i] == '.') {
++        if (i > start)
++          expected.push_back(id.substr(start, i - start));
++        start = i + 1;
++      }
++    }
++    // 实际目录链：相对 schema/ 的各级目录名
++    const auto rel = fs::relative(entry.parent_path(), schema_dir, ec);
++    if (ec)
++      continue;
++    vector<string> actual;
++    for (const auto& part : rel)
++      actual.push_back(path(part).to_utf8_string());
++    if (actual != expected)
++      continue;  // 文件夹链与文件名主干不符，任何 ID 都解析不到
++    files.push_back(entry);
++  }
++  std::sort(files.begin(), files.end());
++  return files;
++}
++
+ bool PrebuildAllSchemas::Run(Deployer* deployer) {
+   const path shared_data_path(deployer->shared_data_dir);
+   const path user_data_path(deployer->user_data_dir);
+   if (!fs::exists(shared_data_path) || !fs::is_directory(shared_data_path))
+     return false;
+   bool success = true;
+-  for (fs::directory_iterator iter(shared_data_path), end; iter != end;
+-       ++iter) {
+-    path entry(iter->path());
+-    if (boost::ends_with(entry.filename().to_utf8_string(), ".schema.yaml")) {
+-      the<DeploymentTask> t(new SchemaUpdate(entry));
+-      if (!t->Run(deployer))
+-        success = false;
+-    }
++  for (const auto& file : classified_schema_sources(shared_data_path)) {
++    the<DeploymentTask> t(new SchemaUpdate(file));
++    if (!t->Run(deployer))
++      success = false;
+   }
+   return success;
+ }
 diff --git a/src/rime/registry.cc b/src/rime/registry.cc
 index 979396c..b7888ca 100644
 --- a/src/rime/registry.cc
@@ -207,7 +335,7 @@ index 979396c..b7888ca 100644
    if (it == map_.end())
      return;
 diff --git a/src/rime/resource.cc b/src/rime/resource.cc
-index 09a9a5c..e51a1c3 100644
+index 09a9a5c..d274560901c27d21b1642e8d30de2030b561c9b2 100644
 --- a/src/rime/resource.cc
 +++ b/src/rime/resource.cc
 @@ -1,4 +1,4 @@
@@ -216,109 +344,153 @@ index 09a9a5c..e51a1c3 100644
  // Copyright RIME Developers
  // Distributed under the BSD License
  //
-@@ -39,35 +39,87 @@ path ResourceResolver::ResolvePath(const string& resource_id) {
-   // 子目录里没有、扁平位置有时回退扁平 → 兼容旧安装与旧布局。
+@@ -9,6 +9,35 @@
+ 
+ namespace rime {
+ 
++// [Weasel-Next 补丁] 显式路径风格判定：resource_id 里带目录分隔符时，它就是一条
++// 相对路径（import_tables 的 "schema/yuhao/yuling.quick" 写法），不再套分类规则。
++static bool is_explicit_path_id(const string& resource_id) {
++  return resource_id.find('/') != string::npos ||
++         resource_id.find('\\') != string::npos;
++}
++
++// [Weasel-Next 补丁] 系列文件夹链：id 里的每个 '.' 对应一级文件夹。
++//   "yuling"      → "yuling"        （无点号：系列文件夹就是 id 自身）
++//   "yuling.five" → "yuling/five"   （一方案一文件夹，成员再进子文件夹）
++//   "a.b.c"       → "a/b/c"
++// 文件名始终是完整 id（yuling.five.dict.yaml）——文件夹链与文件名主干按点号
++// 一一对应，这个恒等式同时约束解析侧与扫描侧。
++static string series_subdir(const string& resource_id) {
++  string subdir;
++  size_t start = 0;
++  for (size_t i = 0; i <= resource_id.size(); ++i) {
++    if (i == resource_id.size() || resource_id[i] == '.') {
++      if (i > start) {
++        if (!subdir.empty())
++          subdir += "/";
++        subdir += resource_id.substr(start, i - start);
++      }
++      start = i + 1;
++    }
++  }
++  return subdir;
++}
++
+ string ResourceResolver::ToResourceId(const string& file_path) const {
+   string string_path = path(file_path).generic_to_utf8_string();
+   bool has_prefix = boost::starts_with(string_path, type_.prefix);
+@@ -27,50 +56,82 @@ string ResourceResolver::ToFilePath(const string& resource_id) const {
+ }
+ 
+ path ResourceResolver::ResolvePath(const string& resource_id) {
+-  // [Weasel-Next 补丁] 编译产物（*.bin）按方案归入子目录：
+-  //   <root>/<方案>/<方案><后缀>   例如 build/sancang_simp/sancang_simp.table.bin
+-  // 其余资源（*.yaml / *.gram 等）保持扁平，避免影响配置与语言模型查找。
+-  // 子目录里没有、扁平位置有时回退到扁平 → 兼容旧安装。
+-  const auto flat = std::filesystem::absolute(
+-      root_path_ / (type_.prefix + resource_id + type_.suffix));
+-  // [Weasel-Next 补丁] 按内容类型固定子目录（写死在引擎里）：
+-  //   *.bin    → <root>/<方案>/<方案>.<类型>.bin      （编译产物，一方案一文件夹）
+-  //   *.gram   → <root>/model/<名字>.gram             （语言模型，全部放 model/）
+-  // 子目录里没有、扁平位置有时回退扁平 → 兼容旧安装与旧布局。
++  // [Weasel-Next 补丁] 系列文件夹布局（2026-10-25 起**无扁平回退**）：
++  //   ① 显式路径：id 含 '/' 或 '\' → <root>/<id><后缀>，不套分类
++  //        （import_tables 允许写相对路径，如 schema/yuhao/yuling.quick）
++  //   ② *.bin         → <root>/<系列…>/<id><后缀>      （编译产物，staging 根）
++  //   ③ *.gram        → <root>/model/<id><后缀>         （语言模型按 id 平铺，不建系列夹）
++  //   ④ *.schema/.dict→ <root>/schema/<系列…>/<id><后缀>（staging 根去掉 schema/）
++  //   ⑤ *.txt         → <root>/eassy/<id><后缀>         （essay 按 id 平铺，不建系列夹）
++  //   ⑥ *.theme.toml  → <root>/theme/<系列…>/<id><后缀>
++  //   ⑦ *.lua         → <root>/plugin/<id>/<id>.lua
++  //        （rime-lua 实际走 package.path：plugin/<系列>/<叶子>.lua，点号即目录；
++  //         此分支暂无调用方，保持原样）
++  //   未归类资源（default.yaml / installation.yaml / *.custom.yaml 等根级配置）
++  //        → <root>/<id><后缀>
++  // 系列分层：id 按 '.' 分段，每个点号一级文件夹，文件名始终是完整 id：
++  //   yuling       → schema/yuling/yuling.schema.yaml
++  //   yuling.five  → schema/yuling/five/yuling.five.dict.yaml
++  //   a.b.c        → schema/a/b/c/a.b.c.schema.yaml
++  // 恒等式：文件夹链 == id 按点号分段。少任何一级，该资源任何 ID 都解析不到；
++  // 没有回退，文件必须待在既定子目录里，防止有人乱放。
++  if (is_explicit_path_id(resource_id)) {
++    return std::filesystem::absolute(root_path_ / (type_.prefix + resource_id +
++                                                   type_.suffix));
++  }
    auto subdir = std::string();
    const auto& sfx = type_.suffix;
--  if (boost::ends_with(sfx, ".bin")) {
++  // [Weasel-Next 补丁] staging 根（部署产物目录 build/）判定，兼容尾斜杠写法。
++  std::string root_text = root_path_.generic_string();
++  while (!root_text.empty() &&
++         (root_text.back() == '/' || root_text.back() == '\\')) {
++    root_text.pop_back();
++  }
++  const bool is_staging_root =
++      root_path_.filename() == "build" || boost::ends_with(root_text, "/build");
+   if (boost::ends_with(sfx, ".bin")) {
 -    subdir = resource_id;                       // build/<方案>/
--  } else if (boost::ends_with(sfx, ".gram")) {
++    subdir = series_subdir(resource_id);        // build/<系列…>/<id>.bin
+   } else if (boost::ends_with(sfx, ".gram")) {
 -    subdir = "model";                           // model/
--  } else if (boost::ends_with(sfx, ".schema.yaml") ||
--             boost::ends_with(sfx, ".dict.yaml")) {
++    subdir = "model";                           // model/<id>.gram（语言模型按 id 平铺）
++  } else if (sfx == ".yaml" && (boost::ends_with(resource_id, ".schema") ||
++                                boost::ends_with(resource_id, ".dict"))) {
++    // [Weasel-Next 补丁] SchemaComponent 请求 "<id>.schema"（后缀是 .yaml）时也要分目录，
++    // 否则 nested 源配置永远找不到。stem 去掉 .schema/.dict 再按系列分层：
++    //   yuling.five.schema → schema/yuling/five/yuling.five.schema.yaml
++    const std::string stem = resource_id.substr(0, resource_id.find_last_of('.'));
++    const std::string leaf = stem.empty() ? resource_id : stem;
++    subdir = (is_staging_root ? std::string() : "schema/") + series_subdir(leaf);
+   } else if (boost::ends_with(sfx, ".schema.yaml") ||
+              boost::ends_with(sfx, ".dict.yaml")) {
 -    subdir = "schema/" + resource_id;           // schema/<名字>/
--  } else if (boost::ends_with(sfx, ".txt")) {
++    // 后缀自带 .schema.yaml/.dict.yaml 时资源 id 是裸 id，系列链按整个 id 分段：
++    //   yuling.five → schema/yuling/five/yuling.five.schema.yaml
++    subdir = (is_staging_root ? std::string() : "schema/") +
++             series_subdir(resource_id);
+   } else if (boost::ends_with(sfx, ".txt")) {
 -    subdir = "dict";                            // dict/（essay 等文本词库）
--  } else if (boost::ends_with(sfx, ".lua")) {
++    subdir = "eassy";                           // eassy/<id>.txt（essay 按 id 平铺）
++  } else if (boost::ends_with(sfx, ".theme.toml")) {
++    subdir = "theme/" + series_subdir(resource_id);  // theme/<系列…>/
+   } else if (boost::ends_with(sfx, ".lua")) {
 -    subdir = "plugin";                          // plugin/（脚本）
--  }
-+  // [Weasel-Next 补丁] 根判定：编译产物目录（…/build）不套用 schema/<名字>/ 分类规则。
-+  // 原因：引擎要求 <staging>/<方案>.schema.yaml 保持扁平；分类布局只用于"源"根
-+  //（用户目录 Rime-Next、程序目录 Rime-Next 的 schema/<名字>/<方案>.schema.yaml）。
-+    const bool is_staging_root = root_path_.filename() == "build";
-+    if (boost::ends_with(sfx, ".bin")) {
-+      subdir = resource_id;                      // build/<方案>/
-+    } else if (boost::ends_with(sfx, ".gram")) {
-+      subdir = "model/" + resource_id;            // model/<名字>/
-+    } else if (!is_staging_root && sfx == ".yaml" &&
-+               (boost::ends_with(resource_id, ".schema") ||
-+                boost::ends_with(resource_id, ".dict"))) {
-+      // [Weasel-Next 补丁] 配置层请求 "<方案>.schema" / "<词典>.dict"：类型后缀是 ".yaml"，
-+      // 必须单独判断，否则归类规则不会命中（SchemaComponent::Create 走的就是这条路）。
-+      const std::string stem = resource_id.substr(0, resource_id.find_last_of('.'));
-+      // [Weasel-Next 补丁] 部署目录（build/）里按**方案名**分类，内部不再分层：
-+      //   build/<方案>/<方案>.schema.yaml 与 <方案>.table.bin 等放在同一层。
-+      // 源目录（程序文件夹/用户目录）仍然按 <类型>/<名字>/ 分类。
-+      const std::string leaf = stem.empty() ? resource_id : stem;
-+      subdir = "schema/" + leaf;   // staging 与源目录都按 <类型>/<名字>/
-+    } else if (!is_staging_root && (boost::ends_with(sfx, ".schema.yaml") ||
-+               boost::ends_with(sfx, ".dict.yaml"))) {
-+      // [Weasel-Next 补丁] resource_id 自带后缀（luna_pinyin.schema.yaml），
-+      // 目录名必须去掉后缀，否则会拼出 schema/luna_pinyin.schema.yaml/… 这种不存在的路径。
-+      const std::string stem = resource_id.substr(0, resource_id.find_last_of('.'));
-+      // [Weasel-Next 补丁] 部署目录（build/）里按**方案名**分类，内部不再分层：
-+      //   build/<方案>/<方案>.schema.yaml 与 <方案>.table.bin 等放在同一层。
-+      // 源目录（程序文件夹/用户目录）仍然按 <类型>/<名字>/ 分类。
-+      const std::string leaf = stem.empty() ? resource_id : stem;
-+      subdir = "schema/" + leaf;   // staging 与源目录都按 <类型>/<名字>/
-+    } else if (boost::ends_with(sfx, ".txt")) {
-+      subdir = "eassy";                           // eassy/（essay.txt 等生成物）
-+    } else if (boost::ends_with(sfx, ".theme.toml")) {
-+      subdir = "theme/" + resource_id;            // theme/<名字>/
-+    } else if (boost::ends_with(sfx, ".lua")) {
-+      subdir = "plugin/" + resource_id;           // plugin/<名字>/
-+    }
++    subdir = "plugin/" + resource_id;           // plugin/<名字>/
+   }
++  const auto file_name = type_.prefix + resource_id + type_.suffix;
    if (!subdir.empty()) {
      // 没有回退：文件必须待在既定子目录里，防止有人乱放 ✓
-     if (boost::ends_with(sfx, ".bin") || boost::ends_with(sfx, ".gram")) {
-+      LOG(INFO) << "[Weasel-Next] early root=" << root_path_.string()
-+                << " id=" << resource_id << " sfx=" << sfx
-+                << " subdir=" << subdir << " staging=" << is_staging_root
-+                << " -> " << (root_path_ / subdir / (type_.prefix + resource_id + type_.suffix)).string();
-       return std::filesystem::absolute(
-           root_path_ / subdir / (type_.prefix + resource_id + type_.suffix));
-     }
-+      LOG(INFO) << "[Weasel-Next] resolve root=" << root_path_.string()
-+                << " id=" << resource_id << " sfx=" << sfx
-+                << " subdir=" << subdir << " staging=" << is_staging_root;
-     const auto nested = std::filesystem::absolute(
-         root_path_ / subdir / (type_.prefix + resource_id + type_.suffix));
+-    if (boost::ends_with(sfx, ".bin") || boost::ends_with(sfx, ".gram")) {
+-      return std::filesystem::absolute(
+-          root_path_ / subdir / (type_.prefix + resource_id + type_.suffix));
+-    }
+-    const auto nested = std::filesystem::absolute(
+-        root_path_ / subdir / (type_.prefix + resource_id + type_.suffix));
 -    if (std::filesystem::exists(nested) || !std::filesystem::exists(flat)) {
 -      return nested;
 -    }
-+      LOG(INFO) << "[Weasel-Next] nested=" << nested.string()
-+                << " nested_exists=" << std::filesystem::exists(nested)
-+                << " flat=" << flat.string()
-+                << " flat_exists=" << std::filesystem::exists(flat);
-+      // [Weasel-Next 补丁] 分三种情况返回，绝不返回"不存在的路径"：
-+      // 返回不存在的路径会中断 librime 的数据目录回退链，导致共享目录里的
-+      // 分类方案永远读不到（用户目录问一次就判定缺失）。
-+      if (std::filesystem::exists(nested)) {
-+        return nested;
-+      }
-+      if (std::filesystem::exists(flat)) {
-+        return flat;
-+      }
-+      return {};   // 两侧都没有：交回上层，继续尝试下一个数据目录
++    return std::filesystem::absolute(root_path_ / subdir / file_name);
    }
-   return flat;
+-  return flat;
++  // 未归类资源（default.yaml / installation.yaml 等）保持根目录位置。
++  return std::filesystem::absolute(root_path_ / file_name);
  }
  
  path FallbackResourceResolver::ResolvePath(const string& resource_id) {
    auto default_path = ResourceResolver::ResolvePath(resource_id);
+-  if (!std::filesystem::exists(default_path)) {
+-    auto fallback_path = std::filesystem::absolute(
+-        fallback_root_path_ / (type_.prefix + resource_id + type_.suffix));
 +  // [Weasel-Next 补丁] 本根没有时，去回退根（共享数据目录）用**同一套分类规则**再解析一次。
-+  // 原实现是直接拼扁平名字，分类布局（schema/<方案>/<方案>.schema.yaml）永远找不到。
++  // 2026-10-25：同时删掉原来"直接在回退根拼扁平名字"的分支 —— 分类布局下它不该
++  // 命中，留着就等于给旧布局留后门。
 +  if (!std::filesystem::exists(default_path) && !fallback_root_path_.empty()) {
 +    ResourceResolver fallback_resolver(type_);
 +    fallback_resolver.set_root_path(fallback_root_path_);
 +    auto fallback_path = fallback_resolver.ResolvePath(resource_id);
-+    if (std::filesystem::exists(fallback_path)) {
-+      return fallback_path;
-+    }
-+  }
-   if (!std::filesystem::exists(default_path)) {
-     auto fallback_path = std::filesystem::absolute(
-         fallback_root_path_ / (type_.prefix + resource_id + type_.suffix));
+     if (std::filesystem::exists(fallback_path)) {
+       return fallback_path;
+     }
 diff --git a/src/rime/switcher.cc b/src/rime/switcher.cc
 index d283a92..4a6caea 100644
 --- a/src/rime/switcher.cc
@@ -351,6 +523,98 @@ index d283a92..4a6caea 100644
    auto schema_list = config->GetList("schema_list");
    if (!schema_list)
      return 0;
+diff --git a/src/rime/lever/switcher_settings.cc b/src/rime/lever/switcher_settings.cc
+index 7daa6d90839b5d7bf0d8ba5c10c2f56e68ebe2ac..885565457bd6b78ae2b1f05c1b952599851ac1d5 100644
+--- a/src/rime/lever/switcher_settings.cc
++++ b/src/rime/lever/switcher_settings.cc
+@@ -4,6 +4,7 @@
+ //
+ // 2012-02-18 GONG Chen <chen.sst@gmail.com>
+ //
++#include <algorithm>
+ #include <utility>
+ #include <boost/algorithm/string.hpp>
+ #include <filesystem>
+@@ -46,16 +47,66 @@ bool SwitcherSettings::SetHotkeys(const string& hotkeys) {
+   return false;
+ }
+ 
++// [Weasel-Next 补丁] 分类布局下枚举方案源文件（2026-10-25 系列文件夹版）：
++//   递归扫 <root>/schema/，只认 <系列…>/<id>.schema.yaml，且相对 schema/ 的目录链
++//   必须逐段等于 id 按 '.' 分段：
++//     yuling      → schema/yuling/yuling.schema.yaml
++//     yuling.five → schema/yuling/five/yuling.five.schema.yaml
++//   不等即跳过 —— 少任何一级，该文件任何 ID 都解析不到（解析器按同一恒等式找）。
++//   schema/ 根下的扁平文件同样不认（2026-10-25 起无扁平回退）。
++//   排序只为结果确定（directory_iterator 顺序不保证）。
++static vector<path> classified_schema_sources(const path& root) {
++  vector<path> files;
++  const path schema_dir = root / "schema";
++  std::error_code ec;
++  if (!fs::is_directory(schema_dir, ec))
++    return files;
++  for (fs::recursive_directory_iterator it(schema_dir, ec), end; it != end;
++       it.increment(ec)) {
++    if (ec)
++      break;
++    const path entry(it->path());
++    if (!fs::is_regular_file(entry, ec))
++      continue;
++    const string name = entry.filename().to_utf8_string();
++    const string suffix = ".schema.yaml";
++    if (name.size() <= suffix.size() ||
++        name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
++      continue;
++    const string id = name.substr(0, name.size() - suffix.size());
++    // 期望的目录链：id 按 '.' 分段
++    vector<string> expected;
++    size_t start = 0;
++    for (size_t i = 0; i <= id.size(); ++i) {
++      if (i == id.size() || id[i] == '.') {
++        if (i > start)
++          expected.push_back(id.substr(start, i - start));
++        start = i + 1;
++      }
++    }
++    // 实际目录链：相对 schema/ 的各级目录名
++    const auto rel = fs::relative(entry.parent_path(), schema_dir, ec);
++    if (ec)
++      continue;
++    vector<string> actual;
++    for (const auto& part : rel)
++      actual.push_back(path(part).to_utf8_string());
++    if (actual != expected)
++      continue;  // 文件夹链与文件名主干不符，任何 ID 都解析不到
++    files.push_back(entry);
++  }
++  std::sort(files.begin(), files.end());
++  return files;
++}
++
+ void SwitcherSettings::GetAvailableSchemasFromDirectory(const path& dir) {
+   if (!fs::exists(dir) || !fs::is_directory(dir)) {
+     LOG(INFO) << "directory '" << dir << "' does not exist.";
+     return;
+   }
+-  for (fs::directory_iterator it(dir), end; it != end; ++it) {
+-    path file_path(it->path());
+-    if (boost::ends_with(file_path.to_utf8_string(), ".schema.yaml")) {
+-      Config config;
+-      if (config.LoadFromFile(file_path)) {
++  for (const auto& file_path : classified_schema_sources(dir)) {
++    Config config;
++    if (config.LoadFromFile(file_path)) {
+         SchemaInfo info;
+         // required properties
+         if (!config.GetString("schema/schema_id", &info.schema_id))
+@@ -89,7 +140,6 @@ void SwitcherSettings::GetAvailableSchemasFromDirectory(const path& dir) {
+         info.file_path = file_path.string();
+         available_.push_back(info);
+       }
+-    }
+   }
+ }
+ 
 diff --git a/src/rime/toml_lite.cc b/src/rime/toml_lite.cc
 new file mode 100644
 index 0000000..b6c43ce

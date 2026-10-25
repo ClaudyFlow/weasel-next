@@ -45,7 +45,7 @@ ve = "t"
 # 鼻韵母
 an = "j"      # 同小鹤
 en = "f"      # 同小鹤
-in = "c"      # 小鹤是 b
+in = "n"      # 小鹤是 b（自然码 in 在 n 键）
 un = "p"      # 小鹤是 y
 ang = "h"     # 同小鹤
 eng = "g"     # 同小鹤
@@ -54,7 +54,7 @@ ong = "s"     # 同小鹤
 
 # 三字母韵母
 ia  = "w"     # 小鹤是 x
-iao = "n"     # 同小鹤
+iao = "c"     # 小鹤是 n（自然码 iao 在 c 键）
 ian = "m"     # 同小鹤
 iang = "d"    # 小鹤是 l
 iong = "s"

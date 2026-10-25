@@ -38,3 +38,23 @@ key_binder:
 __patch:
   # 语言模型：简体方案用 hans 预设（grammar.yaml），覆盖从 luna_pinyin 继承来的 hant
   - grammar:/hans?
+
+# ★ 语言模型（2026-10-18 原型）——不依赖 grammar.yaml 是否存在，直接内联。
+#
+# 背景：luna_pinyin 那边的 `__patch: - grammar:/hant?` 指向一个**不存在的**
+# grammar.yaml，整个 patch 被静默跳过 ⇒ filters 里只有 simplifier/uniquifier，
+# 用户放的 4 个 .gram 一个都没参与打分。这里按 Rime 的标准写法内联：
+#   language = <模型文件名去掉 .gram>，grammar 组件按它去找 <language>.gram
+#   模型位置 = <程序文件夹>\Rime-Next\model\<language>.gram（备选 -bgc 背景模型）
+grammar:
+  language: zh-hans-t-essay-bgw
+  collocation_max_length: 5
+  collocation_min_length: 2
+  collocation_penalty: -12
+  non_collocation_penalty: -12
+  weak_collocation_penalty: -24
+  rear_penalty: -18
+  top_penalty: -30
+
+filters/+:
+  - grammar

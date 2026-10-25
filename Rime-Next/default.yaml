@@ -11,6 +11,10 @@ config_version: '0.40'
 # 但**不在出厂清单里**，所以不会出现在方案菜单、也不会被编译。
 schema_list:
   - schema: luna_pinyin_simp
+  # 五笔86（2026-10-18 用户要试「形码整句」时加入）。
+  # ⚠️ 这里才是 librime 的**总登记表**：只写进用户 `schema.toml` 是不够的，
+  # 引擎会报「schema.toml 里的方案当前不可用」并保留原方案。
+  - schema: wubi86
 
 switcher:
   caption: 〔方案選單〕

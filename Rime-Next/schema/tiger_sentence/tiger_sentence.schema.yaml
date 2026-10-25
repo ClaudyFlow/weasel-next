@@ -1,0 +1,110 @@
+# encoding: utf-8
+schema:
+  schema_id: tiger_sentence
+  name: 虎整句
+  version: "1.6.20261010.1"
+  author:
+    - TigerClaw
+  description: |
+    从虎整句常用字词表生成的变长整句方案。
+    码表/字频/白名单为明文 txt（tiger_sentence.codes.txt 等），运行时加载，
+    不使用 Rime 词典文件或用户覆盖层；可直接替换以导入其它形码方案。
+    整个输入由一个词条完整匹配时，候选菜单保留全部名次供手选。
+    自动选重最低码数默认为 3：分段路径中的非首选单字至少三码才按语言模型分数竞争，
+    非首选多字词仍必须显式选重；分号/引号/数字写入编码选重。
+    首次输入时用 Lua 分页加载 models/sentence-fivegram-mobile.bin 做五阶 Kneser-Ney 打分。
+    形码证据和紧凑词先验仅重排现有候选，不进入自动上屏置信度。
+
+switches:
+  - name: ascii_mode
+    reset: 0
+    states: [ 中文, 西文 ]
+  - name: ascii_punct
+    states: [ 。，, ．， ]
+  - name: full_shape
+    states: [ 半角, 全角 ]
+  - name: tiger_sentence_early_commit
+    states: [ 提前上屏关, 提前上屏开 ]
+  - name: tiger_sentence_early_commit_to_preedit
+    states: [ 提前上屏至应用, 提前上屏至编码 ]
+  - options: [ tiger_sentence_correction_off, tiger_sentence_correction_weak, tiger_sentence_correction_medium, tiger_sentence_correction_strong ]
+    states: [ 按键纠错关, 按键纠错弱, 按键纠错中, 按键纠错强 ]
+    abbrev: [ 关, 弱, 中, 强 ]
+engine:
+  processors:
+    - lua_processor@tiger_sentence_ascii
+    - recognizer
+    - lua_processor@tiger_sentence_processor
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentors:
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - punct_translator
+    - lua_translator@tiger_sentence_translator
+  filters:
+    - lua_filter@tiger_sentence_buffer_filter
+
+speller:
+  alphabet: "zyxwvutsrqponmlkjihgfedcba;';0123456789~"
+  initials: "abcdefghijklmnopqrstuvwxyz~"
+  delimiter: " "
+  auto_select: false
+
+menu:
+  page_size: 5
+
+tiger_sentence:
+  # Default distribution profile; override with balanced in a custom patch if needed.
+  memory_profile: compact
+  # First-use defaults only. Explicit choices persist across input sessions.
+  option_defaults:
+    tiger_sentence_early_commit: true
+    tiger_sentence_early_commit_to_preedit: false
+    # Legacy default retained for compatibility; true maps to medium.
+    tiger_sentence_key_correction: false
+    # Optional first-use override: off / weak / medium / strong.
+    # tiger_sentence_correction_level: medium
+  # Learn submitted candidate corrections (direct taps and Tab selections).
+  tab_learning: true
+  # 提前上屏与空码自动上屏共用的最短保留编码数；0 表示不额外限制。
+  # 概率型提前上屏仍永远不少于 3。
+  min_retained_raw_length: 0
+  # 高频字仅使用最优码组句的字数上限；0 表示全部放开非最优码。
+  high_freq_limit: 1500
+  # 自动选重最低码数：分段非首选单字的编码至少达到此值才可省略选重键。
+  # 默认 3，整数范围 0～128；0 禁用。首选、显式选重和整段候选菜单不受此限制。
+  auto_select_min_code_length: 3
+
+key_binder:
+  bindings:
+    - { when: has_menu, accept: Tab, send: Down }
+    - { when: has_menu, accept: Shift+Tab, send: Up }
+    - { when: paging, accept: minus, send: Page_Up }
+    - { when: has_menu, accept: equal, send: Page_Down }
+
+punctuator:
+  # Disable Rime's pending ASCII number-separator candidates (e.g. 1 + comma).
+  # Lua already handles decimal points; other punctuation follows symbols.yaml.
+  digit_separators: ""
+  # Use the user's symbols.yaml punctuation table. Scalar/{commit: ...}
+  # entries commit directly; list entries intentionally open a symbol menu.
+  import_preset: symbols
+
+recognizer:
+  import_preset: default
+
+ascii_composer:
+  good_old_caps_lock: true
+  switch_key:
+    Caps_Lock: clear
+    Shift_L: commit_code
+    Shift_R: commit_code
+    Control_L: noop
+    Control_R: noop
