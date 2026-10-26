@@ -1,9 +1,9 @@
 //! 管理 librime 动态库、引擎实例与输入会话，并将宿主事件和引擎状态相互转换。
 
-/// 把 `<shared>/eassy/**/*.eassy.toml` 与 `<user>/eassy/**/*.eassy.toml`（若存在）归并成
+/// 把 `<shared>/eassy/**/*.eassy.yaml` 与 `<user>/eassy/**/*.eassy.yaml`（若存在）归并成
 /// `essay.txt`（librime 的 preset vocabulary 只认这个 txt）。
 ///
-/// 布局约定：`eassy\` 里放 TOML 源；`essay.txt` 是**部署产物**。安装后程序文件夹是
+/// 布局约定：`eassy\` 里放 YAML 源；`essay.txt` 是**部署产物**。安装后程序文件夹是
 /// 只读的（普通用户写会得到"拒绝访问"），所以先试程序文件夹、写不动就落到**用户目录**
 /// `<user>/eassy/essay.txt` —— librime 解析资源时用户目录优先，两处都能被认到。
 ///
@@ -26,7 +26,7 @@ fn generate_essay_txt(shared_dir: &std::path::Path, user_dir: &std::path::Path) 
         }
     }
     if merged.is_empty() {
-        tracing::warn!("eassy: 没有找到任何 *.eassy.toml，essay.txt 未生成");
+        tracing::warn!("eassy: 没有找到任何 *.eassy.yaml，essay.txt 未生成");
         return;
     }
     let rendered = weasel_common::eassy::render_essay_txt(&merged);
@@ -43,7 +43,7 @@ fn generate_essay_txt(shared_dir: &std::path::Path, user_dir: &std::path::Path) 
         match weasel_common::eassy::write_essay_bytes(&target, &rendered) {
             Ok(()) => {
                 tracing::info!(
-                    "eassy: 已由 TOML 归并生成 {}（{} 条）",
+                    "eassy: 已由 YAML 归并生成 {}（{} 条）",
                     target.display(),
                     merged.len()
                 );
@@ -67,7 +67,7 @@ mod raw;
 use std::{
     ffi::{CStr, CString},
     mem::size_of,
-    path::Path,
+    path::{Path, PathBuf},
     rc::Rc,
 };
 
@@ -156,13 +156,30 @@ struct RimeLibraryApi {
     api: Rc<raw::RimeApi>,
 }
 
+/// 引擎 DLL 的文件名:Rust 引擎(librime-next)装在专属名 `rime-next.dll` 下,
+/// 旧的 `rime.dll` 槽位留给 C++ 引擎/旧部署脚本(`deploy-rime.ps1` 会拿
+/// `C:\code\librime` 的产物覆盖它)——名字分家后,谁动 `rime.dll` 都碰不到输入法。
+///
+/// 探测顺序:`rime-next.dll` 存在就用它;否则回退 `rime.dll`(兼容尚未更新的安装)。
+const RIME_DLL_NEXT: &str = "rime-next.dll";
+const RIME_DLL_LEGACY: &str = "rime.dll";
+
+fn engine_dll_path(base_dir: &Path) -> PathBuf {
+    let next = base_dir.join(RIME_DLL_NEXT);
+    if next.is_file() {
+        next
+    } else {
+        base_dir.join(RIME_DLL_LEGACY)
+    }
+}
+
 impl Librime {
-    /// 加载并初始化 `base_dir/rime.dll`，配置共享数据和用户数据目录。
+    /// 加载并初始化引擎 DLL(`rime-next.dll`,缺位时回退 `rime.dll`),配置共享数据和用户数据目录。
     ///
     /// DLL、API 表、路径或必需入口不可用时返回错误。成功后返回的引擎由其会话
     /// 共同持有；最后一个持有者释放时调用 `finalize` 并卸载 DLL。
     pub fn load(base_dir: &Path, user_data_dir: &Path) -> Result<Self, String> {
-        // 由 eassy/**/*.eassy.toml 归并生成 essay.txt（仓库只放 TOML，txt 是部署产物）
+        // 由 eassy/**/*.eassy.yaml 归并生成 essay.txt（仓库只放 YAML，txt 是部署产物）
         generate_essay_txt(&base_dir.join("Rime-Next"), user_data_dir);
         // 顺手清掉用户根目录里遗留的扁平 yaml/编译产物（分类副本存在时才算重复品）
         match weasel_common::rime_layout::cleanup_flat_sources(user_data_dir) {
@@ -186,7 +203,7 @@ impl Librime {
                 Err(error) => tracing::warn!("rime_layout: 规范化 {} 失败: {error}", root.display()),
             }
         }
-        let library = RimeLibrary::load(&base_dir.join("rime.dll"))?;
+        let library = RimeLibrary::load(&engine_dll_path(base_dir))?;
         let api = unsafe { RimeLibraryApi::load(library.api().as_ptr(), false)? };
         let app_name = CString::new("rime.weasel-next").expect("static app name has no NUL");
         let shared_data_dir = CString::new(base_dir.join("Rime-Next").to_string_lossy().as_bytes())
@@ -219,7 +236,7 @@ impl Librime {
     /// 成功完成部署后先调用 `finalize` 再返回；部署函数返回非真值、必需入口
     /// 缺失或加载/路径配置失败时返回错误。
     pub fn deploy(base_dir: &Path, user_data_dir: &Path) -> Result<(), String> {
-        // 由 eassy/**/*.eassy.toml 归并生成 essay.txt（仓库只放 TOML，txt 是部署产物）
+        // 由 eassy/**/*.eassy.yaml 归并生成 essay.txt（仓库只放 YAML，txt 是部署产物）
         generate_essay_txt(&base_dir.join("Rime-Next"), user_data_dir);
         for root in [base_dir.join("Rime-Next"), user_data_dir.to_path_buf()] {
             match weasel_common::rime_layout::normalize(&root) {
@@ -233,7 +250,7 @@ impl Librime {
                 Err(error) => tracing::warn!("rime_layout: 规范化 {} 失败: {error}", root.display()),
             }
         }
-        let library = RimeLibrary::load(&base_dir.join("rime.dll"))?;
+        let library = RimeLibrary::load(&engine_dll_path(base_dir))?;
         let api = unsafe { RimeLibraryApi::load(library.api().as_ptr(), true)? };
         let app_name = CString::new("rime.weasel-next").expect("static app name has no NUL");
         let shared_data_dir = CString::new(base_dir.join("Rime-Next").to_string_lossy().as_bytes())
@@ -570,6 +587,9 @@ impl RimeSession {
                     response.raw_input = Some(c_string(get_input(self.id)));
                 }
             }
+            // 方案 C：自定义双拼解析器接管「预编辑显示」（必须放在 raw_input 赋值之后）
+            let schema_id = self.current_schema().unwrap_or_default();
+            rewrite_double_pinyin_preedit(&mut response, &schema_id);
             response
         }
     }
@@ -861,4 +881,76 @@ unsafe fn c_string(pointer: *const std::os::raw::c_char) -> String {
         return String::new();
     }
     unsafe { CStr::from_ptr(pointer).to_string_lossy().into_owned() }
+}
+
+/// 读 `%APPDATA%\Rime-Next\schema\schema.yaml` 里的 `active: "..."`。
+fn active_schema_name(user_data: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(user_data.join("schema").join("schema.yaml")).ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("active") {
+            let rest = rest.trim_start().strip_prefix(':')?.trim();
+            let rest = rest.trim_matches('"');
+            if !rest.is_empty() {
+                return Some(rest.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// 自定义双拼解析器接管预编辑显示（用户 2026-10-19 方案 C：不动 librime、不动 schema 文件）。
+///
+/// 双拼方案的 `preedit_format` 是「每音节 2 键」假设下的正则；用户按全拼打就会显示成
+/// `qiinengk` 这种乱码。这里改用 `shuangpin_parse` 解析原始按键串（`raw_input`），
+/// 只覆盖**显示**，不影响 rime 的查词与上屏。
+fn rewrite_double_pinyin_preedit(response: &mut KeyEventResponse, schema_id: &str) {
+    // 诊断：确认这个函数真的被调用
+    {
+        use std::io::Write as _;
+        if let Ok(mut handle) = std::fs::OpenOptions::new().create(true).append(true)
+            .open(std::env::temp_dir().join("weasel-preedit.log"))
+        {
+            let _ = writeln!(handle, "call raw={:?} composition={:?}", response.raw_input, response.composition);
+        }
+    }
+    use std::sync::{Mutex, OnceLock};
+    let Some(raw) = response.raw_input.clone() else { return; };
+    if raw.is_empty() || response.composition.is_empty() {
+        return;
+    }
+    let Some(paths) = weasel_common::process::RuntimePaths::discover().ok() else { return; };
+    let yaml_name = match schema_id {
+        "double_pinyin_flypy" => "xiaohe.yaml",
+        "double_pinyin_ziranma" => "ziranma.yaml",
+        _ => return,
+    };
+    let dir = paths.user_data.join("schema").join("shuangpin");
+    let scheme_path = dir.join(yaml_name);
+    let mtime = std::fs::metadata(&scheme_path).and_then(|m| m.modified()).ok();
+    static CACHE: OnceLock<Mutex<Option<(String, Option<std::time::SystemTime>, weasel_style::shuangpin_parse::Scheme)>>> =
+        OnceLock::new();
+    let cell = CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = match cell.lock() { Ok(g) => g, Err(p) => p.into_inner() };
+    let stale = match guard.as_ref() {
+        Some((name, stamp, _)) => name != yaml_name || *stamp != mtime,
+        None => true,
+    };
+    if stale {
+        let Ok(scheme_text) = std::fs::read_to_string(&scheme_path) else { return; };
+        let Ok(syllables_text) = std::fs::read_to_string(dir.join("syllables.txt")) else { return; };
+        match weasel_style::shuangpin_parse::Scheme::from_parts(&scheme_text, &syllables_text) {
+            Ok(scheme) => *guard = Some((yaml_name.to_string(), mtime, scheme)),
+            Err(_) => return,
+        }
+    }
+    let text = match guard.as_ref() {
+        Some((_, _, scheme)) => scheme.full_pinyin(&raw),
+        None => return,
+    };
+    drop(guard);
+    if !text.is_empty() && text != response.composition {
+        response.composition = text;
+        response.composition_cursor = response.composition.encode_utf16().count() as u32;
+    }
 }
