@@ -1,4 +1,4 @@
-# Internal native ASCII-composer configuration. Do not add to schema_list.
+# Rime Schema
 # encode: utf-8
 # newline: lf
 schema:

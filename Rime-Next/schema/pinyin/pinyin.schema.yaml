@@ -1,6 +1,7 @@
 # Rime Schema
 # encode: utf-8
 # newline: lf
+
 ---
 schema:
   id: pinyin

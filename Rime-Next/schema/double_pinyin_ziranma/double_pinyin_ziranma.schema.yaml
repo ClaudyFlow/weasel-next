@@ -13,6 +13,7 @@
 # 写在 `.schema.yaml` 里会被 rime 判为 `invalid schema definition` 而部署失败。
 # `__include` 的语义是深合并：映射递归合并、列表整体替换、标量覆盖。
 
+
 __include: luna_pinyin_simp.schema:/
 
 schema:

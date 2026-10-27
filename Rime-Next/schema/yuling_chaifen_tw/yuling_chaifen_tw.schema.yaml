@@ -2,6 +2,7 @@
 # encode: utf-8
 # newline: lf
 
+
 schema:
   id: yuling_chaifen_tw
   name: 宇浩·靈明·全漢字拆分表·臺灣字形

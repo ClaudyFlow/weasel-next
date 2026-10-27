@@ -2,6 +2,7 @@
 # encode: utf-8
 # newline: lf
 
+
 __include: yuhao_pinyin.schema:/
 
 schema:
