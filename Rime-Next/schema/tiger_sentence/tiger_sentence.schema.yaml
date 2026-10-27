@@ -1,6 +1,8 @@
 # encoding: utf-8
+# encode: utf-8
+# newline: lf
 schema:
-  schema_id: tiger_sentence
+  id: tiger_sentence
   name: 虎整句
   version: "1.6.20261010.1"
   author:

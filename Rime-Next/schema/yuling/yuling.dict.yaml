@@ -1,8 +1,6 @@
-# encoding: utf-8
-#
-# 宇浩·靈明
-# 版本: 20260718
-#
+# Rime Dictionary
+# encode: utf-8
+# newline: lf
 ---
 name: "yuling"
 version: "20260718"

@@ -1,10 +1,11 @@
-# Rime schema
-# encoding: utf-8
+# Rime Schema
+# encode: utf-8
+# newline: lf
 
 __include: luna_pinyin.schema:/
 
 schema:
-  schema_id: luna_pinyin_tw
+  id: luna_pinyin_tw
   name: 朙月拼音·臺灣正體
   version: "0.20"
   author:

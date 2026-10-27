@@ -1,13 +1,6 @@
-# encoding: utf-8
-#
-# 宇浩·日月·臺標
-# 版本: 20260302
-#
-# 簡碼字詞，包括空格上屏和韻碼上屏
-# 單字全碼，包括臺標、陸標、港標、兼容拆分
-# 全碼詞庫
-# 字根提示
-# 符號
+# Rime Dictionary
+# encode: utf-8
+# newline: lf
 ---
 name: "yuming_tw"
 version: "20260302"

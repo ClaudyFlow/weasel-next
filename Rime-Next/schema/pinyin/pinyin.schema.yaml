@@ -1,0 +1,102 @@
+# Rime Schema
+# encode: utf-8
+# newline: lf
+---
+schema:
+  id: pinyin
+  name: 全拼
+  version: '0.26'
+  author:
+    - 佛振 <chen-sst@gmail.com>
+  description:
+    Rime-Next 的全拼方案。
+  dependency:
+    - stroke
+###
+switch:
+  - name: ascii_mode
+    state: [ 中文, 西文 ]
+    reset: 0
+  - name: full_shape
+    state: [ 半角, 全角 ]
+    reset: 0
+  - name: simplification
+    state: [ 漢字, 汉字 ]
+  - name: ascii_punct
+    state: [ 。，, ．， ]
+  - option:
+    state:
+    reset:
+###
+engine:
+  processor:
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentor:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translator:
+    - punct_translator
+    - table_translator@custom_phrase
+    - reverse_lookup_translator
+    - script_translator
+  filter:
+    - simplifier
+    - uniquifier
+###
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcba
+  initial: zyxwvutsrqponmlkjihgfedcba
+  delimiter: "'"
+  algebra:
+    import_preset: pinyin.parser
+###
+translator:
+  dict: pinyin                         # 词典 = pinyin.dict.yaml（朙月词典的副本）
+  prism: pinyin
+  preedit_format:
+    import_preset: pinyin.parser
+###
+custom_phrase:
+  dictionary: ""
+  user_dict: custom_phrase
+  db_class: stabledb
+  enable_completion: false
+  enable_sentence: false
+  initial_quality: 1
+###
+reverse_lookup:
+  schema: stroke
+  enable_completion: true
+  prefix: "`"
+  suffix: "'"
+  tips: 〔筆畫〕
+  preedit_format:
+    - xlit/hspnz/一丨丿丶乙/
+  comment_format:
+    - xform/([nl])v/$1ü/
+###
+punctuator:
+  import_preset: symbols
+###
+key_binder:
+  import_preset: default
+###
+recognizer:
+  import_preset: default
+  patterns:
+    punct: '^/([0-9]0?|[A-Za-z]+)$'
+    reverse_lookup: "`[a-z]*'?$"
+###
+grammar:
+  - han*.gram
+...

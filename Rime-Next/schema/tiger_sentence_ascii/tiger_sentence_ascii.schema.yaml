@@ -1,6 +1,8 @@
 # Internal native ASCII-composer configuration. Do not add to schema_list.
+# encode: utf-8
+# newline: lf
 schema:
-  schema_id: tiger_sentence_ascii
+  id: tiger_sentence_ascii
   name: 虎整句内部切换配置
   version: "1"
 ascii_composer:

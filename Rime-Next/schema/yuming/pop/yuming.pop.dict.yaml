@@ -1,4 +1,6 @@
-# encoding: utf-8
+# Rime Dictionary
+# encode: utf-8
+# newline: lf
 ---
 name: "yuming.pop"
 version: "20260302"

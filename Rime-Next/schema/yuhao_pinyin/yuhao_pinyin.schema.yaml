@@ -1,8 +1,9 @@
-# Rime schema
-# encoding: utf-8
+# Rime Schema
+# encode: utf-8
+# newline: lf
 
 schema:
-  schema_id: yuhao_pinyin
+  id: yuhao_pinyin
   name: 宇浩·繁簡通·拼音
   version: 20230418
   author:

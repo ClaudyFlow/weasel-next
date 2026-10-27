@@ -1,8 +1,9 @@
-# Rime schema
-# encoding: utf-8
+# Rime Schema
+# encode: utf-8
+# newline: lf
 
 schema:
-  schema_id: luna_pinyin
+  id: luna_pinyin
   name: 朙月拼音
   version: '0.26'
   author:
@@ -57,10 +58,19 @@ speller:
   alphabet: zyxwvutsrqponmlkjihgfedcba
   delimiter: " '"
   algebra:
-    __patch:
-      - pinyin:/abbreviation
-      - pinyin:/spelling_correction
-      - pinyin:/key_correction
+      # 以下三组规则从 pinyin.yaml 内联（2026-10-27）
+      - abbrev/^([a-z]).+$/$1/           # 简拼（首字母）
+      - abbrev/^([zcs]h).+$/$1/          # 简拼（zh, ch, sh）
+      - derive/^([nl])ve$/$1ue/          # nve = nue, lve = lue
+      - derive/^([jqxy])u/$1v/           # ju = jv
+      - derive/un$/uen/                  # gun = guen
+      - derive/ui$/uei/                  # gui = guei
+      - derive/iu$/iou/                  # jiu = jiou
+      - derive/([aeiou])ng$/$1gn/        # dagn => dang
+      - derive/([dtngkhrzcs])o(u|ng)$/$1o/  # zho => zhong|zhou
+      - derive/ong$/on/                  # zhonguo => zhong guo
+      - derive/ao$/oa/                   # hoa => hao
+      - derive/([iu])a(o|ng?)$/a$1$2/    # tain => tian
 
 translator:
   dictionary: luna_pinyin

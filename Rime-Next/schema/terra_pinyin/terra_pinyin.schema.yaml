@@ -1,8 +1,9 @@
-# Rime schema
-# encoding: utf-8
+# Rime Schema
+# encode: utf-8
+# newline: lf
 
 schema:
-  schema_id: terra_pinyin
+  id: terra_pinyin
   name: 地球拼音
   version: '0.20'
   author:

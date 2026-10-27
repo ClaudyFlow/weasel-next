@@ -1,10 +1,11 @@
 # Rime schema
-# encoding: utf-8
-
+# encode: utf-8
+# newline: lf
+---
 __include: bopomofo.schema:/
 
 schema:
-  schema_id: bopomofo_express
+  id: bopomofo_express
   name: 注音·快打模式
   version: '2.3'
   author:
@@ -17,10 +18,8 @@ schema:
 
 speller:
   algebra:
-    __patch:
-      - zhuyin:/pinyin_to_zhuyin
-      - zhuyin:/abbreviation
-      - zhuyin:/keymap_bopomofo
+      # 子方案复用 bopomofo 的 algebra（已内联），此处不再追加 zhuyin:/ 片段
+      # 如需覆盖，直接在这里加规则
 
 translator:
   prism: bopomofo_express

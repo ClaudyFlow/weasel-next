@@ -1,8 +1,6 @@
-# encoding: utf-8
-#
-# 倉頡五代基礎單字碼表
-#
-
+# Rime Dictionary
+# encode: utf-8
+# newline: lf
 ---
 name: "cangjie5_char"
 version: "1.0"

@@ -1,0 +1,103 @@
+# Rime Schema
+# encode: utf-8
+# newline: lf
+#
+# ★ 本文件由 `shuangpin-schema` 从 `Rime-Next\parser\shuangpin\xiaohe.parser.yaml` 生成。
+#   **不要手改**：改键位请改那份 YAML 再重新生成。
+#
+# 用 rime 的 **`__include` + `patch`** 继承 `luna_pinyin_simp` 的骨架（engine / switches /
+# 用 rime 的 **`__include` 深合并**继承 `luna_pinyin_simp` 的骨架（engine / switches /
+# segmentors / translators 全部继承过来），下面**直接写要覆盖的字段**即可。
+#
+# ⚠️ 这里**不能**用 `patch:` —— 那是 `.custom.yaml` 专用语法，
+# 写在 `.schema.yaml` 里会被 rime 判为 `invalid schema definition` 而部署失败。
+# `__include` 的语义是深合并：映射递归合并、列表整体替换、标量覆盖。
+
+__include: luna_pinyin_simp.schema:/
+
+schema:
+  id: double_pinyin_flypy
+  name: 小鹤双拼·简体
+  version: "0.18"
+  author:
+    - 双拼键位：鹤
+  description: |
+    小鹤双拼·简体（明月拼音 + 双拼键位）。
+
+speller:
+  parser: shuangpin/xiaohe
+  algebra:
+      - derive/^([jqxy])u$/$1v/
+      - xform/^zh/V/
+      - xform/^ch/I/
+      - xform/^sh/U/
+      - xform/^([aoe])(ng)?$/$1$1$2/
+      - derive/^([aoe])([ioun])$/$1$1$2/
+      - xform/iu$/Q/
+      - xform/(.)ei$/$1W/
+      - xform/uan$/R/
+      - xform/[uv]e$/T/
+      - xform/un$/Y/
+      - xform/uo$/O/
+      - xform/ie$/P/
+      - xform/i?ong$/S/
+      - xform/ing$|uai$/K/
+      - xform/(.)ai$/$1D/
+      - xform/(.)en$/$1F/
+      - xform/(.)eng$/$1G/
+      - xform/[iu]ang$/L/
+      - xform/(.)ang$/$1H/
+      - xform/ian$/M/
+      - xform/(.)an$/$1J/
+      - xform/(.)ou$/$1Z/
+      - xform/[iu]a$/X/
+      - xform/iao$/N/
+      - xform/(.)ao$/$1C/
+      - xform/ui$/V/
+      - xform/in$/B/
+      - xlit/QWRTYUIOPSDFGHJKLZXCVBNM/qwrtyuiopsdfghjklzxcvbnm/
+
+translator:
+  dictionary: luna_pinyin
+  prism: double_pinyin_flypy
+  preedit_format:
+      - xform/([bpmfdtnljqx])n/$1iao/
+      - xform/(\w)g/$1eng/
+      - xform/(\w)q/$1iu/
+      - xform/(\w)w/$1ei/
+      - xform/([dtnlgkhjqxyvuirzcs])r/$1uan/
+      - xform/(\w)t/$1ve/
+      - xform/(\w)y/$1un/
+      - xform/([dtnlgkhvuirzcs])o/$1uo/
+      - xform/(\w)p/$1ie/
+      - xform/([jqx])s/$1iong/
+      - xform/(\w)s/$1ong/
+      - xform/(\w)d/$1ai/
+      - xform/(\w)f/$1en/
+      - xform/(\w)h/$1ang/
+      - xform/(\w)j/$1an/
+      - xform/([gkhvuirzcs])k/$1uai/
+      - xform/(\w)k/$1ing/
+      - xform/([jqxnl])l/$1iang/
+      - xform/(\w)l/$1uang/
+      - xform/(\w)z/$1ou/
+      - xform/([gkhvuirzcs])x/$1ua/
+      - xform/(\w)x/$1ia/
+      - xform/(\w)c/$1ao/
+      - xform/([dtgkhvuirzcs])v/$1ui/
+      - xform/(\w)b/$1in/
+      - xform/(\w)m/$1ian/
+      - xform/([aoe])\1(\w)/$1$2/
+      - xform/(^|[ '])v/$1zh/
+      - xform/(^|[ '])i/$1ch/
+      - xform/(^|[ '])u/$1sh/
+      - xform/([jqxy])v/$1u/
+      - xform/([nl])v/$1ü/
+
+simplifier:
+  option_name: zh_simp
+
+# 语言模型（grammar.yaml 的 hans 预设）：双拼也是简体，用 hans 模型调序。
+# 找不到 grammar.yaml 时 `?` 让它静默跳过，不影响部署。
+__patch:
+  - grammar:/hans?

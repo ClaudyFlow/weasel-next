@@ -1,8 +1,9 @@
-# Rime schema settings
-# encoding: utf-8
-
+# Rime schema
+# encode: utf-8
+# newline: lf
+---
 schema:
-  schema_id: cangjie5_express
+  id: cangjie5_express
   name: 倉頡五代·快打模式
   version: "2018.04.14"
   author:

@@ -1,8 +1,9 @@
-# Rime schema
-# encoding: utf-8
+# Rime Schema
+# encode: utf-8
+# newline: lf
 
 schema:
-  schema_id: yujoy_fluency
+  id: yujoy_fluency
   name: 卿雲·全碼連打
   version: 20240512
   author:

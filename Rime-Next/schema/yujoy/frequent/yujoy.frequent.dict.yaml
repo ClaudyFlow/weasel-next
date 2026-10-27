@@ -1,5 +1,6 @@
-# encoding: utf-8
-# 字頻排序常用繁簡字8000個
+# Rime Dictionary
+# encode: utf-8
+# newline: lf
 ---
 name: yujoy.frequent
 version: "2024.05.14"

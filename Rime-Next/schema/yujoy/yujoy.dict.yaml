@@ -1,8 +1,6 @@
-# encoding: utf-8
-#
-# 卿雲
-# 版本: 20260302
-#
+# Rime Dictionary
+# encode: utf-8
+# newline: lf
 ---
 name: "yujoy"
 version: "20260302"

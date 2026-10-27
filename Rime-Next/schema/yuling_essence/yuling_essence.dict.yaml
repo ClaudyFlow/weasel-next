@@ -1,8 +1,6 @@
-# encoding: utf-8
-#
-# 靈明·真
-# 版本: 20260718
-#
+# Rime Dictionary
+# encode: utf-8
+# newline: lf
 ---
 name: "yuling_essence"
 version: "20260718"

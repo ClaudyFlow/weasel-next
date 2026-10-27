@@ -1,8 +1,9 @@
-# Rime schema settings
-# encoding: utf-8
+# Rime Schema
+# encode: utf-8
+# newline: lf
 
 schema:
-  schema_id: stroke
+  id: stroke
   name: "五筆畫"
   version: "0.5"
   author:

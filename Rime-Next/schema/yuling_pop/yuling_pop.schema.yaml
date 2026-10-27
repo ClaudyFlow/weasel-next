@@ -1,10 +1,11 @@
-# Rime schema settings
-# encoding: utf-8
+# Rime Schema
+# encode: utf-8
+# newline: lf
 
 __include: yuling.schema:/
 
 schema:
-  schema_id: yuling_pop
+  id: yuling_pop
   name: 靈明·頂真
   version: 乙巳冬至
   author:

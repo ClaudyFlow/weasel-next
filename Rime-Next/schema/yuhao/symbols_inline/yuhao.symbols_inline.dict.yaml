@@ -1,14 +1,6 @@
-# encoding: utf-8
-#
-# 宇浩·繁简通
-# 版本: 20260302
-
-# 朱宇浩 开发
-# Rime方案 forFudan <https://shurufa.app>
-# 官方QQ群 735728797
-
-# 特殊符号
-
+# Rime Dictionary
+# encode: utf-8
+# newline: lf
 ---
 name: "yuhao.symbols_inline"
 version: "20260302"

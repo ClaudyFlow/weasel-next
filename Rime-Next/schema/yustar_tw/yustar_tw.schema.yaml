@@ -1,8 +1,9 @@
-# Rime schema settings
-# encoding: utf-8
+# Rime Schema
+# encode: utf-8
+# newline: lf
 
 schema:
-  schema_id: yustar_tw
+  id: yustar_tw
   name: 星陳·臺標簡碼
   version: 20231001
   author:

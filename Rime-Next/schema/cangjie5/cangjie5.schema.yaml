@@ -1,8 +1,9 @@
-# Rime schema settings
-# encoding: utf-8
-
+# Rime schema
+# encode: utf-8
+# newline: lf
+---
 schema:
-  schema_id: cangjie5
+  id: cangjie5
   name: 倉頡五代
   version: "0.30"
   author:

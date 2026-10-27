@@ -1,10 +1,11 @@
-# Rime schema
-# encoding: utf-8
+# Rime Schema
+# encode: utf-8
+# newline: lf
 
 __include: luna_pinyin.schema:/
 
 schema:
-  schema_id: luna_quanpin
+  id: luna_quanpin
   name: 全拼
   version: '0.2'
   author:
@@ -15,8 +16,12 @@ schema:
 
 speller:
   algebra:
-    __patch:
-      - pinyin:/spelling_correction
+      # spelling_correction 从 pinyin.yaml 内联（2026-10-27）
+      - derive/^([nl])ve$/$1ue/          # nve = nue, lve = lue
+      - derive/^([jqxy])u/$1v/           # ju = jv
+      - derive/un$/uen/                  # gun = guen
+      - derive/ui$/uei/                  # gui = guei
+      - derive/iu$/iou/                  # jiu = jiou
 
 translator:
   prism: luna_quanpin

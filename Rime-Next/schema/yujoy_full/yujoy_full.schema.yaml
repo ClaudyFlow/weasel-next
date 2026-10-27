@@ -1,8 +1,9 @@
-# Rime schema settings
-# encoding: utf-8
+# Rime Schema
+# encode: utf-8
+# newline: lf
 
 schema:
-  schema_id: yujoy_full
+  id: yujoy_full
   name: 卿雲·全碼單字
   version: 20240527
   author:
