@@ -62,6 +62,9 @@ struct BrokerState {
     paths: RuntimePaths,
     server: Option<Child>,
     renderer: Option<Child>,
+    /// 空闲态:引擎已按"五分钟不打字"自退(退出码 3),监控不重启,
+    /// 渲染器一并关停;下一次 broker 管道活动时 [`wake_from_idle`] 拉起。
+    idle: bool,
     server_retry: RestartBackoff,
     renderer_retry: RestartBackoff,
     operation: Operation,
@@ -109,6 +112,7 @@ pub(crate) fn install(
         paths,
         server: Some(server),
         renderer: Some(renderer),
+        idle: false,
         server_retry: RestartBackoff::new(Instant::now()),
         renderer_retry: RestartBackoff::new(Instant::now()),
         operation: Operation::Idle,
@@ -224,6 +228,26 @@ pub(crate) fn monitor_children() {
     while !is_stopping() {
         monitor_child(&shared, ManagedComponent::Server);
         monitor_child(&shared, ManagedComponent::Renderer);
+        // 空闲态的第二步:引擎自退后**主动关停渲染器**(无输入即无渲染)。
+        // 拿走所有权、锁外做优雅 RPC 关停(关停内部要建 tokio 运行时,不能持锁)。
+        {
+            let taken = {
+                let mut guard = shared.lock().expect("broker state mutex poisoned");
+                if guard.idle {
+                    guard.renderer.take()
+                } else {
+                    None
+                }
+            };
+            if let Some(mut renderer) = taken {
+                let _ = shutdown_component(
+                    &mut Some(renderer),
+                    default_renderer_pipe_name(),
+                    "engine idle shutdown",
+                );
+                diagnostic("renderer stopped after engine idle shutdown");
+            }
+        }
         let state = shared.lock().expect("broker state mutex poisoned");
         if is_stopping() || state.operation == Operation::Shutdown {
             break;
@@ -273,6 +297,50 @@ pub(crate) fn monitor_children() {
     }
 }
 
+/// 空闲态下响应 broker 管道活动:重新拉起渲染器与引擎,清空闲标记。
+///
+/// 由 settings_rpc 的连接循环在**每次收到连接**时调用——空闲期任何管道
+/// 活动(宿主的 Ping / 设置查询)都视为"有人要用了"。
+pub(crate) fn wake_from_idle() {
+    let Some(shared) = BROKER_STATE.get().cloned() else {
+        return;
+    };
+    let directory = {
+        let mut guard = shared.lock().expect("broker state mutex poisoned");
+        if !guard.idle || is_stopping() {
+            return;
+        }
+        guard.idle = false;
+        guard.paths.executable_directory.clone()
+    };
+    diagnostic("activity detected while idle; restarting engine and renderer");
+    // 启动序与 broker 启动一致:渲染器先行,确保第一份候选快照有接收端。
+    let mut renderer = start_child(&directory, "Weasel-Next-Renderer.exe", &[])
+        .map_err(|error| diagnostic(&format!("idle wake: renderer start failed: {error}")))
+        .ok();
+    let engine = match start_child(&directory, "Weasel-Next-Engine.exe", &[]) {
+        Ok(child) => Some(child),
+        Err(error) => {
+            diagnostic(&format!("idle wake: engine start failed: {error}"));
+            let _ = shutdown_component(
+                &mut renderer,
+                default_renderer_pipe_name(),
+                "idle wake rollback",
+            );
+            None
+        }
+    };
+    // 归位受管槽位;若此刻 broker 已在退出流程,子进程由 shutdown_all 兜底。
+    let mut guard = shared.lock().expect("broker state mutex poisoned");
+    if guard.renderer.is_none() {
+        guard.renderer = renderer;
+    }
+    if guard.server.is_none() {
+        guard.server = engine;
+    }
+    guard.idle = false;
+}
+
 /// 检查并按需恢复一个受管组件。
 fn monitor_child(shared: &Arc<Mutex<BrokerState>>, component: ManagedComponent) {
     let mut guard = shared.lock().unwrap_or_else(|error| error.into_inner());
@@ -294,6 +362,18 @@ fn monitor_child(shared: &Arc<Mutex<BrokerState>>, component: ManagedComponent) 
             }
             Ok(Some(status)) => {
                 retry.healthy(now);
+                // 引擎空闲自退(专用退出码 3):标记空闲态——监控不重启引擎;
+                // 渲染器的关停由 monitor_children 循环层处理(借用分层)。
+                if component == ManagedComponent::Server
+                    && status.code() == Some(weasel_common::ENGINE_IDLE_EXIT_CODE)
+                {
+                    *slot = None;
+                    state.idle = true;
+                    diagnostic(
+                        "engine idle shutdown (5 minutes without typing); entering idle state",
+                    );
+                    return;
+                }
                 diagnostic(&format!("{executable} exited: {status}"));
                 *slot = None;
                 retry.failed(now);

@@ -99,6 +99,10 @@ impl SettingsService {
                         accepted = server.accept(), if clients.len() < 32 => {
                             match accepted {
                                 Ok(connection) => {
+                                    // 空闲唤醒:任何 broker 管道活动(宿主 Ping /
+                                    // 设置查询)都视为"有人要用了",按需拉起
+                                    // 引擎与渲染器(五分钟空闲自退设计的另一半)。
+                                    crate::service_supervisor::wake_from_idle();
                                     let settings = settings.clone();
                                     let notifications = notifications.clone();
                                     let paths = paths.clone();

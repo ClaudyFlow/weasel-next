@@ -13,6 +13,7 @@ pub mod rime_layout;
 pub mod deploy_protocol;
 pub mod logging;
 pub mod message;
+pub use message::ENGINE_IDLE_EXIT_CODE;
 #[cfg(windows)]
 pub mod process;
 pub mod rpc;

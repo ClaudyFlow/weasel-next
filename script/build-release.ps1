@@ -90,7 +90,10 @@ try {
         }
     }
 
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'weasel.toml') -Destination (Join-Path $targetDirectory 'x86_64-pc-windows-msvc\release\weasel.toml')
+    # 宿主配置的正式格式是 YAML（`weasel.yaml`，2026-10-23 起）：`style::parse_file` 只认 YAML，
+    # 配置树与序列化也统一成 YAML。TOML 既不读也不写，这里顺手清掉构建目录里的旧副本。
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'Rime-Next\weasel.yaml') -Destination (Join-Path $targetDirectory 'x86_64-pc-windows-msvc\release\weasel.yaml')
+    Remove-Item -LiteralPath (Join-Path $targetDirectory 'x86_64-pc-windows-msvc\release\weasel.toml') -ErrorAction SilentlyContinue
     # Match the installed/portable DLL layout next to the renderer.
     $releaseDirectory = Join-Path $targetDirectory 'x86_64-pc-windows-msvc\release'
     # Keep Cargo's primary output ordinary. Build the opt-in variant first, copy
@@ -109,7 +112,7 @@ try {
         & $cargoCommand build --release --locked -p Weasel-Next-Renderer --target x86_64-pc-windows-msvc --target-dir $targetDirectory
         if ($LASTEXITCODE -ne 0) { throw 'Ordinary renderer rebuild failed; do not package these outputs.' }
     }
-    $themeDirectory = Join-Path $releaseDirectory 'themes'
+    $themeDirectory = Join-Path $releaseDirectory 'theme'
     $null = New-Item -ItemType Directory -Path $themeDirectory -Force
     $nodeCommand = Resolve-Application 'node'
     $metadataPackager = Join-Path $PSScriptRoot 'package-theme-metadata.mjs'

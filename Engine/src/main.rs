@@ -92,8 +92,10 @@ async fn load_broker_settings() -> Result<weasel_common::settings::ConfigSnapsho
 /// 未知字段保持原样，以便 renderer、主题或未来组件自行解释。应用专属选项中的
 /// 无效字段会被移除，从而重新继承对应全局值。
 fn normalize_server_settings(root: &mut serde_json::Value) -> Vec<String> {
-    let defaults: serde_json::Value = toml::from_str(include_str!("../../weasel.toml"))
-        .expect("embedded settings must be valid JSON");
+    // 内嵌出厂默认值是 YAML（`weasel.yaml`，2026-10-23 起唯一格式）：
+    // `style::parse_file` 只认 YAML，配置树与序列化也统一在 `weasel_common::yaml`。
+    let defaults: serde_json::Value = weasel_common::yaml::to_value(include_str!("../../Rime-Next/weasel.yaml"))
+        .expect("embedded settings must be valid YAML");
     let defaults = defaults
         .as_object()
         .expect("embedded settings root must be an object");
@@ -274,6 +276,10 @@ async fn read_connection(
             Ok(Some(received)) => received,
             _ => break,
         };
+        // 打字键 = 活动信号(五分钟空闲看门狗的判据;心跳/布局更新不算)
+        if matches!(envelope.payload.as_ref(), Some(Payload::KeyEvent(_))) {
+            touch_activity();
+        }
         if let Some(Payload::LayoutUpdate(update)) = envelope.payload.as_ref() {
             connection.push_layout(update.clone());
             drop(request);
@@ -362,6 +368,28 @@ async fn read_connection(
     }
 }
 
+/// 最后一次打字活动的毫秒时钟(UNIX epoch)。空闲看门狗据此判断。
+static LAST_ACTIVITY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// 空闲自退出的等待时长:五分钟不打字(用户 2026-10-27 定)。
+const IDLE_TIMEOUT_MS: u64 = 5 * 60 * 1000;
+/// 进程内标记:本轮退出是**空闲自退**(broker 据退出码识别,不重启、关渲染器)。
+static IDLE_EXIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn touch_activity() {
+    LAST_ACTIVITY_MS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn activity_elapsed_ms() -> u64 {
+    now_ms().saturating_sub(LAST_ACTIVITY_MS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 /// 解析服务启动参数并映射启动结果为进程退出码。
 ///
 /// 静默部署模式不向继承句柄输出参数错误；普通模式将启动失败写入标准错误。
@@ -381,7 +409,15 @@ fn main() -> std::process::ExitCode {
         return silent_deploy::run();
     }
     match run(args) {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(()) => {
+            if IDLE_EXIT.load(std::sync::atomic::Ordering::Acquire) {
+                // broker 的监控据此识别"空闲自退",不重启引擎、关停渲染器。
+                return std::process::ExitCode::from(
+                    weasel_common::ENGINE_IDLE_EXIT_CODE as u8,
+                );
+            }
+            std::process::ExitCode::SUCCESS
+        }
         Err(error) => {
             eprintln!("Error: {error:?}");
             std::process::ExitCode::FAILURE
@@ -463,7 +499,7 @@ fn init_logging(paths: &RuntimePaths, component: &str) -> Result<(), String> {
 async fn serve(paths: RuntimePaths) -> Result<(), String> {
     // 方案信息：第一次运行就把出厂方案清单抄进用户目录 schema/schema.toml
     match weasel_style::switcher::seed_schema_table(
-        &paths.executable_directory.join("Rime-Next"),
+        &weasel_common::rime_layout::data_dir(&paths.executable_directory),
         &paths.user_data,
     ) {
         Ok(true) => tracing::info!("schema.toml: 已按出厂 schema_list 初始化方案清单"),
@@ -475,10 +511,10 @@ async fn serve(paths: RuntimePaths) -> Result<(), String> {
         let _ = parent_exit.send(());
     })
     .map_err(|e| e.to_string())?;
-    // 主题里的"编码画在哪"：读 theme.toml（用户目录优先，程序文件夹兜底）；
+    // 主题里的"编码画在哪"：读 theme.yaml（用户目录优先，程序文件夹兜底）；
     // 既决定要不要跟渲染器协商外置预编辑，也作为每个客户端会话的默认值。
     let theme_inline_preedit = weasel_style::theme::inline_preedit(
-        &paths.executable_directory.join("Rime-Next"),
+        &weasel_common::rime_layout::data_dir(&paths.executable_directory),
         &paths.user_data,
         "default",
     );
@@ -520,6 +556,18 @@ async fn serve(paths: RuntimePaths) -> Result<(), String> {
         weasel_common::message::PeerRole::Server,
     );
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);
+    touch_activity();
+    let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel::<()>(1);
+    tokio::spawn(async move {
+        // 空闲看门狗:每 30 秒巡检一次,五分钟无打字 ⇒ 请求优雅退出。
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            if activity_elapsed_ms() >= IDLE_TIMEOUT_MS {
+                let _ = idle_tx.send(()).await;
+                break;
+            }
+        }
+    });
 
     let mut readers = tokio::task::JoinSet::new();
     let mut connections = std::collections::HashMap::<u64, Arc<ClientConnection>>::new();
@@ -534,6 +582,11 @@ async fn serve(paths: RuntimePaths) -> Result<(), String> {
             biased;
             _ = &mut parent_dead, if _parent_watch.is_some() => { tracing::info!("broker exited; shutting down"); break; }
             request = shutdown_rx.recv() => { notice = request; break; }
+            _ = idle_rx.recv() => {
+                tracing::info!("idle timeout: no typing for 5 minutes; shutting down");
+                IDLE_EXIT.store(true, std::sync::atomic::Ordering::Release);
+                break;
+            }
             _ = &mut engine.finished => { break; }
             Some(result) = readers.join_next_with_id(), if !readers.is_empty() => {
                 let task = match result { Ok((task, _)) => task, Err(error) => error.id() };

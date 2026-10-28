@@ -54,6 +54,10 @@ pub struct KeyEventResponse {
     pub mode_indicator_request_id: Option<u64>,
 }
 
+/// 引擎空闲自退出的专用退出码:broker 监控识别它后进入空闲态
+/// (不重启引擎、关停渲染器),等待下一次管道连接时唤醒。
+pub const ENGINE_IDLE_EXIT_CODE: i32 = 3;
+
 /// 进程内路由使用的消息负载。
 pub mod envelope {
     use super::*;

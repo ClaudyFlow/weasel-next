@@ -21,7 +21,9 @@ use weasel_common::message::{
     ContextAction, ContextCommand, InputKey, KeyEventResponse, LayoutUpdate, LogEvent, OpenInput,
     PeerRole, Ping, envelope::Payload,
 };
-use weasel_common::rpc::{RpcClient, RpcError, try_default_pipe_name};
+use weasel_common::rpc::{
+    RpcClient, RpcError, try_default_broker_pipe_name, try_default_pipe_name,
+};
 
 /// 全局连接 epoch 分配器；0 保留为无效标记，分配回绕到 0 时拒绝该连接。
 static NEXT_CONNECTION_EPOCH: AtomicU64 = AtomicU64::new(1);
@@ -288,7 +290,9 @@ impl Connection {
     /// 在已打开的输入会话中处理翻译后的按键。
     async fn process_translated_key(&self, event: InputKey) -> Result<KeyEventResponse, RpcError> {
         // 输入统计：每个键都过这里，是最可靠的挂点。
-        crate::stats::record_key();
+        // 传 `virtual_key`（Win32 虚拟键）而不是 Rime 的 `keycode`：
+        // 键盘热力图要按真实键位统计，0xFFE3 这类扩展键码只有它能区分。
+        crate::stats::record_key(event.virtual_key as i64);
         self.prepare_input_session(event.token.clone(), None)
             .await?;
         let response = self.key_request(Payload::KeyEvent(event)).await?;
@@ -340,6 +344,24 @@ impl Drop for Connection {
 ///
 /// 在握手前捕获取消代际；若期间会话已失效则拒绝发布连接可用状态。连接事件
 /// 丢失、订阅溢出或无法投递响应时，订阅任务会使 epoch 失效并断开传输。
+/// 引擎管道连不上时向 broker 管道发一次 Ping,把空闲自退的后端拉起来。
+/// 尽力而为:broker 不在(整体未启动)时静默放弃,重试循环会再试。
+async fn wake_broker() {
+    let Ok(name) = try_default_broker_pipe_name() else {
+        return;
+    };
+    let client = match RpcClient::connect_as(&name, PeerRole::Tip).await {
+        Ok(client) => client,
+        Err(_) => return,
+    };
+    let _ = client
+        .request(Payload::Ping(Ping {
+            text: "tip idle wake".into(),
+        }))
+        .await;
+    client.disconnect().await;
+}
+
 async fn connect_client(pipe_name: &str, target: &Arc<PushTarget>) -> Option<Connection> {
     let generation = target.cancellation.load(Ordering::Acquire);
     let client = RpcClient::connect_as(pipe_name, PeerRole::Tip)
@@ -530,12 +552,18 @@ impl WorkerState {
     }
 
     /// 按需连接；连接或握手失败时标记状态并通知宿主线程。
+    ///
+    /// 连接失败还有一个重要副作用:**唤醒 broker**。引擎按"五分钟不打字
+    /// 自退"设计会主动退出(Rime-Next 2026-10-27),broker 收到本 Tip 的
+    /// 管道活动后就地拉起引擎与渲染器——下一次 ensure_connected 就能连上。
+    /// 本键穿透(字母直接上屏)是空闲唤醒的预期代价。
     async fn ensure_connected(&mut self) {
         if self.client.is_none() {
             self.client = connect_client(&self.pipe_name, &self.push).await;
             if self.client.is_none() {
                 self.push.connection_failed.store(true, Ordering::Release);
                 self.push.notify();
+                wake_broker().await;
             }
         }
     }

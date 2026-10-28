@@ -38,11 +38,8 @@ $luaDst = Join-Path $userData 'plugin'
 if (Test-Path $luaSrc) {
     New-Item -ItemType Directory -Force -Path $luaDst | Out-Null
     Copy-Item (Join-Path $luaSrc 'rime.lua') $luaDst -Force   # ★ 只装 rime.lua 这个接口 ✓ 插件本体由用户自己放 ✓
-    # ★ pinyin.yaml / zhuyin.yaml → 用户数据目录（模糊音与注音模板实际会被用到的地方 ✓）
-    foreach ($cfg in 'pinyin.yaml','zhuyin.yaml') {
-        $srcCfg = Join-Path $root ('Rime-Next\' + $cfg)
-        if (Test-Path $srcCfg) { Copy-Item $srcCfg (Join-Path $userData $cfg) -Force }
-    }
+    # parser/ 不再部署到用户目录：它是出厂数据，随安装包进程序文件夹
+    # （Rime-Next\parser\，payload 整目录打包），引擎读程序文件夹那份。
     Ok ('已安装 rime.lua → ' + $luaDst)
     Ok ('已安装 lua 插件 → ' + $luaDst)
 } else { Warn '找不到 plugin\lua（跳过）' }

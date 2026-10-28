@@ -29,15 +29,24 @@ try {
     Copy-Item 'target\release\weasel_tip.dll' 'target\release\Weasel-Next.dll' -Force
 
     $requiredFiles = @(
-        'weasel.toml',
+        # 宿主配置的**唯一格式是 YAML**（`weasel.yaml`）：`style::parse_file` 只认 YAML，
+        # 配置树与序列化也统一成 YAML。TOML **既不读也不写、也不打进包**。
+        # 2026-10-27：源文件从仓库根搬进 `Rime-Next\`（与 rime 数据同处一棵树），
+        # 仓库根那份已删（连对照的 `weasel.toml` 也一并清了）。
+        'Rime-Next\weasel.yaml',
         'target\release\Weasel-Next-Server.exe',
         'target\release\Weasel-Next-Engine.exe',
         'target\release\Weasel-Next-Renderer.exe',
         'target\release\Weasel-Next-Setting.exe',
-        # 自定义双拼的解析器：把 schema\shuangpin\*.toml 生成成 rime 认的 .schema.yaml。
+        # 自定义双拼的解析器：把 parser\shuangpin\*.parser.yaml 生成成 rime 认的 .schema.yaml。
         # 必须随包分发 —— 用户机器上没有 Python / Rust 工具链，没有它就没法改键位。
         'target\release\shuangpin-schema.exe',
         'target\release\Weasel-Next.dll',
+        # 32 位 TIP：由 script\build-tip32.ps1 单独编出（llvm-mingw 的 i686 目标）。
+        # 32 位宿主（WPS 等）只查 WOW6432Node 的 InprocServer32，没有这份就没有输入法。
+        # 放在 $requiredFiles 里是**故意 fail-closed**：忘了跑 build-tip32.ps1 就打不出包，
+        # 而不是静默打出一个缺 32 位 TIP 的安装包。
+        'target\release\Weasel-Next-32.dll',
         'artifact\smoke\rime.dll',
         'Rime-Next\default.yaml',
                 'target\release\weasel_broker.pdb',
@@ -46,9 +55,9 @@ try {
         'target\release\weasel_settings.pdb',
         'target\release\weasel_tip.pdb',
         'Rime-Next\icon\weasel.ico',
-        'server\src\styles-LICENSE.txt',
+        'Engine\src\style-LICENSE.txt',
         'LICENSE',
-        'THIRD-PARTY-LICENSES.txt',
+        'THIRD-PARTY-LICENSE.txt',
         'THIRD-PARTY-GPL-3.0.txt',
         'setting\LICENSE-NOTICE.txt',
         'installer\weasel-next.nsi',
@@ -60,7 +69,7 @@ try {
         }
     }
     foreach ($theme in @()) {   # ★ 主题 metadata 由打包前单独生成 ✓
-        $requiredFiles += "target\release\themes\weasel_theme_$theme.settings.json"
+        $requiredFiles += "target\release\theme\weasel_theme_$theme.settings.json"
     }
     # ★ GNU 工具链不产生 .pdb（只允许 GNU ✓），无条件剔除 pdb 依赖
 
@@ -91,7 +100,7 @@ try {
     $payloadRemovalPaths = [Collections.Generic.List[string]]::new()
     $payloadDestinations = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($payload in @(
-        # 整个 Rime-Next（含 theme\ 皮肤、eassy、schema、weasel.toml 等）
+        # 整个 Rime-Next（含 theme\ 皮肤、eassy、schema、weasel.yaml 等）
         @{ Macro = 'RimePayload'; RemoveMacro = 'RemoveRimePayload'; ValidateMacro = 'ValidateRimePayloadRemoval'; Source = 'Rime-Next'; Target = 'Rime-Next' },
         @{ Macro = 'WasmPayload'; RemoveMacro = 'RemoveWasmPayload'; ValidateMacro = 'ValidateWasmPayloadRemoval'; Source = 'artifact\theme-wasm'; Target = 'theme-wasm' }
     )) {
