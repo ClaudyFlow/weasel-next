@@ -1,0 +1,50 @@
+# Weasel-Next steam 主题 —— msime skin.toml v2 格式
+# 用途:对比三种皮肤格式的表达力(本文件为格式演示,不直接可执行)
+# 特有能力:9-patch 贴图、canvas 基底、decorations 挂件、DIP 单位
+
+schema_version = 2
+id = "weasel-steam"
+name = "Steam(weasel 迁移版)"
+version = "1.0.0"
+author = "Weasel-Next"
+description = "从 weasel 主题 YAML 迁移到水杉 skin.toml v2 格式的演示。"
+base = "panel"
+
+[supports]
+layouts = ["horizontal", "vertical"]
+themes = ["dark"]
+
+[candidate_window]
+min_width_dip = 120
+item_corner_radius_dip = 4
+line_gap_dip = 3
+
+# 颜色(水杉用 HEX+alpha,与 hufu 同形)
+[candidate_window.colors]
+back_color = "#141617FF"
+border_color = "#353638FF"
+text_color = "#CD8C52FF"
+candidate_text_color = "#FFFFFFFF"
+candidate_back_color = "#00000000"
+comment_text_color = "#9A9AA0FF"
+label_color = "#CD8C52FF"
+hilited_text_color = "#FFFFFFFF"
+hilited_candidate_text_color = "#FFFFFFFF"
+hilited_candidate_back_color = "#505058FF"
+hilited_label_color = "#FFD75EFF"
+
+[style]
+font_face = "Microsoft YaHei"
+font_point_dip = 14
+label_font_point_dip = 11
+label_format = "%s."
+corner_radius_dip = 6
+border_width_dip = 1
+margin_x_dip = 8
+margin_y_dip = 6
+spacing_dip = 6
+candidate_spacing_dip = 4
+hilite_spacing_dip = 4
+hilite_padding_dip = 4
+line_spacing_dip = 3
+min_width_dip = 120
