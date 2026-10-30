@@ -1,0 +1,76 @@
+# Weasel-Next 全局设置 —— msime 水杉格式(TOML)
+# 用途:对比三种设置格式的表达力
+
+schema_version = 2
+
+[general]
+autostart = true
+follow_system_lang = true
+
+[switch]
+shift_chinese_english = true
+ctrl_space_chinese_english = true
+caps_action = "caps"
+commit_raw_on_en_switch = true
+
+[schema]
+current = "pinyin"
+recent_pair = ["pinyin", "wubi86"]
+
+[input]
+alphabet = "zyxwvutsrqponmlkjihgfedcba"
+max_code_length = 0
+auto_select_unique = false
+mixed_input = true
+default_chinese = true
+ascii_punct = false
+fuzzy_pinyin_enabled = false
+fuzzy_pinyin_sets = ["z=zh", "c=ch", "s=sh", "l=n", "f=h", "an=ang", "en=eng"]
+
+[candidates]
+page_size = 5
+horizontal = true
+emoji_enabled = true
+single_char_first = false
+
+[sentence]
+enabled = true
+ngram_weight = 0.6
+grammar_weight = 0.3
+neural_rerank = false
+
+[reverse_lookup]
+enabled = true
+schema = "stroke"
+prefix = "`"
+tips = true
+
+[punctuator]
+import_preset = "default"
+full_shape = false
+
+[appearance]
+skin = "steam"
+font_face = "Microsoft YaHei"
+font_point = 14
+inline_preedit = true
+horizontal = true
+
+[opencc]
+enabled = true
+config = "t2s.json"
+option_name = "simplification"
+excluded_types = ["raw"]
+
+[user_dict]
+learning = true
+auto_save_interval_sec = 300
+
+[keymap]
+bindings = [
+    { accept = "Control+p", send = "Up", when = "composing" },
+    { accept = "Control+n", send = "Down", when = "composing" },
+    { accept = "Control+b", send = "Left", when = "composing" },
+    { accept = "Control+f", send = "Right", when = "composing" },
+    { accept = "Control+h", send = "BackSpace", when = "composing" }
+]

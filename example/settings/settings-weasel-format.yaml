@@ -1,0 +1,61 @@
+# Weasel-Next 全局设置 —— weasel YAML 格式(现行标准)
+# 对应 C++ RimeTraits + config 编译产物,这是最完整的格式
+
+config_version: "0.23"
+
+switch:
+  - name: ascii_mode
+    state: [ 中文, 西文 ]
+    reset: 0
+  - name: full_shape
+    state: [ 半角, 全角 ]
+    reset: 0
+  - name: simplification
+    state: [ 漢字, 汉字 ]
+    reset: 1
+  - name: ascii_punct
+    state: [ 。，, ．， ]
+    reset: 0
+
+menu:
+  page_size: 5
+  horizontal: true
+
+style:
+  font_face: "Microsoft YaHei"
+  font_point: 14
+  label_font_point: 11
+  label_format: "%s."
+  horizontal: true
+  inline_preedit: true
+  color_scheme: "steam"
+
+schemes:
+  "steam":
+    name: "Steam"
+    back_color: "0x141617"
+    border_color: "0x353638"
+    text_color: "0xcd8c52"
+    candidate_text_color: "0xffffff"
+    hilited_text_color: "0xffffff"
+    hilited_back_color: "0x505058"
+    hilited_candidate_text_color: "0xffffff"
+    hilited_candidate_back_color: "0x505058"
+    hilited_label_color: "0xffd75e"
+
+key_binder:
+  bindings:
+    - { when: composing, accept: "Control+p", send: Up }
+    - { when: composing, accept: "Control+n", send: Down }
+    - { when: composing, accept: "Control+b", send: Left }
+    - { when: composing, accept: "Control+f", send: Right }
+    - { when: composing, accept: "Control+h", send: BackSpace }
+
+recognizer:
+  import_preset: default
+  patterns:
+    email: "^[A-Za-z][-_.0-9A-Za-z]*@.*$"
+    uppercase: "[A-Z][-_+.'0-9A-Za-z]*$"
+    url: "^(www[.]|https?:|ftp[.:]|mailto:|file:).*$|^[a-z]+[.].+$"
+    punct: "^/([0-9]0?|[A-Za-z]+)$"
+    reverse_lookup: "`[a-z]*'?$"

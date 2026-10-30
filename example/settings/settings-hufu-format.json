@@ -1,0 +1,127 @@
+{
+  "general": {
+    "autostart": true,
+    "hide_status_bar": false,
+    "follow_system_lang": true,
+    "shift_switch": true,
+    "ctrl_space_switch": true,
+    "caps_action": "caps",
+    "switch_recent_schema": true,
+    "esc_undo": false,
+    "commit_raw_on_en_switch": true,
+    "export_key": ""
+  },
+  "schema": {
+    "dir": "码表",
+    "current": "全拼",
+    "recent_pair": [
+      "全拼",
+      "五笔86"
+    ],
+    "export_formats": {}
+  },
+  "input": {
+    "alphabet": "zyxwvutsrqponmlkjihgfedcba",
+    "max_code_length": 0,
+    "auto_push": false,
+    "auto_select_unique": false,
+    "auto_clear_empty": false,
+    "enter_clear": false,
+    "tab_clear": false,
+    "mixed_input": true,
+    "code_disguise": "",
+    "show_code": true,
+    "hide_candidates": false,
+    "default_chinese": true,
+    "ascii_punct": false,
+    "slash_dunhao": true,
+    "backslash_dunhao": false,
+    "semicolon_punct": true
+  },
+  "candidates": {
+    "page_size": 5,
+    "horizontal": true,
+    "sort_original_freq": true,
+    "single_char_first": false,
+    "emoji_candidates": true,
+    "auto_select_pattern": ""
+  },
+  "reverse": {
+    "enabled": true,
+    "dict": "pinyin",
+    "prefix": "`",
+    "tips": true
+  },
+  "sentence": {
+    "enabled": true,
+    "ngram_weight": 0.6,
+    "grammar_weight": 0.3,
+    "neural_weight": 0.1,
+    "use_neural_rerank": false,
+    "max_sentence_length": 30
+  },
+  "punct": {
+    "import_preset": "default",
+    "full_shape": false
+  },
+  "clipboard": {
+    "enabled": false,
+    "max_entries": 20
+  },
+  "appearance": {
+    "skin": "hufu-default",
+    "font_face": "Microsoft YaHei",
+    "font_point": 14.0,
+    "inline_preedit": true,
+    "horizontal": true,
+    "show_preedit_in_app": true
+  },
+  "sound": {
+    "enabled": false,
+    "volume": 0.5,
+    "key_sound": "default",
+    "commit_sound": ""
+  },
+  "opencc": {
+    "enabled": true,
+    "config": "t2s.json",
+    "show_in_comment": false,
+    "excluded_types": [
+      "raw"
+    ]
+  },
+  "user": {
+    "learning_enabled": true,
+    "auto_save_interval_sec": 300,
+    "memory_decay_days": 30
+  },
+  "keymap": {
+    "bindings": [
+      {
+        "accept": "Control+p",
+        "send": "Up",
+        "when": "composing"
+      },
+      {
+        "accept": "Control+n",
+        "send": "Down",
+        "when": "composing"
+      },
+      {
+        "accept": "Control+b",
+        "send": "Left",
+        "when": "composing"
+      },
+      {
+        "accept": "Control+f",
+        "send": "Right",
+        "when": "composing"
+      },
+      {
+        "accept": "Control+h",
+        "send": "BackSpace",
+        "when": "composing"
+      }
+    ]
+  }
+}
