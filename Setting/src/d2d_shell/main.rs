@@ -501,7 +501,7 @@ impl Shell {
         // 换成 DIP,否则 125% 缩放下内容按 1.25 倍画、右缘必裁(双重缩放)。
         let (w, h) = self.client_size();
         let (w, h) = (w / s, h / s);
-        let x = 176.0 * s;
+        let x = 144.0 * s;
         let width = (w - 176.0 - 24.0).max(80.0) * s;
         (x, 74.0 * s, width, (h - 74.0 - 24.0).max(40.0) * s)
     }
