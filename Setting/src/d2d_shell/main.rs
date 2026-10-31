@@ -846,7 +846,7 @@ impl Shell {
         }
         // 极细描边：玻璃边缘的亮线。
         // （用 1px 圆角矩形叠画的做法留给 v2 的 SDF；v1 先用内描边矩形近似。）
-        fill_round(1.0 * s, 1.0 * s, w - 2.0 * s, h - 2.0 * s, 13.0 * s, 0x26FFFFFF);
+        fill_round(1.0 * s, 1.0 * s, w - 2.0 * s, h - 2.0 * s, 7.0 * s, 0x26FFFFFF);
 
         // 标题栏。
         fill_rect(0.0, 0.0, w, 52.0 * s, 0x00000000);
@@ -893,10 +893,10 @@ impl Shell {
             let selected = index == self.page;
             let hovered = matches!(self.hover, Hover::Page(i) if i == index);
             if selected {
-                fill_round(20.0 * s, y, 112.0 * s, 40.0 * s, 9.0 * s, 0x26FFFFFF);
+                fill_round(20.0 * s, y, 112.0 * s, 40.0 * s, 8.0 * s, 0x26FFFFFF);
                 fill_round(20.0 * s, y + 11.0 * s, 3.0 * s, 18.0 * s, 1.5 * s, 0xFF4C8DFF);
             } else if hovered {
-                fill_round(20.0 * s, y, 112.0 * s, 40.0 * s, 9.0 * s, 0x12FFFFFF);
+                fill_round(20.0 * s, y, 112.0 * s, 40.0 * s, 8.0 * s, 0x12FFFFFF);
             }
             self.text(
                 &rt,
@@ -1041,7 +1041,7 @@ impl Shell {
     ) {
         // 可滚动主页:整页随 scroll 上移(2026-10-31 用户报"不能翻页")。
         let top = self.list_viewport().0 - self.scroll;
-        let (_, h) = self.client_size();
+        let (window_w, h) = self.client_size();
         let window_h = h; // 页脚钉在真实窗口底
         let h = h + self.scroll;
         let Some(snap) = &self.stats else {
@@ -1059,7 +1059,7 @@ impl Shell {
         let books = weasel_settings::career::book_level(snap.total_chars);
         let career_top = top;
         let career_h = 96.0 * s;
-        draw_fill_round(rt, brush, x, career_top, width, career_h, 10.0 * s, 0x47FFFFFF);
+        draw_fill_round(rt, brush, x, career_top, width, career_h, 8.0 * s, 0x47FFFFFF);
         self.text(
             rt,
             brush,
@@ -1118,27 +1118,27 @@ impl Shell {
 
         // ③ 年度热力图（Slint 的「2026」格子）
         let heat_top = cards_top + 34.0 * s + 3.0 * (ch + gap) + 8.0 * s;
-        let heat_h = 96.0 * s;
-        draw_fill_round(rt, brush, x, heat_top, width, heat_h, 10.0 * s, 0x47FFFFFF);
-        self.text(rt, brush, &format!("{} 年", snap.quarter_label), &f.label, x + 14.0 * s, heat_top + 8.0 * s, 200.0 * s, 16.0 * s, 0xFFC9D2E0);
-        let cell = 7.0 * s;
-        let gap = 2.0 * s;
-        let cols = ((width - 28.0 * s) / (cell + gap)).floor().max(1.0) as usize;
+        // 年度格子:53 周 × 7 天(GitHub 贡献图同款,列=周/行=星期)。
+        // 之前 cell 写死 7px、列数按宽度铺 ⇒ 371 天挤成三行小芝麻(用户:这么点看得见吗)。
+        let heat_h = 170.0 * s;
+        draw_fill_round(rt, brush, x, heat_top, width, heat_h, 8.0 * s, 0x47FFFFFF);
+        self.text(rt, brush, &format!("{} 年 · 一格一天,越亮打得越多", snap.quarter_label), &f.label, x + 14.0 * s, heat_top + 8.0 * s, 420.0 * s, 16.0 * s, 0xFFC9D2E0);
+        let ygap = 3.0 * s;
+        let cell = ((width - 28.0 * s - 52.0 * ygap) / 53.0).max(4.0 * s);
         let peak = snap.days.iter().map(|day| day.count).max().unwrap_or(0).max(1);
-        for (index, day) in snap.days.iter().enumerate() {
-            if index >= 371 || day.count == 0 && !day.today {
-                continue;
-            }
-            let col = index % cols;
-            let row = index / cols;
-            if row >= 7 {
-                break;
-            }
-            let cx = x + 14.0 * s + col as f32 * (cell + gap);
-            let cy = heat_top + 26.0 * s + row as f32 * (cell + gap);
+        for (index, day) in snap.days.iter().enumerate().take(371) {
+            let col = index / 7;
+            let row = index % 7;
+            let cx = x + 14.0 * s + col as f32 * (cell + ygap);
+            let cy = heat_top + 28.0 * s + row as f32 * (cell + ygap);
             let ratio = day.count as f32 / peak as f32;
-            let alpha = (0x30 as f32 + ratio * 0xCF as f32) as u32;
-            draw_fill_round(rt, brush, cx, cy, cell, cell, 1.5 * s, (alpha << 24) | 0x34D399);
+            // 没打字的天也画一格暗底,整个网格才成形
+            let alpha = if day.count == 0 && !day.today {
+                0x16
+            } else {
+                (0x30 as f32 + ratio * 0xCF as f32) as u32
+            };
+            draw_fill_round(rt, brush, cx, cy, cell, cell, 2.0 * s, (alpha << 24) | 0x34D399);
         }
 
         // ③ 键盘热力图 + 指法分布（数据来自 lib）
@@ -1146,7 +1146,7 @@ impl Shell {
         // 键高固定:之前从 (h - key_top - 150) 推导,h 含滚动偏移后键块被撑到
         // 一整屏高(用户截图"怎么这么长")。
         let key_h = 210.0 * s;
-        draw_fill_round(rt, brush, x, key_top, width, key_h, 10.0 * s, 0x47FFFFFF);
+        draw_fill_round(rt, brush, x, key_top, width, key_h, 8.0 * s, 0x47FFFFFF);
         self.text(rt, brush, "键盘热力图", &f.heading, x + 14.0 * s, key_top + 8.0 * s, 200.0 * s, 26.0 * s, 0xFFF7FAFF);
         let (key_counts, _code_lens) = weasel_settings::stats::load_hist();
         let rows: [&[u32]; 4] = [
@@ -1158,8 +1158,55 @@ impl Shell {
         let key_peak = key_counts.iter().copied().max().unwrap_or(0).max(1) as f32;
         let area_x = x + 14.0 * s;
         let area_w = width - 28.0 * s;
+        // 键名:用户 2026-10-31"键盘上的字母呢"——每颗键画上自己的键帽字。
+        let key_label = |vk: u32| -> &'static str {
+            match vk {
+                0x20 => "空格",
+                0x08 => "退格",
+                0x0D => "回车",
+                0x09 => "Tab",
+                0x14 => "Caps",
+                0x10 | 0xA0 | 0xA1 => "Shift",
+                0x11 | 0xA2 | 0xA3 => "Ctrl",
+                0x12 | 0xA4 | 0xA5 => "Alt",
+                0x5B | 0x5C => "Win",
+                0x30..=0x39 | 0x41..=0x5A => match char::from_u32(vk) {
+                    Some(ch) => match ch {
+                        'A' => "A",
+                        'B' => "B",
+                        'C' => "C",
+                        'D' => "D",
+                        'E' => "E",
+                        'F' => "F",
+                        'G' => "G",
+                        'H' => "H",
+                        'I' => "I",
+                        'J' => "J",
+                        'K' => "K",
+                        'L' => "L",
+                        'M' => "M",
+                        'N' => "N",
+                        'O' => "O",
+                        'P' => "P",
+                        'Q' => "Q",
+                        'R' => "R",
+                        'S' => "S",
+                        'T' => "T",
+                        'U' => "U",
+                        'V' => "V",
+                        'W' => "W",
+                        'X' => "X",
+                        'Y' => "Y",
+                        'Z' => "Z",
+                        _ => "",
+                    },
+                    None => "",
+                },
+                _ => "",
+            }
+        };
         let mut ky = key_top + 40.0 * s;
-        let kh = 26.0 * s;
+        let kh = 30.0 * s;
         for row in rows.iter() {
             let count = row.len() as f32;
             let kw = ((area_w - (count - 1.0) * 2.0 * s) / count).max(6.0 * s);
@@ -1169,6 +1216,12 @@ impl Shell {
                 let ratio = (value / key_peak).min(1.0);
                 let alpha = (0x22 as f32 + ratio * 0xD8 as f32) as u32;
                 draw_fill_round(rt, brush, kx, ky, kw, kh, 3.0 * s, (alpha << 24) | 0x34D399);
+                let label = key_label(*vk);
+                if !label.is_empty() {
+                    // 键帽字:亮键用深字,暗键用浅字,垂直居中
+                    let ink = if ratio > 0.55 { 0xFF0B2A1D } else { 0xFFE9FDF4 };
+                    self.text(rt, brush, label, &f.center, kx, ky + (kh - 14.0 * s) / 2.0, kw, 16.0 * s, ink);
+                }
                 kx += kw + 2.0 * s;
             }
             ky += kh + 3.0 * s;
@@ -1208,15 +1261,15 @@ impl Shell {
         // 实测内容底边回写(滚动上限的数据源;含滚动偏移,转回内容坐标)。
         self.home_content_h.set(wy + row_h + self.scroll);
 
-        // ⑤ 页脚
+        // ⑤ 页脚:水平居中 + emoji(照 Slint 版;用户 2026-10-31"水平居中,我的emoji呢")
         self.text(
             rt,
             brush,
-            "灵感来源：羊毛雪花 · input_statistic 统计插件",
-            &f.note,
-            x,
+            "灵感来源:🐑 ❄️ 🌸 羊毛雪花 · input_statistic 统计插件",
+            &f.center,
+            0.0,
             window_h - 34.0 * s,
-            width,
+            window_w,
             16.0 * s,
             0xFF9AA4B2,
         );
@@ -1240,7 +1293,7 @@ impl Shell {
         s: f32,
     ) {
         // 卡片底色略提（面板已经 24% 透明，卡片太透字就糊了）
-        draw_fill_round(rt, brush, x, y, w, h, 10.0 * s, 0x47FFFFFF);
+        draw_fill_round(rt, brush, x, y, w, h, 8.0 * s, 0x47FFFFFF);
         self.text(rt, brush, label, &f.label, x + 16.0 * s, y + 10.0 * s, w - 32.0 * s, 16.0 * s, 0xFF8A94A3);
         // 大数字（白） + **灰色小字在它右边同一行**（用户 15:0x 明确要求，别放下面）
         self.text(rt, brush, value, &f.heading, x + 16.0 * s, y + 30.0 * s, w - 32.0 * s, 30.0 * s, 0xFFF2F5FA);
@@ -1586,7 +1639,7 @@ impl Shell {
         let row_h = 56.0 * s;
         for (index, (label, value)) in rows.iter().enumerate() {
             let ry = top + index as f32 * (row_h + 8.0 * s);
-            draw_fill_round(rt, brush, x, ry, width, row_h, 10.0 * s, 0x0FFFFFFF);
+            draw_fill_round(rt, brush, x, ry, width, row_h, 8.0 * s, 0x0FFFFFFF);
             self.text(rt, brush, label, &f.body, x + 16.0 * s, ry + 18.0 * s, 120.0 * s, 20.0 * s, 0xFFE9EEF7);
             self.text(
                 rt,
@@ -1697,7 +1750,7 @@ impl Shell {
         s: f32,
     ) {
         let card_h = (height - 20.0 * s).clamp(70.0 * s, 120.0 * s);
-        draw_fill_round(rt, brush, x, y, width, card_h, 10.0 * s, 0x0FFFFFFF);
+        draw_fill_round(rt, brush, x, y, width, card_h, 8.0 * s, 0x0FFFFFFF);
         draw_fill_round(rt, brush, x, y, 3.0 * s, card_h, 1.5 * s, 0x804C8DFF);
         self.text(
             rt,
