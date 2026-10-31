@@ -1109,11 +1109,11 @@ impl Shell {
 
         // ③ 年度热力图(Slint 同款四档色阶:一格一天,53周×7行,<100/<500/<1500/≥1500)
         let heat_top = cards_top + 34.0 * s + 3.0 * (ch + gap) + 8.0 * s;
-        let ygap = 3.0 * s;
+        let ygap = 4.0 * s;
         let ycell = ((width - 28.0 * s - 52.0 * ygap) / 53.0).floor().max(6.0 * s);
         let heat_h = 28.0 * s + 7.0 * (ycell + ygap) + 24.0 * s;
         draw_fill_round(rt, brush, x, heat_top, width, heat_h, 8.0 * s, 0x47FFFFFF);
-        self.text(rt, brush, &format!("{} 年 · 一格一天", snap.quarter_label), &f.label, x + 14.0 * s, heat_top + 8.0 * s, 420.0 * s, 16.0 * s, 0xFFC9D2E0);
+        self.text(rt, brush, &format!("{} 年", snap.quarter_label), &f.heading, x + 14.0 * s, heat_top + 8.0 * s, 240.0 * s, 22.0 * s, 0xFFF7FAFF);
         // Slint 四档:<100 / <500 / <1500 / ≥1500(浅绿→深绿),没打字=极暗底
         let tier_color = |count: u32| -> u32 {
             if count == 0 { 0x1434D399 }
