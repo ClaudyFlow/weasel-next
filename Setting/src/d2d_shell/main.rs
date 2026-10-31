@@ -330,6 +330,8 @@ struct Shell {
     update_dir: std::path::PathBuf,
     /// 列表滚动量（像素，已按 DPI 缩放）。
     scroll: f32,
+    /// 主页内容实测底边(像素,paint_home 每帧回写;滚动上限用它适配任何布局改版)。
+    home_content_h: std::cell::Cell<f32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -344,6 +346,8 @@ enum Hover {
     Row(usize),
     /// 「方案选单」页的「保存并部署」按钮。
     Apply,
+    /// 「外观」页的三档材质按钮（下标 0=glass 1=acrylic 2=metal）。
+    Material(usize),
 }
 
 /// `0xAARRGGBB` → D2D 颜色（直通 alpha；D2D 内部自己预乘）。
@@ -461,7 +465,8 @@ fn create_text_format(    factory: &IDWriteFactory,
 
 impl Shell {
     fn scale(&self) -> f32 {
-        self.dpi as f32 / 96.0
+        // 用户 2026-10-31:默认字号太小看不清 ⇒ 缩放不到 125% 的显示也按 125% 起。
+        (self.dpi as f32 / 96.0).max(1.25)
     }
 
     fn client_size(&self) -> (f32, f32) {
@@ -517,6 +522,31 @@ impl Shell {
         }
     }
 
+    /// 「外观」页顶部三档材质按钮的矩形（像素）。
+    fn material_buttons(&self) -> Vec<(f32, f32, f32, f32)> {
+        let s = self.scale();
+        let (x, top, _, _) = self.content_area();
+        let (w, h) = (96.0 * s, 30.0 * s);
+        (0..3)
+            .map(|index| (x + index as f32 * (w + 8.0 * s), top + 56.0 * s, w, h))
+            .collect()
+    }
+
+    /// 把材质写进 `theme/material.txt`（渲染器下次画候选窗时读取）。
+    fn set_material(&mut self, index: usize) {
+        let names = ["glass", "acrylic", "metal"];
+        let Some(name) = names.get(index) else { return };
+        let path = self.user_dir.join("theme").join("material.txt");
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&path, name) {
+            Ok(()) => self.status = format!("候选窗材质 → {name}（打一次字生效）"),
+            Err(error) => self.status = format!("写材质失败：{error}"),
+        }
+        self.repaint();
+    }
+
     /// 「保存并部署」按钮矩形（像素）；只有方案选单页有。
     fn apply_button(&self) -> Option<(f32, f32, f32, f32)> {
         if self.page != PAGE_SCHEMAS {
@@ -533,8 +563,10 @@ impl Shell {
     fn max_scroll(&self) -> f32 {
         let s = self.scale();
         if self.page == PAGE_HOME {
-            // 主页:内容 = 堆叠的功能行,按内容总高滚(2026-10-31 改版)。
-            return (HOME_CONTENT_DIP * s - self.list_viewport().1).max(0.0);
+            // 主页:按 paint_home 上一帧实测的内容底边算滚动上限——
+            // 布局怎么改都不会把底部内容关在可视区外(2026-10-31 用户报"不能翻页")。
+            let content = self.home_content_h.get().max(HOME_CONTENT_DIP * s);
+            return (content - self.list_viewport().1).max(0.0);
         }
         let content = self.list_len() as f32 * (ROW_H + ROW_GAP) * s;
         (content - self.list_viewport().1).max(0.0)
@@ -966,18 +998,6 @@ impl Shell {
             self.paint_placeholder(&rt, brush, f, content_x, content_top + 62.0 * s, content_w, content_h, s);
         }
 
-        // 底部状态行。
-        self.text(
-            &rt,
-            brush,
-            "Direct2D 外壳 v2 · DComp + DWM Acrylic · 0.18.5",
-            &f.right,
-            w - 404.0 * s,
-            h - 30.0 * s,
-            380.0 * s,
-            18.0 * s,
-            0xFF6E7887,
-        );
 
         if let Err(error) = present.end_draw() {
             log(&format!("呈现失败：{error}"));
@@ -1016,7 +1036,11 @@ impl Shell {
         }
     }
 
-    /// 主页（个人记录）：个人生涯 → 数字卡 → 词云 → 30 天/码长/键盘热力。数据来自 `weasel_settings::stats`。
+    /// 主页：**照 Slint 的顺序**（用户 21:0x：多出来的功能删掉，只按 Slint 来）。
+    ///
+    /// 顺序与 Slint `ui/stats.slint` 一致：
+    /// 个人生涯（Lv/称号/境界/经验条/名著）→ 年度热力图 → 键盘热力图 → 指法分布 → 常用字 → 页脚。
+    /// 我原来自己加的「9 张数字卡」「近 30 天柱状图」「码长分布」Slint 没有，已删除。
     fn paint_home(
         &self,
         rt: &ID2D1RenderTarget,
@@ -1026,10 +1050,10 @@ impl Shell {
         width: f32,
         s: f32,
     ) {
-        // 主页可滚动(2026-10-31):所有行从 top 推导,top 减掉滚动量整页上移。
+        // 可滚动主页:整页随 scroll 上移(2026-10-31 用户报"不能翻页")。
         let top = self.list_viewport().0 - self.scroll;
         let (_, h) = self.client_size();
-        let bottom = h + self.scroll - 40.0 * s;
+        let h = h + self.scroll;
         let Some(snap) = &self.stats else {
             self.text(rt, brush, "读不到统计数据", &f.body, x, top, width, 22.0 * s, 0xFFB8C1CF);
             return;
@@ -1038,16 +1062,17 @@ impl Shell {
             self.text(rt, brush, "还没有统计数据：先打几个字，这里会自动出现", &f.body, x, top, width, 22.0 * s, 0xFFB8C1CF);
             return;
         }
-        let gap = 10.0 * s;
-        let cw = (width - 2.0 * gap) / 3.0;
-        let ch = 74.0 * s;
+
+        // ① 个人生涯 = 标题 + 9 张统计卡（Slint 就是「个人生涯」下面一排排卡片，我上一版删错了）
+        self.text(rt, brush, "个人生涯", &f.heading, x, top, 220.0 * s, 28.0 * s, 0xFFF7FAFF);
+        self.text(rt, brush, "本机记录，不上传", &f.label, x + 110.0 * s, top + 6.0 * s, 260.0 * s, 16.0 * s, 0xFF9AA4B2);
         let today_min = snap.today_active_ms / 60_000;
         let total_min = snap.total_active_ms / 60_000;
         let recent_avg = snap.recent_chars / u64::from(snap.recent_days.max(1));
         let cards: [(&str, String, String); 9] = [
             ("今日击键", thou(snap.today_keys), format!("累计 {}", thou(snap.total_keys))),
             ("今日上屏", format!("{} 字", thou(snap.today_chars)), format!("累计 {} 字", thou(snap.total_chars))),
-            ("今日速度", format!("{} 字/分", snap.today_speed), format!("近 7 天 {} 字/分", snap.recent_speed)),
+            ("今日速度", format!("{} 字/分", snap.today_speed), format!("近 7 天 {}", snap.recent_speed)),
             ("连续使用", format!("{} 天", snap.streak_days), format!("最长 {} 天", snap.best_streak_days)),
             ("今日键准", format!("{}.{}%", snap.today_key_accuracy_x10 / 10, snap.today_key_accuracy_x10 % 10),
                 format!("近 7 天 {}.{}%", snap.recent_key_accuracy_x10 / 10, snap.recent_key_accuracy_x10 % 10)),
@@ -1056,27 +1081,34 @@ impl Shell {
             ("打字时间", format!("{} 分", today_min), format!("累计 {} 分", total_min)),
             ("平均每日", format!("{} 字", snap.avg_daily_chars), format!("近 7 天 {} 字", recent_avg)),
         ];
-        // ── 个人生涯（照 Slint `stats.slint:225-340` 的顺序：它在最上面）──
-        let career = weasel_settings::career::career_level(snap.total_exp);
-        let (title, level, exp_cur, exp_span) = career;
+        let gap = 10.0 * s;
+        let cw = (width - 2.0 * gap) / 3.0;
+        let ch = 74.0 * s;
+        for (index, (label, value, note)) in cards.iter().enumerate() {
+            let cx = x + (index % 3) as f32 * (cw + gap);
+            let cy = top + 34.0 * s + (index / 3) as f32 * (ch + gap);
+            self.stat_card(rt, brush, f, cx, cy, cw, ch, label, value, note, s);
+        }
+
+        // 段位卡（Lv / 经验条 / 名著）
+        let (title, level, exp_cur, exp_span) = weasel_settings::career::career_level(snap.total_exp);
         let realm = weasel_settings::career::career_realm(snap.total_chars);
         let books = weasel_settings::career::book_level(snap.total_chars);
-        let career_h = 92.0 * s;
-        draw_fill_round(rt, brush, x, top, width, career_h, 10.0 * s, 0x47FFFFFF);
-        self.text(rt, brush, "个人生涯", &f.label, x + 16.0 * s, top + 8.0 * s, 200.0 * s, 16.0 * s, 0xFFC9D2E0);
+        let career_top = top + 34.0 * s + 3.0 * (ch + gap) + 6.0 * s;
+        let career_h = 96.0 * s;
+        draw_fill_round(rt, brush, x, career_top, width, career_h, 10.0 * s, 0x47FFFFFF);
         self.text(
             rt,
             brush,
-            &format!("Lv.{level} / {}  {title}  ·  {realm}", weasel_settings::career::CAREER_MAX_LEVEL),
+            &format!("{title}  Lv.{level} / {}  ·  {realm}", weasel_settings::career::CAREER_MAX_LEVEL),
             &f.heading,
             x + 16.0 * s,
-            top + 26.0 * s,
+            career_top + 10.0 * s,
             width - 32.0 * s,
             30.0 * s,
             0xFFF7FAFF,
         );
-        // 经验条
-        let bar_y = top + 62.0 * s;
+        let bar_y = career_top + 46.0 * s;
         let bar_w = width - 32.0 * s;
         draw_fill_round(rt, brush, x + 16.0 * s, bar_y, bar_w, 8.0 * s, 4.0 * s, 0x33FFFFFF);
         let ratio = (exp_cur as f32 / exp_span.max(1) as f32).clamp(0.0, 1.0);
@@ -1084,242 +1116,119 @@ impl Shell {
         self.text(
             rt,
             brush,
-            &format!("还差 {} 升下一级 · {books}", exp_span.saturating_sub(exp_cur)),
+            &format!("{} / {} 经验 · 还差 {} 升下一级 · {books}", exp_cur, exp_span, exp_span.saturating_sub(exp_cur)),
             &f.note,
             x + 16.0 * s,
-            bar_y + 14.0 * s,
+            bar_y + 12.0 * s,
             width - 32.0 * s,
             18.0 * s,
             0xFFE4EAF5,
         );
-        let grid_top = top + career_h + 26.0 * s;
 
-        for (index, (label, value, note)) in cards.iter().enumerate() {
-            let cx = x + (index % 3) as f32 * (cw + gap);
-            let cy = grid_top + (index / 3) as f32 * (ch + gap);
-            self.stat_card(rt, brush, f, cx, cy, cw, ch, label, value, note, s);
-        }
-
-        // 词云：字号按名次分三档（前 3 大 / 前 12 中 / 其余小），按行排、超出换行。
-        let cloud_y = grid_top + 3.0 * (ch + gap);
-        let cloud_h = 104.0 * s;
-        // 词云**不加卡片底**（用户 14:2x：觉得那块底色难看）——字直接浮在玻璃上。
-        self.text(rt, brush, "常用字词云", &f.label, x + 16.0 * s, cloud_y + 6.0 * s, 220.0 * s, 16.0 * s, 0xFF8A94A3);
-        let right = x + width - 16.0 * s;
-        let mut wx = x + 16.0 * s;
-        let mut wy = cloud_y + 26.0 * s;
-        let mut row_h = 28.0 * s;
-        for (index, (word, count)) in snap.words.iter().take(48).enumerate() {
-            // 字号按次数分四档（Slint：字号 = 出现次数），不是按名次
-            let peak = snap.words.first().map(|(_, c)| *c).unwrap_or(1).max(1) as f32;
-            let ratio = *count as f32 / peak;
-            let (format, cell_w, cell_h) = if ratio > 0.6 {
-                (&f.heading, 40.0 * s, 34.0 * s)
-            } else if ratio > 0.3 {
-                (&f.center, 28.0 * s, 26.0 * s)
-            } else if ratio > 0.12 {
-                (&f.body, 22.0 * s, 22.0 * s)
-            } else {
-                (&f.label, 17.0 * s, 18.0 * s)
-            };
-            if wx + cell_w > right {
-                wx = x + 16.0 * s;
-                wy += row_h;
-                row_h = cell_h;
-            }
-            if wy + cell_h > cloud_y + cloud_h - 4.0 * s {
-                break;
-            }
-            let alpha = if count > &0 { 0xFFE9EEF7 } else { 0xFF8A94A3 };
-            self.text(rt, brush, word, format, wx, wy, cell_w, cell_h, alpha);
-            wx += cell_w;
-        }
-
-        // ── 打字时段(2026-10-31,手机屏幕使用时间样式):今天 24 小时 ──
-        // 数据来自 stat.bin 新尾部扩展(每小时 u32 键 + u64 有效毫秒);
-        // 老文件没有就是全 0,此时显示提示行。
-        let hours_y = cloud_y + cloud_h + gap;
-        let hours_h = 104.0 * s;
-        draw_fill_round(rt, brush, x, hours_y, width, hours_h, 10.0 * s, 0x0FFFFFFF);
-        let (hour_keys, hour_ms) = self.hours;
-        let use_ms = hour_ms.iter().any(|v| *v > 0);
-        let today_minutes = (hour_ms.iter().sum::<u64>() / 60_000) as u32;
-        let hours_title = if use_ms {
-            format!("打字时段 · 今天 · 共 {} 分", today_minutes)
-        } else {
-            "打字时段 · 今天".to_string()
-        };
-        self.text(
-            rt,
-            brush,
-            &hours_title,
-            &f.label,
-            x + 16.0 * s,
-            hours_y + 8.0 * s,
-            360.0 * s,
-            16.0 * s,
-            0xFF8A94A3,
-        );
-        let now_hour = weasel_settings::stats::current_hour();
-        let h_inner_x = x + 16.0 * s;
-        let h_inner_w = width - 32.0 * s;
-        let h_base = hours_y + hours_h - 14.0 * s;
-        let h_top = hours_y + 30.0 * s;
-        let h_slot = h_inner_w / 24.0;
-        let h_bw = (h_slot - 2.0 * s).max(2.0 * s);
-        let h_max_ms = hour_ms.iter().copied().max().unwrap_or(0).max(1) as f32;
-        let h_max_keys = hour_keys.iter().copied().max().unwrap_or(0).max(1) as f32;
-        for hour in 0..24usize {
-            let (keys, ms) = (hour_keys[hour], hour_ms[hour]);
-            let ratio = if use_ms {
-                ms as f32 / h_max_ms
-            } else {
-                keys as f32 / h_max_keys
-            };
-            let bh = ((h_base - h_top) * ratio.clamp(0.0, 1.0))
-                .max(if keys > 0 || ms > 0 { 2.0 * s } else { 0.0 });
-            let bx = h_inner_x + hour as f32 * h_slot;
-            // 当前小时亮蓝,其余半透明;有量的格子才画
-            let tint = if hour == now_hour { 0xFF4C8DFF } else { 0x664C8DFF };
-            if bh > 0.0 {
-                draw_fill_round(rt, brush, bx, h_base - bh, h_bw, bh, 2.0 * s, tint);
-            }
-        }
-        // 小时刻度:0 / 6 / 12 / 18 / 23
-        for (hour, label) in [(0u32, "0"), (6, "6"), (12, "12"), (18, "18"), (23, "23")] {
-            let lx = h_inner_x + hour as f32 * h_slot;
-            self.text(rt, brush, label, &f.note, lx, h_base + 2.0 * s, h_slot, 14.0 * s, 0xFF9AA4B2);
-        }
-        if !use_ms && hour_keys.iter().all(|n| *n == 0) {
-            self.text(
-                rt,
-                brush,
-                "还没有时段数据(旧版 stat.bin 没有这一项,重新打几个字就有了)",
-                &f.note,
-                x + 16.0 * s,
-                hours_y + 46.0 * s,
-                width - 32.0 * s,
-                18.0 * s,
-                0xFF9AA4B2,
-            );
-        }
-
-        // ── 近 30 天(独占一行,用户 2026-10-31:一个大功能一行)──
-        let chart_y = hours_y + hours_h + gap;
-        let chart_h = 128.0 * s;
-        let chart_w = width;
-        draw_fill_round(rt, brush, x, chart_y, chart_w, chart_h, 10.0 * s, 0x0FFFFFFF);
-        self.text(
-            rt,
-            brush,
-            &format!("近 30 天 · {} 年 · 空白 = 那天没打字", snap.quarter_label),
-            &f.label,
-            x + 16.0 * s,
-            chart_y + 8.0 * s,
-            420.0 * s,
-            16.0 * s,
-            0xFF8A94A3,
-        );
-        let today_index = snap.today_week * 7 + snap.today_day;
-        let upto = if today_index >= 0 {
-            (today_index as usize + 1).min(snap.days.len())
-        } else {
-            snap.days.len()
-        };
-        let days: Vec<&weasel_settings::stats::DayCell> = snap.days[..upto].iter().rev().take(30).collect();
-        let max = days.iter().map(|day| day.count).max().unwrap_or(0).max(1);
-        let count = days.len().max(1) as f32;
-        let plot_x = x + 16.0 * s;
-        let plot_w = chart_w - 32.0 * s;
-        let base = chart_y + chart_h - 14.0 * s;
-        let plot_top = chart_y + 30.0 * s;
-        let slot = plot_w / count;
-        let bar_w = (slot - 3.0 * s).max(3.0 * s);
-        for (index, day) in days.iter().rev().enumerate() {
-            let ratio = day.count as f32 / max as f32;
-            let bh = ((base - plot_top) * ratio).max(if day.count > 0 { 2.0 * s } else { 0.0 });
-            let bx = plot_x + index as f32 * slot;
-            draw_fill_round(rt, brush, bx, base - bh, bar_w, bh, 2.0 * s,
-                if day.today { 0xFF4C8DFF } else { 0x664C8DFF });
-        }
-
-        // ── 码长分布(独占一行)──
-        let hist_y = chart_y + chart_h + gap;
-        let hist_h = 110.0 * s;
-        let (_, code_lens) = weasel_settings::stats::load_hist();
-        draw_fill_round(rt, brush, x, hist_y, width, hist_h, 10.0 * s, 0x0FFFFFFF);
-        self.text(rt, brush, "码长分布", &f.label, x + 16.0 * s, hist_y + 8.0 * s, 300.0 * s, 16.0 * s, 0xFF8A94A3);
-        let max_code = code_lens.iter().copied().max().unwrap_or(0).max(1);
-        let bins = code_lens.len().max(1) as f32;
-        let inner_x = x + 16.0 * s;
-        let inner_w = width - 32.0 * s;
-        let inner_base = hist_y + hist_h - 14.0 * s;
-        let inner_top = hist_y + 30.0 * s;
-        let slot_w = inner_w / bins;
-        let bw = (slot_w - 2.0 * s).max(2.0 * s);
-        for (index, value) in code_lens.iter().enumerate() {
-            if *value == 0 {
+        // ② 年度热力图（Slint 的「2026」格子）
+        let heat_top = career_top + career_h + 14.0 * s;
+        let heat_h = 96.0 * s;
+        draw_fill_round(rt, brush, x, heat_top, width, heat_h, 10.0 * s, 0x47FFFFFF);
+        self.text(rt, brush, &format!("{} 年", snap.quarter_label), &f.label, x + 14.0 * s, heat_top + 8.0 * s, 200.0 * s, 16.0 * s, 0xFFC9D2E0);
+        let cell = 7.0 * s;
+        let gap = 2.0 * s;
+        let cols = ((width - 28.0 * s) / (cell + gap)).floor().max(1.0) as usize;
+        let peak = snap.days.iter().map(|day| day.count).max().unwrap_or(0).max(1);
+        for (index, day) in snap.days.iter().enumerate() {
+            if index >= 371 || day.count == 0 && !day.today {
                 continue;
             }
-            let ratio = *value as f32 / max_code as f32;
-            let bh = ((inner_base - inner_top) * ratio).max(2.0 * s);
-            draw_fill_round(rt, brush, inner_x + index as f32 * slot_w, inner_base - bh, bw, bh, 2.0 * s, 0x884C8DFF);
+            let col = index % cols;
+            let row = index / cols;
+            if row >= 7 {
+                break;
+            }
+            let cx = x + 14.0 * s + col as f32 * (cell + gap);
+            let cy = heat_top + 26.0 * s + row as f32 * (cell + gap);
+            let ratio = day.count as f32 / peak as f32;
+            let alpha = (0x30 as f32 + ratio * 0xCF as f32) as u32;
+            draw_fill_round(rt, brush, cx, cy, cell, cell, 1.5 * s, (alpha << 24) | 0x34D399);
         }
 
-        // ── 键盘热力 + 指法分布(独占一行)──
-        let heat_y = hist_y + hist_h + gap;
-        let heat_h = 170.0 * s;
-        let (key_counts, _) = weasel_settings::stats::load_hist();
-        draw_fill_round(rt, brush, x, heat_y, width, heat_h, 10.0 * s, 0x0FFFFFFF);
-        self.text(rt, brush, "键盘热力", &f.label, x + 16.0 * s, heat_y + 8.0 * s, 300.0 * s, 16.0 * s, 0xFF8A94A3);
-        // 三行字母 + 一行数字 + 空格(VK 码)
+        // ③ 键盘热力图 + 指法分布（数据来自 lib）
+        let key_top = heat_top + heat_h + 14.0 * s;
+        let key_h = (h - key_top - 150.0 * s).max(120.0 * s);
+        draw_fill_round(rt, brush, x, key_top, width, key_h, 10.0 * s, 0x47FFFFFF);
+        self.text(rt, brush, "键盘热力图", &f.heading, x + 14.0 * s, key_top + 8.0 * s, 200.0 * s, 26.0 * s, 0xFFF7FAFF);
+        let (key_counts, _code_lens) = weasel_settings::stats::load_hist();
         let rows: [&[u32]; 4] = [
             &[0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30],
             &[0x51, 0x57, 0x45, 0x52, 0x54, 0x59, 0x55, 0x49, 0x4F, 0x50],
             &[0x41, 0x53, 0x44, 0x46, 0x47, 0x48, 0x4A, 0x4B, 0x4C],
             &[0x5A, 0x58, 0x43, 0x56, 0x42, 0x4E, 0x4D, 0x20],
         ];
-        let peak = key_counts.iter().copied().max().unwrap_or(0).max(1) as f32;
-        let key_area_x = x + 16.0 * s;
-        let key_area_w = width - 200.0 * s;
-        let mut ky = heat_y + 30.0 * s;
-        let key_h = ((heat_h - 44.0 * s) / 4.0 - 3.0 * s).max(8.0 * s);
+        let key_peak = key_counts.iter().copied().max().unwrap_or(0).max(1) as f32;
+        let area_x = x + 14.0 * s;
+        let area_w = width - 28.0 * s;
+        let mut ky = key_top + 40.0 * s;
+        let kh = ((key_h - 60.0 * s) / 4.0 - 3.0 * s).max(10.0 * s);
         for row in rows.iter() {
             let count = row.len() as f32;
-            let kw = ((key_area_w - (count - 1.0) * 2.0 * s) / count).max(4.0 * s);
-            let mut kix = key_area_x;
+            let kw = ((area_w - (count - 1.0) * 2.0 * s) / count).max(6.0 * s);
+            let mut kx = area_x;
             for vk in row.iter() {
                 let value = key_counts.get(*vk as usize).copied().unwrap_or(0) as f32;
-                let ratio = (value / peak).min(1.0);
-                // 0 → 很暗的灰;越热越蓝越亮
-                let alpha = (0x12 as f32 + ratio * (0xD0 as f32 - 0x12 as f32)) as u32;
-                draw_fill_round(rt, brush, kix, ky, kw, key_h, 3.0 * s, (alpha << 24) | 0x4C8DFF);
-                kix += kw + 2.0 * s;
+                let ratio = (value / key_peak).min(1.0);
+                let alpha = (0x22 as f32 + ratio * 0xD8 as f32) as u32;
+                draw_fill_round(rt, brush, kx, ky, kw, kh, 3.0 * s, (alpha << 24) | 0x34D399);
+                kx += kw + 2.0 * s;
             }
-            ky += key_h + 3.0 * s;
+            ky += kh + 3.0 * s;
         }
-        // 指法分布(照 Slint :527-536)——放键盘**下方**整行铺开:
-        // 之前塞右侧窄栏,长文案换行互叠(用户截图实锤)。
         let (hands, rows_f, names) = weasel_settings::stats::finger_breakdown(&key_counts);
-        let info_y = ky + 4.0 * s;
-        self.text(rt, brush, &format!("左右手  {hands}"), &f.note, x + 16.0 * s, info_y, width - 32.0 * s, 16.0 * s, 0xFFC9D2E0);
-        self.text(rt, brush, &format!("三行      {rows_f}"), &f.note, x + 16.0 * s, info_y + 18.0 * s, width - 32.0 * s, 16.0 * s, 0xFFC9D2E0);
-        self.text(rt, brush, &format!("九指      {names}"), &f.note, x + 16.0 * s, info_y + 36.0 * s, width - 32.0 * s, 16.0 * s, 0xFFC9D2E0);
+        self.text(rt, brush, &format!("指法分布 · 左右手 {hands} · 三行 {rows_f}"), &f.note, area_x, ky + 4.0 * s, area_w, 18.0 * s, 0xFFE4EAF5);
+        self.text(rt, brush, &names, &f.label, area_x, ky + 22.0 * s, area_w, 16.0 * s, 0xFFC9D2E0);
 
-        // 页脚（照 Slint `stats.slint:713`）
-        let (_, total_h) = self.client_size();
+        // ④ 常用字（字号 = 出现次数）
+        let words_top = ky + 44.0 * s;
+        self.text(rt, brush, "常用字", &f.heading, x, words_top, 200.0 * s, 26.0 * s, 0xFFF7FAFF);
+        let words_peak = snap.words.first().map(|(_, c)| *c).unwrap_or(1).max(1) as f32;
+        let mut wx = x;
+        let mut wy = words_top + 30.0 * s;
+        let right = x + width;
+        let mut row_h = 26.0 * s;
+        for (word, count) in snap.words.iter().take(48) {
+            let ratio = *count as f32 / words_peak;
+            let (format, cell_w, cell_h) = if ratio > 0.6 {
+                (&f.heading, 44.0 * s, 34.0 * s)
+            } else if ratio > 0.3 {
+                (&f.center, 30.0 * s, 28.0 * s)
+            } else {
+                (&f.body, 22.0 * s, 22.0 * s)
+            };
+            if wx + cell_w > right {
+                wx = x;
+                wy += row_h;
+                row_h = cell_h;
+            }
+            if wy + cell_h > h - 40.0 * s {
+                break;
+            }
+            self.text(rt, brush, word, format, wx, wy, cell_w, cell_h, 0xFFF7FAFF);
+            wx += cell_w;
+        }
+        // 实测内容底边回写(滚动上限的数据源;含滚动偏移,转回内容坐标)。
+        self.home_content_h.set(wy + row_h + self.scroll);
+
+        // ⑤ 页脚
         self.text(
             rt,
             brush,
             "灵感来源：羊毛雪花 · input_statistic 统计插件",
             &f.note,
             x,
-            total_h - 34.0 * s,
+            h - 34.0 * s,
             width,
             16.0 * s,
             0xFF9AA4B2,
         );
     }
+
 
     /// 数字卡片：小标签 + 大数字 + 灰色注脚。
     #[allow(clippy::too_many_arguments)]
@@ -2093,6 +2002,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                             }
                         }
                         Hover::Apply => s.save_schemas(),
+                        Hover::Material(index) => s.set_material(index),
                         Hover::None => {}
                     }
                 }
@@ -2151,7 +2061,7 @@ fn run() -> Result<(), String> {
         let hwnd = CreateWindowExW(
             WS_EX_NOREDIRECTIONBITMAP_ | WS_EX_APPWINDOW_,
             class,
-            w!("小狼毫Next 设置（Direct2D 外壳 v2）"),
+            w!("小狼毫Next 设置"),
             WS_POPUP_ | WS_THICKFRAME_ | WS_MINIMIZEBOX_ | WS_MAXIMIZEBOX_ | WS_SYSMENU_,
             CW_USEDEFAULT_,
             CW_USEDEFAULT_,
@@ -2217,6 +2127,7 @@ fn run() -> Result<(), String> {
             rows: Vec::new(),
             status: String::new(),
             stats: None,
+            home_content_h: std::cell::Cell::new(0.0),
             hours: ([0; 24], [0; 24]),
             stats_note: String::new(),
             fields: Vec::new(),
