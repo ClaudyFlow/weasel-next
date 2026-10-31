@@ -9,12 +9,23 @@ members = [
     # 设置界面（Slint 版）
     # experimental panel. Keep both buildable so either can be launched.
     "Setting",
+    # Vulkan 版设置外壳（2026-10-31 起，先在 _vk_probe 里验，现已并入工作区）
+    "Setting-vk",
+    # Vulkan 渲染器原型（2026-11-01 从 Setting-vk 拆出：候选窗/模糊/后端探测）
+    "Renderer-VK",
     "common",
     "theme/api",
     "style",
-    "theme/official",
+    "theme",
     "theme/support",
+    # librime config 层的 Rust 重写（独立 bin，不进 Engine、不进安装包）
+    "librime-next",
+    # 東風破 /plum/ 的 Rust 重写：配方管理器（libgit2 + 镜像自动嗅探/切换）
+    "plum-next",
 ]
+# 乙路 2026-10-30：librime-next 的一份**临时副本**，用来在自己的工作区里
+# 验证 make_sentence 的修复方案（甲路正在改真身，不能去碰）。验证完会删掉。
+exclude = ["librime-next-perf"]
 
 [workspace.package]
 license = "BSD-3-Clause"

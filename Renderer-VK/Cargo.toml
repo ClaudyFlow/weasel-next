@@ -1,0 +1,27 @@
+[package]
+name = "weasel-renderer-vk"
+version = "0.18.5"
+edition = "2021"
+license = "BSD-3-Clause"
+
+# Vulkan 渲染器原型(2026-11-01 从 Setting-vk 拆出):
+# 候选窗(cand)+ 背景模糊(blur)+ 后端探测(probe)归渲染器线;
+# 设置界面留在 Setting-vk。拆分动因:两条线各自演进,设置不必背
+# Vulkan 实验的编译与依赖。
+
+[[bin]]
+name = "Weasel-Next-Renderer-VK"
+path = "src/main.rs"
+
+[dependencies]
+ash = "0.38"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+] }
