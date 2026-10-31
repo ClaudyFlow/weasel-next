@@ -1128,7 +1128,7 @@ impl Shell {
             let row = index % 7;
             let cx = x + 14.0 * s + col as f32 * (ycell + ygap);
             let cy = heat_top + 28.0 * s + row as f32 * (ycell + ygap);
-            draw_fill_round(rt, brush, cx, cy, ycell, ycell, 2.0 * s, tier_color(day.count));
+            draw_fill_round(rt, brush, cx, cy, ycell, ycell, 3.0 * s, tier_color(day.count));
         }
         // 图例:少 □□□□ 多 (<100 / <500 / <1500 / ≥1500 键)
         let legend_y = heat_top + 28.0 * s + 7.0 * (ycell + ygap) + 2.0 * s;
