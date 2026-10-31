@@ -965,18 +965,6 @@ impl Shell {
             unsafe {
                 rt.PopAxisAlignedClip();
             }
-            // 页脚固定在窗口底(不随内容滚)。
-            self.text(
-                &rt,
-                brush,
-                "灵感来源:羊毛雪花 · input_statistic 统计插件",
-                &f.note,
-                content_x,
-                h - 34.0 * s,
-                content_w,
-                16.0 * s,
-                0xFF9AA4B2,
-            );
         } else if self.page == PAGE_SETTINGS {
             self.paint_settings(&rt, brush, f, content_x, content_w, s);
         } else if self.page == PAGE_SCHEMAS {
@@ -1116,119 +1104,93 @@ impl Shell {
             self.stat_card(rt, brush, f, cx, cy, cw, ch, label, value, note, s);
         }
 
-        // ③ 年度热力图（Slint 的「2026」格子）
+        // ③ 年度热力图(Slint 同款四档色阶:一格一天,53周×7行,<100/<500/<1500/≥1500)
         let heat_top = cards_top + 34.0 * s + 3.0 * (ch + gap) + 8.0 * s;
-        // 年度格子:53 周 × 7 天(GitHub 贡献图同款,列=周/行=星期)。
-        // 之前 cell 写死 7px、列数按宽度铺 ⇒ 371 天挤成三行小芝麻(用户:这么点看得见吗)。
-        let heat_h = 170.0 * s;
-        draw_fill_round(rt, brush, x, heat_top, width, heat_h, 8.0 * s, 0x47FFFFFF);
-        self.text(rt, brush, &format!("{} 年 · 一格一天,越亮打得越多", snap.quarter_label), &f.label, x + 14.0 * s, heat_top + 8.0 * s, 420.0 * s, 16.0 * s, 0xFFC9D2E0);
         let ygap = 3.0 * s;
-        let cell = ((width - 28.0 * s - 52.0 * ygap) / 53.0).max(4.0 * s);
+        let ycell = ((width - 28.0 * s - 52.0 * ygap) / 53.0).floor().max(6.0 * s);
+        let heat_h = 28.0 * s + 7.0 * (ycell + ygap) + 24.0 * s;
+        draw_fill_round(rt, brush, x, heat_top, width, heat_h, 8.0 * s, 0x47FFFFFF);
+        self.text(rt, brush, &format!("{} 年 · 一格一天", snap.quarter_label), &f.label, x + 14.0 * s, heat_top + 8.0 * s, 420.0 * s, 16.0 * s, 0xFFC9D2E0);
+        // Slint 四档:<100 / <500 / <1500 / ≥1500(浅绿→深绿),没打字=极暗底
+        let tier_color = |count: u32| -> u32 {
+            if count == 0 { 0x1434D399 }
+            else if count < 100 { 0xFF86EFAC }
+            else if count < 500 { 0xFF4ADE80 }
+            else if count < 1500 { 0xFF22C55E }
+            else { 0xFF15803D }
+        };
         let peak = snap.days.iter().map(|day| day.count).max().unwrap_or(0).max(1);
         for (index, day) in snap.days.iter().enumerate().take(371) {
             let col = index / 7;
             let row = index % 7;
-            let cx = x + 14.0 * s + col as f32 * (cell + ygap);
-            let cy = heat_top + 28.0 * s + row as f32 * (cell + ygap);
-            let ratio = day.count as f32 / peak as f32;
-            // 没打字的天也画一格暗底,整个网格才成形
-            let alpha = if day.count == 0 && !day.today {
-                0x16
-            } else {
-                (0x30 as f32 + ratio * 0xCF as f32) as u32
-            };
-            draw_fill_round(rt, brush, cx, cy, cell, cell, 2.0 * s, (alpha << 24) | 0x34D399);
+            let cx = x + 14.0 * s + col as f32 * (ycell + ygap);
+            let cy = heat_top + 28.0 * s + row as f32 * (ycell + ygap);
+            draw_fill_round(rt, brush, cx, cy, ycell, ycell, 2.0 * s, tier_color(day.count));
         }
+        // 图例:少 □□□□ 多 (<100 / <500 / <1500 / ≥1500 键)
+        let legend_y = heat_top + 28.0 * s + 7.0 * (ycell + ygap) + 2.0 * s;
+        let shades = [0x1434D399u32, 0xFF86EFAC, 0xFF4ADE80, 0xFF22C55E, 0xFF15803D];
+        let mut lx = x + 14.0 * s;
+        self.text(rt, brush, "少", &f.note, lx, legend_y, 20.0 * s, 14.0 * s, 0xFF9AA4B2);
+        lx += 22.0 * s;
+        for shade in shades {
+            draw_fill_round(rt, brush, lx, legend_y, 10.0 * s, 10.0 * s, 2.0 * s, shade);
+            lx += 14.0 * s;
+        }
+        self.text(rt, brush, "多 (<100 / <500 / <1500 / ≥1500 键)", &f.note, lx + 4.0 * s, legend_y, 320.0 * s, 14.0 * s, 0xFF9AA4B2);
 
-        // ③ 键盘热力图 + 指法分布（数据来自 lib）
+        // ④ 键盘热力图(Slint 同款完整键帽:五排、键名、四档绿)
         let key_top = heat_top + heat_h + 14.0 * s;
-        // 键高固定:之前从 (h - key_top - 150) 推导,h 含滚动偏移后键块被撑到
-        // 一整屏高(用户截图"怎么这么长")。
-        let key_h = 210.0 * s;
-        draw_fill_round(rt, brush, x, key_top, width, key_h, 8.0 * s, 0x47FFFFFF);
-        self.text(rt, brush, "键盘热力图", &f.heading, x + 14.0 * s, key_top + 8.0 * s, 200.0 * s, 26.0 * s, 0xFFF7FAFF);
-        let (key_counts, _code_lens) = weasel_settings::stats::load_hist();
-        let rows: [&[u32]; 4] = [
-            &[0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30],
-            &[0x51, 0x57, 0x45, 0x52, 0x54, 0x59, 0x55, 0x49, 0x4F, 0x50],
-            &[0x41, 0x53, 0x44, 0x46, 0x47, 0x48, 0x4A, 0x4B, 0x4C],
-            &[0x5A, 0x58, 0x43, 0x56, 0x42, 0x4E, 0x4D, 0x20],
+        type KeyRow = &'static [(u32, &'static str, f32)];
+        let key_rows: [KeyRow; 5] = [
+            &[(0xC0, "`", 1.0), (0x31, "1", 1.0), (0x32, "2", 1.0), (0x33, "3", 1.0), (0x34, "4", 1.0), (0x35, "5", 1.0), (0x36, "6", 1.0), (0x37, "7", 1.0), (0x38, "8", 1.0), (0x39, "9", 1.0), (0x30, "0", 1.0), (0xBD, "-", 1.0), (0xBB, "=", 1.0), (0x08, "退格", 2.0)],
+            &[(0x09, "Tab", 1.5), (0x51, "Q", 1.0), (0x57, "W", 1.0), (0x45, "E", 1.0), (0x52, "R", 1.0), (0x54, "T", 1.0), (0x59, "Y", 1.0), (0x55, "U", 1.0), (0x49, "I", 1.0), (0x4F, "O", 1.0), (0x50, "P", 1.0), (0xDB, "[", 1.0), (0xDD, "]", 1.0), (0xDC, "\\", 1.5)],
+            &[(0x14, "Caps", 1.8), (0x41, "A", 1.0), (0x53, "S", 1.0), (0x44, "D", 1.0), (0x46, "F", 1.0), (0x47, "G", 1.0), (0x48, "H", 1.0), (0x4A, "J", 1.0), (0x4B, "K", 1.0), (0x4C, "L", 1.0), (0xBA, ";", 1.0), (0xDE, "'", 1.0), (0x0D, "回车", 2.2)],
+            &[(0x10, "Shift", 2.3), (0x5A, "Z", 1.0), (0x58, "X", 1.0), (0x43, "C", 1.0), (0x56, "V", 1.0), (0x42, "B", 1.0), (0x4E, "N", 1.0), (0x4D, "M", 1.0), (0xBC, ",", 1.0), (0xBE, ".", 1.0), (0xBF, "/", 1.0), (0xA1, "Shift", 2.3)],
+            &[(0x11, "Ctrl", 1.5), (0x5B, "Win", 1.25), (0x12, "Alt", 1.25), (0x20, "空格", 6.0), (0xA4, "Alt", 1.25), (0x5C, "Win", 1.25), (0xA3, "Ctrl", 1.5)],
         ];
-        let key_peak = key_counts.iter().copied().max().unwrap_or(0).max(1) as f32;
-        let area_x = x + 14.0 * s;
-        let area_w = width - 28.0 * s;
-        // 键名:用户 2026-10-31"键盘上的字母呢"——每颗键画上自己的键帽字。
-        let key_label = |vk: u32| -> &'static str {
-            match vk {
-                0x20 => "空格",
-                0x08 => "退格",
-                0x0D => "回车",
-                0x09 => "Tab",
-                0x14 => "Caps",
-                0x10 | 0xA0 | 0xA1 => "Shift",
-                0x11 | 0xA2 | 0xA3 => "Ctrl",
-                0x12 | 0xA4 | 0xA5 => "Alt",
-                0x5B | 0x5C => "Win",
-                0x30..=0x39 | 0x41..=0x5A => match char::from_u32(vk) {
-                    Some(ch) => match ch {
-                        'A' => "A",
-                        'B' => "B",
-                        'C' => "C",
-                        'D' => "D",
-                        'E' => "E",
-                        'F' => "F",
-                        'G' => "G",
-                        'H' => "H",
-                        'I' => "I",
-                        'J' => "J",
-                        'K' => "K",
-                        'L' => "L",
-                        'M' => "M",
-                        'N' => "N",
-                        'O' => "O",
-                        'P' => "P",
-                        'Q' => "Q",
-                        'R' => "R",
-                        'S' => "S",
-                        'T' => "T",
-                        'U' => "U",
-                        'V' => "V",
-                        'W' => "W",
-                        'X' => "X",
-                        'Y' => "Y",
-                        'Z' => "Z",
-                        _ => "",
-                    },
-                    None => "",
-                },
-                _ => "",
+        let (key_counts, _cl) = weasel_settings::stats::load_hist();
+        let key_peak = key_counts.iter().copied().max().unwrap_or(0).max(1) as f64;
+        let key_color = |vk: u32| -> u32 {
+            let count = key_counts.get(vk as usize).copied().unwrap_or(0) as f64;
+            if count == 0.0 { 0x24FFFFFF }
+            else {
+                let ratio = count / key_peak;
+                if ratio > 0.55 { 0xFF15803D }
+                else if ratio > 0.3 { 0xFF22C55E }
+                else if ratio > 0.12 { 0xFF4ADE80 }
+                else { 0xFF86EFAC }
             }
         };
-        let mut ky = key_top + 40.0 * s;
-        let kh = 30.0 * s;
-        for row in rows.iter() {
-            let count = row.len() as f32;
-            let kw = ((area_w - (count - 1.0) * 2.0 * s) / count).max(6.0 * s);
+        let key_ink = |vk: u32| -> u32 {
+            let count = key_counts.get(vk as usize).copied().unwrap_or(0) as f64;
+            let ratio = count / key_peak;
+            if count == 0.0 || ratio <= 0.55 { 0xFFF7FAFF } else { 0xFF0B2A1D }
+        };
+        let kh = 34.0 * s;
+        let kgap = 4.0 * s;
+        // 卡高 = 标题 30 + 5 行键 + 指法两行
+        let key_h = 30.0 * s + 5.0 * (kh + kgap) + 56.0 * s;
+        draw_fill_round(rt, brush, x, key_top, width, key_h, 10.0 * s, 0x47FFFFFF);
+        self.text(rt, brush, "键盘热力图", &f.heading, x + 14.0 * s, key_top + 8.0 * s, 240.0 * s, 22.0 * s, 0xFFF7FAFF);
+        let area_x = x + 14.0 * s;
+        let area_w = width - 28.0 * s;
+        let mut ky = key_top + 30.0 * s;
+        for row in key_rows.iter() {
+            let units: f32 = row.iter().map(|(_, _, u)| u).sum();
+            let unit_w = (area_w - (row.len() as f32 - 1.0) * kgap) / units.max(1.0);
             let mut kx = area_x;
-            for vk in row.iter() {
-                let value = key_counts.get(*vk as usize).copied().unwrap_or(0) as f32;
-                let ratio = (value / key_peak).min(1.0);
-                let alpha = (0x22 as f32 + ratio * 0xD8 as f32) as u32;
-                draw_fill_round(rt, brush, kx, ky, kw, kh, 3.0 * s, (alpha << 24) | 0x34D399);
-                let label = key_label(*vk);
-                if !label.is_empty() {
-                    // 键帽字:亮键用深字,暗键用浅字,垂直居中
-                    let ink = if ratio > 0.55 { 0xFF0B2A1D } else { 0xFFE9FDF4 };
-                    self.text(rt, brush, label, &f.center, kx, ky + (kh - 14.0 * s) / 2.0, kw, 16.0 * s, ink);
-                }
-                kx += kw + 2.0 * s;
+            for (vk, label, unit) in row.iter() {
+                let kw = unit * unit_w;
+                draw_fill_round(rt, brush, kx, ky, kw, kh, 4.0 * s, key_color(*vk));
+                self.text(rt, brush, label, &f.center, kx, ky + (kh - 16.0 * s) / 2.0, kw, 16.0 * s, key_ink(*vk));
+                kx += kw + kgap;
             }
-            ky += kh + 3.0 * s;
+            ky += kh + kgap;
         }
         let (hands, rows_f, names) = weasel_settings::stats::finger_breakdown(&key_counts);
-        self.text(rt, brush, &format!("指法分布 · 左右手 {hands} · 三行 {rows_f}"), &f.note, area_x, ky + 4.0 * s, area_w, 18.0 * s, 0xFFE4EAF5);
-        self.text(rt, brush, &names, &f.label, area_x, ky + 22.0 * s, area_w, 16.0 * s, 0xFFC9D2E0);
+        self.text(rt, brush, &format!("指法分布 · 左右手 {hands} · 三行 {rows_f}"), &f.note, area_x, ky + 2.0 * s, area_w, 16.0 * s, 0xFFE4EAF5);
+        self.text(rt, brush, &names, &f.label, area_x, ky + 20.0 * s, area_w, 16.0 * s, 0xFFC9D2E0);
 
         // ④ 常用字（字号 = 出现次数）
         let words_top = ky + 44.0 * s;
