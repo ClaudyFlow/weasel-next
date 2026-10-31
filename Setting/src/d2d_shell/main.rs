@@ -861,17 +861,6 @@ impl Shell {
             24.0 * s,
             0xFFF2F5FA,
         );
-        self.text(
-            &rt,
-            brush,
-            "Direct2D 外壳 v2",
-            &f.label,
-            20.0 * s,
-            32.0 * s,
-            360.0 * s,
-            16.0 * s,
-            0xFF7D8899,
-        );
 
         // 窗口按钮。
         let [min, max, close] = self.button_rects();
