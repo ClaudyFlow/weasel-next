@@ -34,6 +34,7 @@ const WM_LBUTTONDOWN: u32 = 0x0201;
 const WM_MOUSEWHEEL: u32 = 0x020A;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_NCCALCSIZE: u32 = 0x0083;
+const WM_CHAR: u32 = 0x0102;
 const WM_NCHITTEST: u32 = 0x0084;
 
 const WS_POPUP_: u32 = 0x8000_0000;
@@ -310,6 +311,9 @@ struct Shell {
     /// 常规页可编辑的配置文档(点击字段即改即存)。
     document: Option<weasel_settings::config::Document>,
     paths: Option<weasel_common::process::RuntimePaths>,
+    /// 常规页行内编辑:正在编辑的字段行下标 + 编辑缓冲。
+    editing: Option<usize>,
+    edit_buf: String,
     /// 时段统计（今天 24 小时）：`(每小时击键, 每小时有效毫秒)`；老 stat.bin 是全 0。
     hours: ([u32; 24], [u64; 24]),
     /// 主页副标题：天数 / 读文件告警。
@@ -697,10 +701,21 @@ impl Shell {
     fn cycle_field(&mut self, index: usize) {
         use weasel_settings::form;
         let Some(document) = &mut self.document else { return };
-        let Some(row) = self.fields.get_mut(index) else { return };
+        let Some(mut row) = self.fields.get_mut(index) else { return };
         let field = &mut row.field;
+        // 文本/JSON 字段走行内编辑(2026-11-01 第二增量)
+        if field.kind == "string" || field.kind == "json" {
+            self.editing = Some(index);
+            self.edit_buf = if field.text.is_empty() {
+                field.inherited_text.clone()
+            } else {
+                field.text.clone()
+            };
+            self.settings_note = format!("编辑 {} :回车保存 · Esc 取消", field.title);
+            return;
+        }
         if field.choices.len() < 2 {
-            self.settings_note = format!("{}:该字段暂不支持点击修改(文本/JSON 下一轮)", field.title);
+            self.settings_note = format!("{}:该字段暂不支持点击修改", field.title);
             return;
         }
         let next = ((field.selected.max(0) as usize) + 1) % field.choices.len();
@@ -720,14 +735,71 @@ impl Shell {
                 return;
             }
         }
+        let saved_title = field.title.clone();
+        drop(row);
         if let Err(error) = document.save() {
             self.settings_note = format!("保存失败:{error}");
             return;
         }
         // 重读,行显示回到真实状态(继承/覆盖、裁剪规则统一)
-        let note = format!("已保存:{} = {}", field.title, text);
         self.refresh_settings();
-        self.settings_note = note;
+        self.settings_note = format!("已保存:{} = {}", saved_title, text);
+    }
+
+    /// 行内编辑:输入可打印字符(退格由 WM_KEYDOWN 单独处理)。
+    fn edit_push(&mut self, ch: char) {
+        if self.editing.is_some() {
+            self.edit_buf.push(ch);
+            self.repaint();
+        }
+    }
+
+    /// 行内编辑:退格。
+    fn edit_backspace(&mut self) {
+        if self.editing.is_some() {
+            self.edit_buf.pop();
+            self.repaint();
+        }
+    }
+
+    /// 行内编辑:回车保存(form::assign + document.save),Esc 取消。
+    fn edit_commit(&mut self) {
+        use weasel_settings::form;
+        let Some(index) = self.editing.take() else { return };
+        let buf = std::mem::take(&mut self.edit_buf);
+        let Some(document) = &mut self.document else { return };
+        let Some(mut row) = self.fields.get_mut(index) else { return };
+        let field = &mut row.field;
+        field.selected = 1;
+        field.text = buf.clone();
+        match field.value(1, &buf) {
+            Ok(value) => {
+                if let Err(error) = form::assign(&mut document.patch, &field.path, value) {
+                    self.settings_note = format!("{}:写入失败 {error}", field.title);
+                    return;
+                }
+            }
+            Err(error) => {
+                self.settings_note = format!("{}:取值失败 {error}", field.title);
+                return;
+            }
+        }
+        let saved_title = field.title.clone();
+        drop(row);
+        if let Err(error) = document.save() {
+            self.settings_note = format!("保存失败:{error}");
+            return;
+        }
+        self.refresh_settings();
+        self.settings_note = format!("已保存:{} = {}", saved_title, buf);
+    }
+
+    /// 行内编辑:Esc 取消,不落盘。
+    fn edit_cancel(&mut self) {
+        self.editing = None;
+        self.edit_buf.clear();
+        self.settings_note = "已取消编辑".to_string();
+        self.repaint();
     }
 
     /// 方案页的显示项（树结构）：`(是否系列标题, 行下标, 标题文字)`。
@@ -1699,6 +1771,7 @@ impl Shell {
             }
             let row = &self.fields[index];
             let hovered = matches!(self.hover, Hover::Row(i) if i == index);
+            let editing_this = self.editing == Some(index);
             draw_fill_round(
                 rt,
                 brush,
@@ -1707,8 +1780,38 @@ impl Shell {
                 rw,
                 rh,
                 10.0 * s,
-                if hovered { 0x1AFFFFFF } else { 0x0FFFFFFF },
+                if editing_this {
+                    0x334C8DFF
+                } else if hovered {
+                    0x1AFFFFFF
+                } else {
+                    0x0FFFFFFF
+                },
             );
+            if editing_this {
+                // 行内编辑框:蓝框 + 缓冲 + 光标 + 操作提示
+                let bx = rx + rw - 330.0 * s;
+                let by = ry + 10.0 * s;
+                let bw = 310.0 * s;
+                let bh = rh - 20.0 * s;
+                draw_fill_round(rt, brush, bx, by, bw, bh, 6.0 * s, 0xFF10151D);
+                draw_fill_round(rt, brush, bx, by, bw, bh, 6.0 * s, 0x144C8DFF);
+                let shown: String = {
+                    // 太长显示尾部(光标恒在末尾)
+                    let max_chars = (bw / (9.0 * s)) as usize;
+                    let chars: Vec<char> = self.edit_buf.chars().collect();
+                    if chars.len() > max_chars {
+                        chars[chars.len() - max_chars..].iter().collect()
+                    } else {
+                        self.edit_buf.clone()
+                    }
+                };
+                self.text(rt, brush, &shown, &f.body, bx + 10.0 * s, by + (bh - 20.0 * s) / 2.0, bw - 20.0 * s, 20.0 * s, 0xFFF7FAFF);
+                // 光标(实心竖线,贴文本尾;简化:恒画在框内右侧固定偏移前)
+                let text_w = shown.chars().count() as f32 * 9.0 * s;
+                draw_fill_rect(rt, brush, bx + 10.0 * s + text_w, by + (bh - 20.0 * s) / 2.0, 2.0 * s, 20.0 * s, 0xFF4C8DFF);
+                self.text(rt, brush, "回车保存 · Esc 取消", &f.note, bx, ry + rh + 2.0 * s, bw, 14.0 * s, 0xFF8A94A3);
+            }
             // 左：字段名 + 说明；右：当前值（右对齐，覆盖过用蓝色）。
             self.text(
                 rt,
@@ -1990,6 +2093,22 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 }
                 LRESULT(0)
             }
+            WM_CHAR => {
+                if let Some(s) = shell() {
+                    if s.editing.is_some() {
+                        let code = wp.0 as u32;
+                        match code {
+                            0x0D => s.edit_commit(),          // 回车
+                            0x1B => s.edit_cancel(),          // Esc
+                            0x08 => s.edit_backspace(),       // 退格
+                            0x20..=0x7E => s.edit_push(code as u8 as char),
+                            _ => {}
+                        }
+                        return LRESULT(0);
+                    }
+                }
+                DefWindowProcW(hwnd, msg, wp, lp)
+            }
             WM_MOUSEWHEEL => {
                 if let Some(s) = shell() {
                     // 高 16 位是有符号的滚轮增量（120 = 一格）。
@@ -2190,6 +2309,8 @@ fn run() -> Result<(), String> {
             stats: None,
             document: None,
             paths: None,
+            editing: None,
+            edit_buf: String::new(),
             home_content_h: std::cell::Cell::new(0.0),
             hours: ([0; 24], [0; 24]),
             stats_note: String::new(),
