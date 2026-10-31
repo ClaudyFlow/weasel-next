@@ -497,10 +497,13 @@ impl Shell {
     /// 右侧内容区：左上角与可用尺寸（像素）。
     fn content_area(&self) -> (f32, f32, f32, f32) {
         let s = self.scale();
+        // client_size 是物理像素,布局坐标全部按 DIP×s 绘制 ⇒ 宽高先除回 s
+        // 换成 DIP,否则 125% 缩放下内容按 1.25 倍画、右缘必裁(双重缩放)。
         let (w, h) = self.client_size();
+        let (w, h) = (w / s, h / s);
         let x = 176.0 * s;
-        let width = (w - x - 24.0 * s).max(80.0 * s);
-        (x, 74.0 * s, width, (h - 74.0 * s - 24.0 * s).max(40.0 * s))
+        let width = (w - 176.0 - 24.0).max(80.0) * s;
+        (x, 74.0 * s, width, (h - 74.0 - 24.0).max(40.0) * s)
     }
 
     /// 列表可视区顶边与高度（像素）。方案选单页底部要给「保存并部署」留一条。
