@@ -75,8 +75,8 @@ const CW_USEDEFAULT_: i32 = 0x8000_0000u32 as i32;
 const IDC_ARROW_: usize = 32512;
 
 /// 窗口尺寸（DIP）。外壳按 DPI 缩放，D2D 里统一用像素坐标。
-const WINDOW_W: f32 = 1000.0;
-const WINDOW_H: f32 = 660.0;
+const WINDOW_W: f32 = 1280.0;
+const WINDOW_H: f32 = 860.0;
 /// 主页(个人记录)的内容总高(DIP):生涯 + 9 卡 + 词云 + 时段 + 三张图各一行。
 /// 2026-10-31 改版后各功能独占一行,总高超出可视区,主页从此**可滚动**。
 const HOME_CONTENT_DIP: f32 = 1090.0;
