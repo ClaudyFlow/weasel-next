@@ -1052,38 +1052,11 @@ impl Shell {
             return;
         }
 
-        // ① 个人生涯 = 标题 + 9 张统计卡（Slint 就是「个人生涯」下面一排排卡片，我上一版删错了）
-        self.text(rt, brush, "个人生涯", &f.heading, x, top, 220.0 * s, 28.0 * s, 0xFFF7FAFF);
-        self.text(rt, brush, "本机记录，不上传", &f.label, x + 110.0 * s, top + 6.0 * s, 260.0 * s, 16.0 * s, 0xFF9AA4B2);
-        let today_min = snap.today_active_ms / 60_000;
-        let total_min = snap.total_active_ms / 60_000;
-        let recent_avg = snap.recent_chars / u64::from(snap.recent_days.max(1));
-        let cards: [(&str, String, String); 9] = [
-            ("今日击键", thou(snap.today_keys), format!("累计 {}", thou(snap.total_keys))),
-            ("今日上屏", format!("{} 字", thou(snap.today_chars)), format!("累计 {} 字", thou(snap.total_chars))),
-            ("今日速度", format!("{} 字/分", snap.today_speed), format!("近 7 天 {}", snap.recent_speed)),
-            ("连续使用", format!("{} 天", snap.streak_days), format!("最长 {} 天", snap.best_streak_days)),
-            ("今日键准", format!("{}.{}%", snap.today_key_accuracy_x10 / 10, snap.today_key_accuracy_x10 % 10),
-                format!("近 7 天 {}.{}%", snap.recent_key_accuracy_x10 / 10, snap.recent_key_accuracy_x10 % 10)),
-            ("击键速度", key_speed_text(snap.today_key_speed_x10), format!("历史最快 {}", key_speed_text(snap.best_key_speed_x10))),
-            ("平均码长", format!("{} 键/字", two_decimals(snap.today_code_len_x100)), format!("近 7 天 {}", two_decimals(snap.recent_code_len_x100))),
-            ("打字时间", format!("{} 分", today_min), format!("累计 {} 分", total_min)),
-            ("平均每日", format!("{} 字", snap.avg_daily_chars), format!("近 7 天 {} 字", recent_avg)),
-        ];
-        let gap = 10.0 * s;
-        let cw = (width - 2.0 * gap) / 3.0;
-        let ch = 74.0 * s;
-        for (index, (label, value, note)) in cards.iter().enumerate() {
-            let cx = x + (index % 3) as f32 * (cw + gap);
-            let cy = top + 34.0 * s + (index / 3) as f32 * (ch + gap);
-            self.stat_card(rt, brush, f, cx, cy, cw, ch, label, value, note, s);
-        }
-
-        // 段位卡（Lv / 经验条 / 名著）
+        // ① 个人等级第一行(用户 2026-10-31):段位卡放最顶上,9 卡挪到下面。
         let (title, level, exp_cur, exp_span) = weasel_settings::career::career_level(snap.total_exp);
         let realm = weasel_settings::career::career_realm(snap.total_chars);
         let books = weasel_settings::career::book_level(snap.total_chars);
-        let career_top = top + 34.0 * s + 3.0 * (ch + gap) + 6.0 * s;
+        let career_top = top;
         let career_h = 96.0 * s;
         draw_fill_round(rt, brush, x, career_top, width, career_h, 10.0 * s, 0x47FFFFFF);
         self.text(
@@ -1114,8 +1087,36 @@ impl Shell {
             0xFFE4EAF5,
         );
 
-        // ② 年度热力图（Slint 的「2026」格子）
-        let heat_top = career_top + career_h + 14.0 * s;
+        // ② 个人生涯 = 标题 + 9 张统计卡
+        let cards_top = career_top + career_h + 14.0 * s;
+        self.text(rt, brush, "个人生涯", &f.heading, x, cards_top, 220.0 * s, 28.0 * s, 0xFFF7FAFF);
+        self.text(rt, brush, "本机记录，不上传", &f.label, x + 110.0 * s, cards_top + 6.0 * s, 260.0 * s, 16.0 * s, 0xFF9AA4B2);
+        let today_min = snap.today_active_ms / 60_000;
+        let total_min = snap.total_active_ms / 60_000;
+        let recent_avg = snap.recent_chars / u64::from(snap.recent_days.max(1));
+        let cards: [(&str, String, String); 9] = [
+            ("今日击键", thou(snap.today_keys), format!("累计 {}", thou(snap.total_keys))),
+            ("今日上屏", format!("{} 字", thou(snap.today_chars)), format!("累计 {} 字", thou(snap.total_chars))),
+            ("今日速度", format!("{} 字/分", snap.today_speed), format!("近 7 天 {}", snap.recent_speed)),
+            ("连续使用", format!("{} 天", snap.streak_days), format!("最长 {} 天", snap.best_streak_days)),
+            ("今日键准", format!("{}.{}%", snap.today_key_accuracy_x10 / 10, snap.today_key_accuracy_x10 % 10),
+                format!("近 7 天 {}.{}%", snap.recent_key_accuracy_x10 / 10, snap.recent_key_accuracy_x10 % 10)),
+            ("击键速度", key_speed_text(snap.today_key_speed_x10), format!("历史最快 {}", key_speed_text(snap.best_key_speed_x10))),
+            ("平均码长", format!("{} 键/字", two_decimals(snap.today_code_len_x100)), format!("近 7 天 {}", two_decimals(snap.recent_code_len_x100))),
+            ("打字时间", format!("{} 分", today_min), format!("累计 {} 分", total_min)),
+            ("平均每日", format!("{} 字", snap.avg_daily_chars), format!("近 7 天 {} 字", recent_avg)),
+        ];
+        let gap = 10.0 * s;
+        let cw = (width - 2.0 * gap) / 3.0;
+        let ch = 74.0 * s;
+        for (index, (label, value, note)) in cards.iter().enumerate() {
+            let cx = x + (index % 3) as f32 * (cw + gap);
+            let cy = cards_top + 34.0 * s + (index / 3) as f32 * (ch + gap);
+            self.stat_card(rt, brush, f, cx, cy, cw, ch, label, value, note, s);
+        }
+
+        // ③ 年度热力图（Slint 的「2026」格子）
+        let heat_top = cards_top + 34.0 * s + 3.0 * (ch + gap) + 8.0 * s;
         let heat_h = 96.0 * s;
         draw_fill_round(rt, brush, x, heat_top, width, heat_h, 10.0 * s, 0x47FFFFFF);
         self.text(rt, brush, &format!("{} 年", snap.quarter_label), &f.label, x + 14.0 * s, heat_top + 8.0 * s, 200.0 * s, 16.0 * s, 0xFFC9D2E0);
