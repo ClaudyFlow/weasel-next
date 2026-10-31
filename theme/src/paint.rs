@@ -40,6 +40,21 @@ pub struct Painter<'a> {
     pub view: &'a CandidateView,
     /// 当前悬停候选（官方窗口成员 `m_hoverIndex`）。
     pub hover_index: Option<usize>,
+    /// 是否启用系统毛玻璃：为真时面板底色降到半透明，让背后的 Acrylic 模糊透出来。
+    pub glass: bool,
+    /// 窗口句柄（`0` = 没给；自绘模糊的抓屏已挪到显示前，这里只留诊断用）。
+    pub hwnd: isize,
+    /// 用自绘高斯模糊代替 DWM 亚克力（`style/glass_blur: "self"`）。
+    pub glass_self: bool,
+    /// 显示前抓好的模糊背景缓存（mod 侧 [`BackdropCache`]；`None` = 没抓到）。
+    pub backdrop: Option<&'a BackdropCache>,
+}
+
+/// 显示前抓好的模糊背景（自绘高斯模糊的缓存单元）。
+pub struct BackdropCache {
+    pub width: i32,
+    pub height: i32,
+    pub bitmap: ID2D1Bitmap,
 }
 
 /// 模式提示图标的文件位置：`<程序文件夹>\Rime-Next\icon\{zh,en}-{dark,light}.ico`。
@@ -48,10 +63,7 @@ pub struct Painter<'a> {
 /// 允许用主题的 `ascii_icon` / `zhung_icon` 覆盖）；我们仓库里是独立的 .ico，
 /// 按"底色深浅"挑浅色/深色那一套。
 fn status_icon_path(ascii: bool, dark_background: bool) -> Option<std::path::PathBuf> {
-    let dir = std::env::current_exe()
-        .ok()?
-        .parent()?
-        .join("Rime-Next")
+    let dir = weasel_common::rime_layout::data_dir(std::env::current_exe().ok()?.parent()?)
         .join("icon");
     let name = match (ascii, dark_background) {
         (true, true) => "en-light.ico",
@@ -246,6 +258,7 @@ impl<'a> Painter<'a> {
         m: &'a Metrics,
         scheme: &'a ColorScheme,
         view: &'a CandidateView,
+        glass: bool,
     ) -> Self {
         Self {
             target,
@@ -257,8 +270,24 @@ impl<'a> Painter<'a> {
             scheme,
             view,
             hover_index: None,
+            glass,
+            hwnd: 0,
+            glass_self: false,
+            backdrop: None,
         }
     }
+}
+
+/// 把面板底色降到半透明，让背后的系统毛玻璃（DWM Acrylic）透出来。
+///
+/// 仅压低 alpha：完全不透明的面板（如官方 aqua 的 `0xFFxxxxxx`）降到
+/// [`GLASS_ALPHA`]，本就半透明的配色保持原样。文字仍是实色绘制，可读性不受影响。
+pub(crate) const GLASS_ALPHA: u32 = 0x33;
+
+pub(crate) fn glassify(argb: u32) -> u32 {
+    let alpha = (argb >> 24) & 0xff;
+    let alpha = alpha.min(GLASS_ALPHA);
+    (alpha << 24) | (argb & 0x00ff_ffff)
 }
 
 /// 内部 ARGB（`0xAARRGGBB`）→ Direct2D 颜色。
@@ -379,11 +408,32 @@ impl Painter<'_> {
             let draw_background = (!empty_context && !style.inline_preedit)
                 || (style.inline_preedit && (has_candidates || !layout.aux.is_empty()));
             if draw_background {
+                let back_color = if self.glass {
+                    glassify(self.scheme.back_color)
+                } else {
+                    self.scheme.back_color
+                };
+                // 玻璃态：面板画满**整个窗口矩形**，而不是内缩 `offset` 的内框。
+                // 否则窗口比面板大一圈，那圈被 DWM 亚克力填满 ⇒ 边框外面多出一层灰（用户 13:4x 报的"还有一层"）。
+                // 代价：投影没有落脚处（`offset` 那圈就是给投影的），玻璃态干脆不要投影。
+                let back_rect = if self.glass {
+                    Rect::new(
+                        0.0,
+                        0.0,
+                        layout.content_size.cx,
+                        layout.content_size.cy,
+                    )
+                } else {
+                    layout.content
+                };
+                if self.glass_self {
+                    self.draw_backdrop(&back_rect, self.backdrop);
+                }
                 self.highlight_rect(
-                    &layout.content,
+                    &back_rect,
                     style.round_corner_ex,
                     style.border,
-                    self.scheme.back_color,
+                    back_color,
                     self.scheme.shadow_color,
                     self.scheme.border_color,
                     &RoundInfo::default(),
@@ -399,8 +449,35 @@ impl Painter<'_> {
             if layout.show_status_icon {
                 self.draw_status_icon(layout);
             }
+            // 翻页提示独立画：不依赖 preedit、也不要求配色给翻页色。
+            self.draw_page_buttons(layout);
         }
         Ok(())
+    }
+
+    /// 自绘背景模糊：把**显示前抓好**的模糊背景铺满面板。
+    ///
+    /// 抓屏在 [`crate::Window::capture_backdrop`](mod 侧)完成——那时窗口还没
+    /// 显示，抓到的才是背后真实画面；paint 里现场抓会把候选窗自己抓进去，
+    /// 糊成一团灰（2026-10-31 检查点 §7.5 的教训）。这里只读缓存，无缓存跳过
+    /// （面板底色照旧盖住），尺寸对不上就拉伸（模糊图伸缩无碍观感）。
+    fn draw_backdrop(&self, rect: &Rect, cached: Option<&BackdropCache>) {
+        let Some(cached) = cached else {
+            return;
+        };
+        if cached.width <= 0 || cached.height <= 0 {
+            return;
+        }
+        let dest = d2d_rect(rect);
+        unsafe {
+            self.target.DrawBitmap(
+                &cached.bitmap,
+                Some(&dest as *const D2D_RECT_F),
+                1.0,
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                None,
+            );
+        }
     }
 
     /// 官方 `_HighlightRect`（WeaselPanel.cpp:799）：阴影 / 底色 / 描边三层。
@@ -548,17 +625,10 @@ impl Painter<'_> {
         // 我们的快照只给"整段都是组字中"，所以官方那套 before/hilite/after 里
         // hilite 是整段、before/after 为空（composition 预编辑的常态）。
         if !hilite.is_null() {
+            // 用户 14:3x：预编辑（编码）那块**不要黑色底**，要透明——只画字。
             let mut rc = hilite;
             rc.inflate(self.m.hilite_padding_x, self.m.hilite_padding_y);
-            self.highlight_rect(
-                &rc,
-                self.m.round_corner,
-                self.m.border,
-                self.scheme.hilited_back_color,
-                self.scheme.hilited_shadow_color,
-                0,
-                &layout.text_round_info,
-            );
+            let _ = &rc;
             self.text_out(
                 &hilite,
                 &preedit.text,
@@ -575,35 +645,6 @@ impl Painter<'_> {
         }
         let _ = (before, after);
 
-        // 翻页按钮（官方 L576-596）
-        if !layout.rows.is_empty()
-            && !self.m.inline_preedit
-            && !transparent(self.scheme.prevpage_color)
-            && !transparent(self.scheme.nextpage_color)
-        {
-            let prev_color = if self.view.can_page_previous {
-                self.scheme.prevpage_color
-            } else {
-                self.scheme.text_color
-            };
-            self.text_out(
-                &layout.page_prev,
-                PAGE_PREV,
-                prev_color,
-                &self.formats.preedit,
-            )?;
-            let next_color = if self.view.can_page_next {
-                self.scheme.nextpage_color
-            } else {
-                self.scheme.text_color
-            };
-            self.text_out(
-                &layout.page_next,
-                PAGE_NEXT,
-                next_color,
-                &self.formats.preedit,
-            )?;
-        }
         Ok(())
     }
 
@@ -819,6 +860,36 @@ impl Painter<'_> {
             );
         }
         Ok(())
+    }
+
+    /// 翻页提示（‹ ›）。
+    ///
+    /// 官方把它画在 `_DrawPreedit` 里、且要求 `prevpage_color`/`nextpage_color` 不透明
+    /// （`config.rs` 的 `page_enabled`）。我们改成**独立绘制 + 颜色兜底**：
+    /// 配色里没给翻页色（出厂 37 套全是 `0x00000000`）时用文字色半透明，保证「还有下一页」看得见；
+    /// 也不能再依赖 preedit（行内预编辑时 preedit 为 None ⇒ 原来永远不画）。
+    fn draw_page_buttons(&self, layout: &Layout) {
+        if layout.inline_preedit || layout.page_prev.is_empty() || layout.page_next.is_empty() {
+            return;
+        }
+        let text = self.scheme.text_color;
+        let fallback = |alpha: u32| (alpha << 24) | (text & 0x00ff_ffff);
+        let prev = if transparent(self.scheme.prevpage_color) {
+            fallback(if self.view.can_page_previous { 0x8c } else { 0x40 })
+        } else if self.view.can_page_previous {
+            self.scheme.prevpage_color
+        } else {
+            fallback(0x40)
+        };
+        let next = if transparent(self.scheme.nextpage_color) {
+            fallback(if self.view.can_page_next { 0x8c } else { 0x40 })
+        } else if self.view.can_page_next {
+            self.scheme.nextpage_color
+        } else {
+            fallback(0x40)
+        };
+        let _ = self.text_out(&layout.page_prev, PAGE_PREV, prev, &self.formats.preedit);
+        let _ = self.text_out(&layout.page_next, PAGE_NEXT, next, &self.formats.preedit);
     }
 
     /// 状态图标位（官方画 HICON；我们没有图标资源，退化为中/英方块提示）。

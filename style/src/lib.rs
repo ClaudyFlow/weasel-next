@@ -15,6 +15,8 @@
 
 /// 官方颜色语义（位数定 alpha、`color_format` 定通道序、混色）。
 pub mod color;
+/// 方案文件的强制标准（目前一条：`schema/description` 必须是块标量 `|`）。
+pub mod schema_standard;
 pub mod settings;
 /// 方案选单的数据层（读方案目录与 schema_list，写 default.custom.yaml）。
 pub mod switcher;
@@ -199,6 +201,12 @@ pub struct UIStyle {
     pub candidate_abbreviate_length: i32,
     // 行为
     pub antialias_mode: String,
+    /// 毛玻璃（系统级 Acrylic 背景模糊）：候选窗与设置界面共用这个开关。
+    pub glass: bool,
+    /// 毛玻璃的实现方式（`style/glass_blur`）：`"dwm"` = DWM 亚克力（默认，窗口级、
+    /// 裁不出圆角）；`"self"` = 自绘高斯模糊（显示前抓屏 + 箱式模糊，面板内精确定位）；
+    /// 其他值一律按 `"dwm"` 处理。
+    pub glass_blur: String,
     pub ascii_tip_follow_cursor: bool,
     pub click_to_capture: bool,
     pub horizontal: bool,
@@ -312,6 +320,11 @@ impl Default for UIStyle {
             comment_font_point: 14,
             candidate_abbreviate_length: 0,
             antialias_mode: "default".into(),
+            // 毛玻璃默认开（用户 2026-10-28：候选窗与设置界面都要玻璃化）；
+            // 老配置里没有 `style/glass` 也走这里。
+            glass: true,
+            // 实现方式默认 DWM 亚克力；`"self"` 才走自绘高斯模糊（theme/backdrop.rs）。
+            glass_blur: "dwm".into(),
             ascii_tip_follow_cursor: false,
             click_to_capture: false,
             // 官方 `output/data/weasel.yaml` 的 `style/horizontal: false`（= 竖直布局，一行一个候选）。
@@ -488,6 +501,8 @@ pub fn build(yaml: &Yaml) -> WeaselConfig {
         if let Some(v) = int_of(style.get("comment_font_point")) { s.comment_font_point = v; }
         if let Some(v) = int_of(style.get("candidate_abbreviate_length")) { s.candidate_abbreviate_length = v; }
         if let Some(v) = text_of(style.get("antialias_mode")) { s.antialias_mode = v; }
+        if let Some(v) = bool_of(style.get("glass")) { s.glass = v; }
+        if let Some(v) = text_of(style.get("glass_blur")) { s.glass_blur = v; }
         if let Some(v) = bool_of(style.get("ascii_tip_follow_cursor")) { s.ascii_tip_follow_cursor = v; }
         if let Some(v) = bool_of(style.get("click_to_capture")) { s.click_to_capture = v; }
         if let Some(v) = bool_of(style.get("horizontal")) { s.horizontal = v; }
@@ -720,7 +735,7 @@ pub fn parse_files(
 mod patch_tests {
     use super::*;
 
-    const OFFICIAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/weasel.yaml");
+    const OFFICIAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/weasel.official.yaml");
     const BASE: &str = "style:\n  color_scheme: aqua\n  font_point: 14\n  layout:\n    corner_radius: 4\npreset_color_schemes:\n  aqua:\n    back_color: 0xeeeeee\n  luna:\n    back_color: 0x111111\n";
 
     #[test]
@@ -783,7 +798,7 @@ mod tests {
     /// 必须保持 YAML（见 `checkpoint-1483898f.md` 的坑 ①：禁止批量把 rime 数据改名成
     /// `.toml`）。这里曾经写成 `weasel.toml`，文件根本不存在 ⇒ 本模块 8 个测试全红。
     /// 解析走的是 `parse_file` → `parse_yaml`（`style` 里那条 YAML 链），所以 `.yaml` 才对得上。
-    const OFFICIAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/weasel.yaml");
+    const OFFICIAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/weasel.official.yaml");
 
     fn official() -> WeaselConfig {
         parse_file(OFFICIAL).expect("官方 weasel.toml 必须能解析")
@@ -926,3 +941,5 @@ mod tests {
         assert!(blue > 0x80, "蓝通道应最大，实际 {blue:#x}");
     }
 }
+
+pub mod shuangpin_parse;

@@ -12,6 +12,8 @@
 //! HWND、图形资源和输入状态都由本模块内部管理；窗口消息回调与主题接口共享稳定的
 //! [`Window`] 分配，所有原生窗口和图形操作都在创建它们的 UI 线程执行。
 
+pub mod accent;
+pub mod backdrop;
 pub mod config;
 pub mod layout;
 pub mod paint;
@@ -325,7 +327,10 @@ struct Content {
 
 /// 窗口 UI 状态；由 [`Window::app`] 的动态借用保护，避免回调重入时别名可变访问。
 struct App {
+    /// 最近一次生效的配置来源（[`App::reload`] 用来判断"值不值得写一行日志"）。
+    source: String,
     /// 最近一次读配置时主题文件的修改时间；变了就重载（换皮肤立刻生效）。
+    /// 取的是 [`config::stamp_cached`]，比较时不会真去打文件系统。
     stamp: Option<std::time::SystemTime>,
     graphics: Graphics,
     content: Option<Content>,
@@ -339,6 +344,10 @@ struct App {
     pressed: Option<Hit>,
     /// 官方 `m_sticky`：面板被翻到插入点上方后保持在上方。
     sticky: bool,
+    /// 是否启用系统毛玻璃（DWM Acrylic）；默认开，可用环境变量 `WEASEL_GLASS=0` 关掉。
+    glass: bool,
+    /// 显示前抓好的模糊背景（`glass_blur: "self"` 时由 [`Window::capture_backdrop`] 填充）。
+    backdrop: Option<paint::BackdropCache>,
 }
 
 /// 窗口回调可访问的稳定状态分配。
@@ -351,6 +360,8 @@ struct Window {
     positioning: Cell<bool>,
     /// 为真时采用可激活、可关闭的预览窗口行为。
     preview: bool,
+    /// 自绘高斯模糊（`style/glass_blur: "self"`）：关 DWM 亚克力，改在显示前抓屏。
+    glass_self: bool,
 }
 
 /// Direct2D 设备丢失后的有限重试状态。
@@ -396,10 +407,24 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
     let preview = mode != UiMode::Live;
     let loaded = config::load(crate::appearance::is_dark());
     let antialias = config::Antialias::from_name(&loaded.style.antialias_mode);
+    // 毛玻璃：配置文件 `style/glass` 说了算（缺省 true，老配置没有该键也走 true）；
+    // `WEASEL_GLASS=0/ false / off / no` 仍可强制关掉，便于排查。
+    let glass = match std::env::var("WEASEL_GLASS") {
+        Ok(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        ),
+        Err(_) => loaded.style.glass,
+    };
+    // 自绘高斯模糊:`style/glass_blur: "self"` 时关 DWM 亚克力、改显示前抓屏。
+    let glass_self = loaded.style.glass_blur.trim().eq_ignore_ascii_case("self");
+    // 毛玻璃染色用配色背景色；`loaded` 之后会被 `App::new` 吞掉，先取出来。
+    let tint = loaded.scheme.back_color;
     let window = Rc::new(Window {
         hwnd: Cell::new(HWND::default()),
         dpi: Cell::new(96),
-        app: RefCell::new(App::new(loaded, 96.0)?),
+        glass_self,
+        app: RefCell::new(App::new(loaded, 96.0, glass)?),
         error: RefCell::new(None),
         recovery: RefCell::new(Recovery::default()),
         positioning: Cell::new(false),
@@ -458,6 +483,28 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
             return Err(windows_core::Error::from_thread().to_string());
         }
         window.hwnd.set(hwnd);
+        // 系统级毛玻璃：DWM 在窗口矩形背后做模糊，面板（半透明）与四角都透出桌面。
+        // 染色用配色背景色，和皮肤观感保持一致。
+        if glass {
+            accent::sync_acrylic(hwnd, true, tint);
+            // Win11：让 DWM 把**窗口本身**裁成圆角。亚克力铺满窗口矩形，
+            // 不裁的话圆角外侧会露出 4 个方角色块（用户 13:4x：「圆角外面是有角的」）。
+            unsafe extern "system" {
+                fn DwmSetWindowAttribute(
+                    hwnd: HWND,
+                    attribute: u32,
+                    value: *const core::ffi::c_void,
+                    size: u32,
+                ) -> i32;
+            }
+            let round: i32 = 2; // DWMWCP_ROUND
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                33, // DWMWA_WINDOW_CORNER_PREFERENCE
+                &round as *const _ as *const core::ffi::c_void,
+                core::mem::size_of::<i32>() as u32,
+            );
+        }
         window.dpi.set(GetDpiForWindow(hwnd).max(1));
         if preview {
             apply_taskbar_icon(hwnd, icon);
@@ -496,11 +543,18 @@ unsafe fn apply_taskbar_icon(hwnd: HWND, icon: HICON) {
 }
 
 impl App {
-    fn new(loaded: config::Loaded, dpi: f32) -> Result<Self, String> {
+    fn new(loaded: config::Loaded, dpi: f32, glass: bool) -> Result<Self, String> {
         let metrics = Metrics::new(&loaded.style, dpi).with_colors(&loaded.scheme);
         crate::diagnostics::record(format_args!("主题配置: {}", loaded.source));
+        crate::diagnostics::record(format_args!(
+            "毛玻璃: {}",
+            if glass { "开" } else { "关（style/glass=false 或 WEASEL_GLASS=0）" }
+        ));
+        // 首次读配置：把缓存里的时间戳对齐成"刚读过"，避免下一帧立刻判定为已改。
+        config::refresh_stamp_cache();
         Ok(Self {
-            stamp: config::dirs().and_then(|(shared, user)| config::stamp(&shared, &user)),
+            stamp: config::stamp_cached(),
+            source: loaded.source.clone(),
             graphics: Graphics::new(&metrics).map_err(|e| e.to_string())?,
             content: None,
             raw_style: loaded.style,
@@ -509,6 +563,8 @@ impl App {
             hovered: None,
             pressed: None,
             sticky: false,
+            glass,
+            backdrop: None,
         })
     }
 
@@ -524,12 +580,30 @@ impl App {
 
     /// 重新读配置（明暗外观变化、用户改皮肤时调用）。
     fn reload(&mut self, dark: bool, dpi: u32) {
-        self.stamp = config::dirs()
-            .and_then(|(shared, user)| config::stamp(&shared, &user));
+        // 缓存里的时间戳可能已经过期（TTL 内没刷新过），这里强制对齐到"刚读过"，
+        // 否则下一帧拿到的还是旧值，`changed` 会一直是 true —— 那正是每键重载的由来。
+        config::refresh_stamp_cache();
+        self.stamp = config::stamp_cached();
         let loaded = config::load(dark);
-        crate::diagnostics::record(format_args!("主题配置: {}", loaded.source));
+        // 2026-10-30：这一行原来**无条件**写 `theme.log`。实测每次 `record()` 都要
+        // open+append+close（0.386ms），而 `reload` 在"时间戳被判为已变"时每键都会跑，
+        // 于是 `theme.log` 长到 25 万行、几十 MB。改成**只在来源真的变了**才写一行 ——
+        // 换皮肤照样看得见，日常打字不再落盘。
+        if loaded.source != self.source {
+            crate::diagnostics::record(format_args!("主题配置: {}", loaded.source));
+            self.source = loaded.source.clone();
+        }
         self.raw_style = loaded.style;
         self.scheme = loaded.scheme;
+        // 重读毛玻璃开关：环境变量优先，其次配置（与 create() 里一致）。
+        // 用户改 `style/glass` 或设 `WEASEL_GLASS` 后，热切换即时生效。
+        self.glass = match std::env::var("WEASEL_GLASS") {
+            Ok(value) => !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            ),
+            Err(_) => self.raw_style.glass,
+        };
         self.metrics =
             Metrics::new(&self.raw_style, dpi.max(1) as f32).with_colors(&self.scheme);
         let _ = self.graphics.refresh_formats(&self.metrics);
@@ -629,6 +703,7 @@ impl ThemeBackend for Ten {
         let dark = crate::appearance::is_dark();
         let dpi = self.window.dpi.get();
         self.window.app.borrow_mut().reload(dark, dpi);
+        self.window.sync_glass();
         self.window.invalidate();
         self.window.health()
     }
@@ -638,6 +713,84 @@ impl ThemeBackend for Ten {
 }
 
 impl Window {
+    /// 把当前 [`App::glass`] / [`App::scheme`] 同步到 DWM Acrylic：
+    /// 开关变了就开/关，没变但配色变了就更新染色。
+    ///
+    /// 必须在 [`Window::hwnd`] 已创建之后调用；窗口还没建好时静默跳过。
+    fn sync_glass(&self) {
+        let hwnd = self.hwnd.get();
+        if hwnd.0.is_null() {
+            return;
+        }
+        let app = self.app.borrow();
+        let glass = app.glass && !self.glass_self;
+        let tint = app.scheme.back_color;
+        accent::sync_acrylic(hwnd, glass, tint);
+    }
+
+    /// 显示前抓屏 + 箱式模糊 + 建 D2D 位图，存进 [`App::backdrop`]。
+    ///
+    /// 失败静默（`paint` 端缓存为 `None` 就不铺模糊，面板底色照旧）。
+    fn capture_backdrop(&self) {
+        let hwnd = self.hwnd.get();
+        if hwnd.0.is_null() {
+            return;
+        }
+        let mut app = self.app.borrow_mut();
+        let antialias = app.metrics.antialias;
+        let App {
+            graphics,
+            metrics,
+            backdrop,
+            ..
+        } = &mut *app;
+        let _ = metrics;
+        if graphics.ensure_target(hwnd, self.dpi.get(), antialias).is_err() {
+            return;
+        }
+        let Some(presenter) = graphics.target.as_ref() else {
+            return;
+        };
+        unsafe {
+            let mut wr = RECT::default();
+            if !GetWindowRect(hwnd, &mut wr).as_bool() {
+                return;
+            }
+            let (w, h) = (wr.right - wr.left, wr.bottom - wr.top);
+            if w <= 0 || h <= 0 {
+                return;
+            }
+            let Some((rgba, bw, bh)) = backdrop::capture_blurred(wr.left, wr.top, w, h)
+            else {
+                return;
+            };
+            let props = D2D1_BITMAP_PROPERTIES {
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_IGNORE,
+                },
+                dpiX: 96.0,
+                dpiY: 96.0,
+            };
+            let Ok(bitmap) = presenter.render_target().CreateBitmap(
+                D2D_SIZE_U {
+                    width: bw,
+                    height: bh,
+                },
+                Some(rgba.as_ptr().cast()),
+                bw * 4,
+                &props,
+            ) else {
+                return;
+            };
+            *backdrop = Some(paint::BackdropCache {
+                width: w,
+                height: h,
+                bitmap,
+            });
+        }
+    }
+
     /// 应用候选快照：内容没变就只重新定位，变了就重新测量 + 布局 + 绘制。
     fn render(&self, snapshot: &CandidateView, events: &EventSink) -> Result<(), String> {
         let same = {
@@ -680,18 +833,17 @@ impl Window {
             self.hide();
             return Ok(());
         }
-        // 主题文件被改过（例如刚在设置里换了皮肤）就重载一次，不必重启输入法
-        {
-            let changed = self
-                .app
-                .borrow()
-                .stamp
-                .ne(&config::dirs().and_then(|(shared, user)| config::stamp(&shared, &user)));
-            if changed {
-                let dark = crate::appearance::is_dark();
-                let dpi = self.dpi.get();
-                self.app.borrow_mut().reload(dark, dpi);
-            }
+        // 主题文件被改过（例如刚在设置里换了皮肤）就重载一次，不必重启输入法。
+        //
+        // 2026-10-30：这里原来每次渲染都 `dirs()` + 6 次 `metadata()` 去比时间戳，
+        // 等于**每键打一次文件系统**；改成带 TTL 的缓存（见 `config::stamp_cached`），
+        // 换皮肤最迟 0.75 秒生效，日常打字不再碰磁盘。
+        let changed = self.app.borrow().stamp.ne(&config::stamp_cached());
+        if changed {
+            let dark = crate::appearance::is_dark();
+            let dpi = self.dpi.get();
+            self.app.borrow_mut().reload(dark, dpi);
+            self.sync_glass();
         }
         let was_hidden = self.app.borrow().content.is_none();
         {
@@ -702,7 +854,7 @@ impl Window {
             } else {
                 Layout::build(&app.metrics, snapshot, &measured)
             };
-            crate::diagnostics::record(format_args!(
+            crate::diagnostics::record_verbose(format_args!(
                 "布局: 面板 {:.1}x{:.1} DIP · 内容 {:.1},{:.1}-{:.1},{:.1} · 候选 {} 行 · 预编辑 {} · 翻页 {}",
                 layout.content_size.cx,
                 layout.content_size.cy,
@@ -715,7 +867,7 @@ impl Window {
                 if layout.page_prev.is_null() { "无".to_string() } else { format!("<{:.0},{:.0} >{:.0},{:.0}", layout.page_prev.left, layout.page_prev.top, layout.page_next.left, layout.page_next.top) },
             ));
             for (index, row) in layout.rows.iter().enumerate() {
-                crate::diagnostics::record(format_args!(
+                crate::diagnostics::record_verbose(format_args!(
                     "  行 {index}: 高亮 {:.1},{:.1}-{:.1},{:.1} · 序号 {:.1},{:.1}-{:.1},{:.1} · 正文 {:.1},{:.1}-{:.1},{:.1} · 注释 {:.1},{:.1}-{:.1},{:.1}",
                     row.rect.left, row.rect.top, row.rect.right, row.rect.bottom,
                     row.label.left, row.label.top, row.label.right, row.label.bottom,
@@ -732,6 +884,11 @@ impl Window {
         }
         self.position().map_err(|e| e.to_string())?;
         if was_hidden {
+            // 自绘高斯模糊：**显示之前**抓屏——此刻窗口内容还是全透明，
+            // 抓到的是背后真实画面；paint 里现场抓会把自己抓进去（检查点 §7.5）。
+            if self.glass_self {
+                self.capture_backdrop();
+            }
             // 隐藏期间窗口保留上一帧，先画一次再显示，避免闪出旧内容
             if let Err(error) = self.paint() {
                 self.graphics_error(error);
@@ -761,12 +918,14 @@ impl Window {
     /// 绘制一帧（官方 `DoPaint`）。
     fn paint(&self) -> windows_core::Result<()> {
         let mut app = self.app.borrow_mut();
+        let glass = app.glass;
         let App {
             graphics,
             content,
             metrics,
             scheme,
             hovered,
+            backdrop,
             ..
         } = &mut *app;
         graphics.ensure_target(self.hwnd.get(), self.dpi.get(), metrics.antialias)?;
@@ -792,6 +951,7 @@ impl Window {
                 a: 0.0,
             }));
             if let Some(content) = content.as_ref() {
+                let backdrop_ref = backdrop.as_ref();
                 let mut painter = Painter::new(
                     &target,
                     presenter.d2d_factory(),
@@ -801,7 +961,11 @@ impl Window {
                     metrics,
                     scheme,
                     &content.snapshot,
+                    glass,
                 );
+                painter.hwnd = self.hwnd.get().0 as isize;
+                painter.glass_self = self.glass_self;
+                painter.backdrop = backdrop_ref;
                 painter.hover_index = match hovered {
                     Some(Hit::Candidate(i)) => Some(*i),
                     _ => None,
@@ -1011,11 +1175,16 @@ fn draw_mode_indicator(
     // 圆角：**面板边长 × 0.125**（用户要求）。
     // 提示窗是图标大小的方窗，跟主题的固定 4px 不成比例，按边长取比例更顺眼。
     let indicator_radius = layout.content.width().max(1.0) * 0.125;
+    let back_color = if painter.glass {
+        paint::glassify(painter.scheme.back_color)
+    } else {
+        painter.scheme.back_color
+    };
     painter.highlight_rect(
         &layout.content,
         indicator_radius,
         painter.m.border,
-        painter.scheme.back_color,
+        back_color,
         painter.scheme.shadow_color,
         painter.scheme.border_color,
         &layout::RoundInfo::default(),
