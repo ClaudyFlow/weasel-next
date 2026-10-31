@@ -1042,6 +1042,7 @@ impl Shell {
         // 可滚动主页:整页随 scroll 上移(2026-10-31 用户报"不能翻页")。
         let top = self.list_viewport().0 - self.scroll;
         let (_, h) = self.client_size();
+        let window_h = h; // 页脚钉在真实窗口底
         let h = h + self.scroll;
         let Some(snap) = &self.stats else {
             self.text(rt, brush, "读不到统计数据", &f.body, x, top, width, 22.0 * s, 0xFFB8C1CF);
@@ -1142,7 +1143,9 @@ impl Shell {
 
         // ③ 键盘热力图 + 指法分布（数据来自 lib）
         let key_top = heat_top + heat_h + 14.0 * s;
-        let key_h = (h - key_top - 150.0 * s).max(120.0 * s);
+        // 键高固定:之前从 (h - key_top - 150) 推导,h 含滚动偏移后键块被撑到
+        // 一整屏高(用户截图"怎么这么长")。
+        let key_h = 210.0 * s;
         draw_fill_round(rt, brush, x, key_top, width, key_h, 10.0 * s, 0x47FFFFFF);
         self.text(rt, brush, "键盘热力图", &f.heading, x + 14.0 * s, key_top + 8.0 * s, 200.0 * s, 26.0 * s, 0xFFF7FAFF);
         let (key_counts, _code_lens) = weasel_settings::stats::load_hist();
@@ -1156,7 +1159,7 @@ impl Shell {
         let area_x = x + 14.0 * s;
         let area_w = width - 28.0 * s;
         let mut ky = key_top + 40.0 * s;
-        let kh = ((key_h - 60.0 * s) / 4.0 - 3.0 * s).max(10.0 * s);
+        let kh = 26.0 * s;
         for row in rows.iter() {
             let count = row.len() as f32;
             let kw = ((area_w - (count - 1.0) * 2.0 * s) / count).max(6.0 * s);
@@ -1212,7 +1215,7 @@ impl Shell {
             "灵感来源：羊毛雪花 · input_statistic 统计插件",
             &f.note,
             x,
-            h - 34.0 * s,
+            window_h - 34.0 * s,
             width,
             16.0 * s,
             0xFF9AA4B2,
