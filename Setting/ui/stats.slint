@@ -19,51 +19,97 @@ export struct StatDay {
 export struct StatWord {
     word: string,
     count: int,
+    // 词云字号：由 Rust 按 sqrt(频次) 算好（14~44px），Slint 直接用。
+    size: length,
 }
 
 // 一个大数字卡片
 component StatCard inherits Rectangle {
     in property <string> title: "";
     in property <int> value: 0;
+    // 有值时用这串**已格式化好**的数字代替 `value`（例如"5.2"）。
+    // Slint 里 int 没法直接显示成一位小数，所以小数由 Rust 侧格式化。
+    in property <string> value-text: "";
     in property <string> unit: "";
-    in property <color> accent: #0a3afa;
+    in property <color> accent: #15803d;
+    // 历史值小字，跟数值**同一行**、接在单位后面，灰色（用户 2026-10-25 要求）。
+    in property <string> note: "";
 
     background: white;
     border-radius: 14px;
-    min-height: 64px;
+    // 用户 2026-10-18：「今日击键太矮了」—— 64px 装两行字确实挤，加到 104px。
+    min-height: 104px;
 
     VerticalLayout {
-        padding: 14px;
-        spacing: 2px;
+        padding: 18px;
+        spacing: 4px;
         alignment: start;
 
         Text {
             text: root.title;
-            font-size: 15px;
-            color: #6b7280;
+            font-size: 16px;
+            color: #64748b;
         }
         HorizontalLayout {
             spacing: 6px;
             alignment: start;
-            value-text := Text {
+            if root.value-text == "" : Text {
                 text: root.value;
-                font-size: 28px;
+                font-size: 34px;
+                font-weight: 700;
+                color: root.accent;
+            }
+            if root.value-text != "" : Text {
+                text: root.value-text;
+                font-size: 34px;
                 font-weight: 700;
                 color: root.accent;
             }
             Text {
                 text: root.unit;
                 font-size: 16px;
-                color: #9ca3af;
+                color: #94a3b8;
                 vertical-alignment: bottom;
+            }
+            if root.note != "" : Text {
+                text: root.note;
+                // 用户 2026-10-25：历史数字用**粗体灰字**，接在数值后面。
+                // 用户 2026-10-26 改：灰字要比彩色数字**小一号**（34 → 30），仍然粗体。
+                font-size: 30px;
+                font-weight: 700;
+                color: #94a3b8;
+                vertical-alignment: bottom;
+                // 卡片窄的时候宁可截断，也别把数值挤走或撑破卡片。
+                overflow: elide;
             }
         }
     }
 }
 
 // 可内嵌页面：设置主界面的「主页」直接放它。
+// 一个键帽：颜色越深 = 这个键按得越多（键盘热力图用）。
+component KeyCap inherits Rectangle {
+    in property <string> label: "";
+    in property <int> count: 0;
+    in property <int> peak: 1;
+    height: 64px;
+    border-radius: 10px;
+    background: root.count <= 0 ? #eef2f6
+        : root.count * 4 >= root.peak * 3 ? #15803d
+        : root.count * 2 >= root.peak ? #22c55e
+        : root.count * 4 >= root.peak ? #bbf7d0
+        : #dcfce7;
+    Text {
+        text: root.label;
+        font-size: 13px;
+        color: root.count * 2 >= root.peak ? #ffffff : #334155;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
 export component StatsPage inherits Rectangle {
-    background: #f4f5f7;
+    background: #f5f7fa;
     // Rectangle 会撑满（灰底铺满），这是「灰底拉满」要求的代价；不要再改成 VerticalBox。
     // 必须限高：它嵌在设置主界面的 VerticalBox 里，不限高会按内容撑到 700px，
     // 把底部的「保存并部署 / 关闭」挤出窗口（2026-10-17 实测）。
@@ -74,18 +120,72 @@ export component StatsPage inherits Rectangle {
     in property <string> quarter-label: "";
     in property <int> today-keys: 0;
     in property <int> today-chars: 0;
+    // 累计上屏字数
+    in property <int> total-chars: 0;
+    in property <int> best-speed: 0;
+    // 历史最高速度（字/分）
     in property <int> today-speed: 0;
+    // 今日击键速度（键/秒，Rust 侧格式化成一位小数的字符串）
+    in property <string> today-key-speed-text: "0.0";
+    // 值下面的历史小字，Rust 侧格式化好传进来（只放数字，灰色小一号）
+    in property <string> all-speed-note: "";
+    in property <string> best-speed-note: "";
+    // 击键的秒速（已格式化）：历史最大；历史平均用小字
+    in property <string> best-key-speed-text: "0.0";
+    in property <string> all-key-speed-note: "";
+    in property <string> best-key-speed-note: "";
+    // 上屏字数合并卡：今天值 + 灰色累计；连续使用：当前 + 灰色历史最长
+    in property <string> total-chars-note: "";
+    in property <string> best-streak-note: "";
+    // 击键合并卡：今天值 + 灰色累计
+    in property <string> total-keys-note: "";
+    // 平均码长（键/字，两位小数）：今日文本 / 灰色历史
+    in property <string> code-len-text: "0.00";
+    in property <string> all-code-len-note: "";
+    // 键准（%）/ 平均词长（字/轮）：今日值 + 灰色历史值（用户 2026-10-26 要求）。
+    // 今日值来自 stat.bin v3 的当日天记录（effective_keys / commits），
+    // 灰色历史值来自尾部直方图（累计）—— 和上面几张卡的"今日 + 灰历史"一致。
+    in property <string> key-accuracy-text: "0.0";
+    in property <string> key-accuracy-note: "";
+    in property <string> word-len-text: "0.00";
+    in property <string> word-len-note: "";
+    // 打字时间：今日 / 累计「有效输入时长」，Rust 侧已按分钟格式化（今日 + 灰色累计）
+    in property <string> time-today-text: "0";
+    in property <string> time-total-note: "";
+    // 平均每日字数：全期（只除有击键的天）/ 近 7 天
+    in property <string> avg-daily-text: "0";
+    in property <string> avg-daily-note: "";
+    // 累计击键（所有天的 keys 之和）
+    in property <int> total-keys: 0;
     in property <int> streak-days: 0;
     in property <[StatDay]> days: [];
     in property <[StatWord]> words: [];
+    in property <[StatWord]> words2: [];
+    in property <[StatWord]> words3: [];
+    // 键盘热力图 / 码长直方图（来自 stat.bin 尾部扩展；还没采到时为空）
+    in property <[int]> key-counts: [];
+    in property <[int]> code-lens: [];
+    // 时段统计：24 个小时桶，值是 0..100 的百分比（Rust 侧归一化好）。
+    in property <[int]> hour-keys: [];
+    /// 峰值桶下标（高亮用）。
+    in property <int> hour-peak: 0;
+    /// 摘要行：最活跃 X 时 · 共 N 分。
+    in property <string> hour-summary: "";
+    in property <int> key-peak: 1;
+    /// 指法分布三段摘要（左手/右手/空格、三行、八指）。
+    in property <string> finger-hands: "—";
+    in property <string> finger-rows: "—";
+    in property <string> finger-names: "—";
     // 生涯段位（20 级，来自 input_statistics.lua 的 career_levels）
-    in property <string> level-title: "🌱 初识键盘";
+    in property <string> level-title: "初识键盘";
     in property <int> level: 1;
     in property <int> exp-cur: 0;
     in property <int> exp-max: 100;
     in property <float> exp-ratio: 0.0;
     in property <string> exp-next: "";
     in property <string> realm: "凡键境";
+    // 名著字数水平（趣味对照，Rust 侧按累计上屏字数算好）
+    in property <string> book-note: "";
     // 加载失败时的提示（空 = 正常）
     in property <string> status: "";
     // 还没采集到数据时的解释（灰字，空 = 不显示）
@@ -97,8 +197,22 @@ export component StatsPage inherits Rectangle {
     // 公式：卡片内宽 = 窗口宽 − 页面 padding(14×2) − 卡片 padding(14×2) − 52 个 3px 间隙。
     in property <length> heat-cell: 20px;
 
-    callback refresh();
+    // 今日格在年度热力图里的坐标（列 = 周，行 = 周日→周六）；-1 = 今天不在今年网格里，不画高亮。
+    in property <int> today-week: -1;
+    in property <int> today-day: -1;
 
+    // ── 今日准星的几何 ────────────────────────────────────────────────
+    // 今日格坐标由 Rust 灌进来（-1 = 今天不在今年网格里），热力图上画一个「局部十字」：
+    // 中心格实心蓝，向上下左右各伸 3 格、往外渐隐 —— 只做局部，不横贯整张图
+    // （2026-10-26 试过整行整列全亮，看着像一条飞线/脏了）。
+    private property <length> cross-step: root.heat-cell + 3px;
+    private property <length> cross-cx: root.today-week * (root.heat-cell + 3px) + root.heat-cell / 2;
+    private property <length> cross-cy: root.today-day * (root.heat-cell + 3px) + root.heat-cell / 2;
+    private property <length> cross-arm: 3 * (root.heat-cell + 3px);
+    // 用户 2026-10-18：「不能滚动看啊」—— 内容（卡片+段位+年度热力图+常用字+灵感来源）
+    // 加起来比窗口高，以前直接裁在窗口底边，常用字只露个标题。
+    // 外面套 ScrollView：窗口够高时看不出差别，不够高就能往下滚。
+    ScrollView {
     VerticalLayout {
         padding: 14px;
         // 底部只留一点点：灵感来源是页面最后一行，要贴着窗口下沿
@@ -117,70 +231,97 @@ export component StatsPage inherits Rectangle {
                     text: "个人生涯";
                     font-size: 28px;
                     font-weight: 700;
-                    color: #111827;
+                    color: #0f172a;
                 }
                 Text {
                     text: root.hint == "" ? "本机记录，不上传（作者本人暂时没有这个技术水平）" : root.hint;
                     font-size: 16px;
-                    color: #9ca3af;
+                    color: #94a3b8;
                 }
             }
 
             Rectangle { horizontal-stretch: 1; }
 
-            // 刷新按钮自绘：std-widgets 的 Button 在浅色卡片上是白底浅字，
-            // 2026-10-17 截图里几乎看不见（只剩一个白框）。
-            Rectangle {
-                width: 76px;
-                height: 34px;
-                border-radius: 8px;
-                background: white;
-                border-width: 1px;
-                border-color: #d1d5db;
-
-                Text {
-                    text: "刷新";
-                    font-size: 15px;
-                    color: #374151;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-                TouchArea {
-                    clicked => { root.refresh(); }
-                }
-            }
         }
 
-        // ── 四个数字卡片 ──────────────────────────────────
-        HorizontalLayout {
+        // ── 十二张数字卡片：3 列 × 4 行（用户 2026-10-26 定稿顺序）──
+        // 上屏字数 / 平均每日字数 / 击键 · 平均速度 / 最大速度 / 打字时间 ·
+        // 平均击键 / 最大击键 / 键准 · 平均码长 / 平均词长 / 连续使用
+        // 宽度 = (内容宽 - 左右 padding 28 - 2 个 spacing 28 - 8 余量) / 3。
+        // 灰色小数字一律同字号粗体（用户要求），表示历史值。
+        GridLayout {
             spacing: 14px;
 
             StatCard {
-                title: "今日击键";
-                value: root.today-keys;
-                unit: "次";
-                horizontal-stretch: 1;
+                col: 0; row: 0; width: (root.width - 64px) / 3; vertical-stretch: 1;
+                title: "上屏字数"; value: root.today-chars; unit: "字";
+                accent: #22c55e; note: root.total-chars-note;
             }
+
             StatCard {
-                title: "今日上屏";
-                value: root.today-chars;
-                unit: "字";
-                accent: #16a34a;
-                horizontal-stretch: 1;
+                col: 1; row: 0; width: (root.width - 64px) / 3; vertical-stretch: 1;
+                title: "平均每日字数"; value-text: root.avg-daily-text; unit: "字/天";
+                accent: #4d7c0f; note: root.avg-daily-note;
             }
+
             StatCard {
-                title: "平均速度";
-                value: root.today-speed;
-                unit: "字/分";
-                accent: #d97706;
-                horizontal-stretch: 1;
+                col: 2; row: 0; width: (root.width - 64px) / 3; vertical-stretch: 1;
+                title: "击键"; value: root.today-keys; unit: "次";
+                note: root.total-keys-note;
             }
+
             StatCard {
-                title: "连续使用";
-                value: root.streak-days;
-                unit: "天";
-                accent: #7c3aed;
-                horizontal-stretch: 1;
+                col: 0; row: 1; width: (root.width - 64px) / 3; vertical-stretch: 1;
+                title: "平均速度"; value: root.today-speed; unit: "字/分";
+                accent: #15803d; note: root.all-speed-note;
+            }
+
+            StatCard {
+                col: 1; row: 1; width: (root.width - 64px) / 3; vertical-stretch: 1;
+                title: "最大速度"; value: root.best-speed; unit: "字/分";
+                accent: #b42318; note: root.best-speed-note;
+            }
+
+            StatCard {
+                col: 2; row: 1; width: (root.width - 64px) / 3; vertical-stretch: 1;
+                title: "打字时间"; value-text: root.time-today-text; unit: "分";
+                accent: #0f766e; note: root.time-total-note;
+            }
+
+            StatCard {
+                col: 0; row: 2; width: (root.width - 64px) / 3; vertical-stretch: 1;
+                title: "平均击键"; value-text: root.today-key-speed-text; unit: "键/秒";
+                accent: #0e7490; note: root.all-key-speed-note;
+            }
+
+            StatCard {
+                col: 1; row: 2; width: (root.width - 64px) / 3; vertical-stretch: 1;
+                title: "最大击键"; value-text: root.best-key-speed-text; unit: "键/秒";
+                accent: #b45309; note: root.best-key-speed-note;
+            }
+
+            StatCard {
+                col: 2; row: 2; width: (root.width - 64px) / 3; vertical-stretch: 1;
+                title: "键准"; value-text: root.key-accuracy-text; unit: "%";
+                accent: #0891b2; note: root.key-accuracy-note;
+            }
+
+            StatCard {
+                col: 0; row: 3; width: (root.width - 64px) / 3; vertical-stretch: 1;
+                title: "平均码长"; value-text: root.code-len-text; unit: "键/字";
+                accent: #7c3aed; note: root.all-code-len-note;
+            }
+
+            StatCard {
+                col: 1; row: 3; width: (root.width - 64px) / 3; vertical-stretch: 1;
+                title: "平均词长"; value-text: root.word-len-text; unit: "字/轮";
+                accent: #a16207; note: root.word-len-note;
+            }
+
+            StatCard {
+                col: 2; row: 3; width: (root.width - 64px) / 3; vertical-stretch: 1;
+                title: "连续使用"; value: root.streak-days; unit: "天";
+                accent: #166534; note: root.best-streak-note;
             }
         }
 
@@ -199,19 +340,19 @@ export component StatsPage inherits Rectangle {
                         text: root.level-title;
                         font-size: 22px;
                         font-weight: 700;
-                        color: #111827;
+                        color: #0f172a;
                     }
                     Text {
-                        text: "Lv." + root.level;
+text: "Lv." + root.level + " / 100";
                         font-size: 15px;
-                        color: #f0a030;
+                        color: #22c55e;
                         font-weight: 600;
                     }
                     Rectangle { horizontal-stretch: 1; }
                     Text {
                         text: root.realm;
                         font-size: 16px;
-                        color: #6b7280;
+                        color: #64748b;
                     }
                 }
 
@@ -219,12 +360,12 @@ export component StatsPage inherits Rectangle {
                 Rectangle {
                     height: 12px;
                     border-radius: 6px;
-                    background: #e8eaee;
+                    background: #e7ecf2;
                     Rectangle {
                         width: parent.width * root.exp-ratio;
                         height: parent.height;
                         border-radius: 6px;
-                        background: #f0a030;
+                        background: #22c55e;
                     }
                 }
 
@@ -232,14 +373,22 @@ export component StatsPage inherits Rectangle {
                     Text {
                         text: root.exp-cur + " / " + root.exp-max + " 经验";
                         font-size: 16px;
-                        color: #9ca3af;
+                        color: #94a3b8;
                     }
                     Rectangle { horizontal-stretch: 1; }
                     Text {
                         text: root.exp-next;
                         font-size: 16px;
-                        color: #9ca3af;
+                        color: #94a3b8;
                     }
+                }
+
+                // 名著字数水平：已写多少字 ≈ 哪部名著的篇幅（趣味对照）
+                if root.book-note != "" : Text {
+                    text: root.book-note;
+                    font-size: 15px;
+                    color: #64748b;
+                    wrap: word-wrap;
                 }
             }
         }
@@ -255,15 +404,24 @@ export component StatsPage inherits Rectangle {
 
                 Text {
                     text: root.quarter-label;
-                    font-size: 15px;
-                    font-weight: 600;
-                    color: #374151;
+                    font-size: 22px;
+                    font-weight: 700;
+                    color: #334155;
                 }
 
                 // GitHub 贡献图布局：**列 = 周，行 = 星期**（7 行 × 53 列 = 371 格，整一年）
                 // 数据按「周 × 7 + 星期」索引，Rust 侧保证数组补满 371 个。
                 // 尺寸不再写死 17px：按 heat-cell 实时计算，横向撑满卡片（贴到两端）。
-                HorizontalLayout {
+                // 网格 + 今日「准星」。
+                // 迭代过三版（2026-10-26）：① 细蓝框 →用户说看不见；② 半透明蓝染整行整列 →
+                // 同一透明度压在深绿/浅灰上效果不同，看着像脏了、用户问「这好看吗」；
+                // ③ 光带藏在格子底下 → 只在 3px 缝里露几个点，像噪点。
+                // 现在：今天那格**实心蓝 + 白描边**，再从它向上下左右各伸一条 2px 蓝线、往外渐隐
+                // （画在格子上面，所以是连续的准星，不是在缝里闪）。
+                Rectangle {
+                    height: 7 * root.heat-cell + 18px;   // 7 行 + 6 个 3px 行距
+
+                    HorizontalLayout {
                     spacing: 3px;
                     alignment: start;
                     for week in 53 : VerticalLayout {
@@ -272,16 +430,55 @@ export component StatsPage inherits Rectangle {
                             width: root.heat-cell;
                             height: root.heat-cell;
                             border-radius: 2px;
+                            // 今天那格**保持绿色**（用户 2026-10-26：「今日的还是绿色」），
+                            // 高亮全靠下面四条从它伸向网格四边的渐变带。
                             background: root.days[week * 7 + day].count <= 0
-                                ? #ebedf0
+                                ? #e7ecf2
                                 : (root.days[week * 7 + day].count < 100
-                                    ? #9be9a8
+                                    ? #bbf7d0
                                     : (root.days[week * 7 + day].count < 500
-                                        ? #40c463
-                                        : (root.days[week * 7 + day].count < 1500 ? #30a14e : #216e39)));
-                            border-width: root.days[week * 7 + day].today ? 2px : 0px;
-                            border-color: #1f2328;
+                                        ? #4ade80
+                                        : (root.days[week * 7 + day].count < 1500 ? #22c55e : #15803d)));
                         }
+                    }
+                    }
+
+                    // ── 今日高亮：从今天那格向**上下左右各自**伸一条渐变带，一直到网格边缘 ──
+                    // 用户 2026-10-26：「直接做成今日到边缘的渐变，也就是独自计算上下左右，
+                    // 然后分别渐变，今日的还是绿色」。所以四条带分开算：每条都是「今日端最蓝 →
+                    // 边缘端透明」，并且都从格子的边开始，不盖在今日格上（它保持绿色）。
+                    // 左
+                    if root.today-week >= 0 : Rectangle {
+                        x: 0;
+                        y: root.today-day * (root.heat-cell + 3px);
+                        width: root.today-week * (root.heat-cell + 3px) > 0px
+                            ? root.today-week * (root.heat-cell + 3px) : 0px;
+                        height: root.heat-cell;
+                        background: @linear-gradient(90deg, #2563eb00, #2563eb59);
+                    }
+                    // 右
+                    if root.today-week >= 0 : Rectangle {
+                        x: root.today-week * (root.heat-cell + 3px) + root.heat-cell;
+                        y: root.today-day * (root.heat-cell + 3px);
+                        width: parent.width - (root.today-week * (root.heat-cell + 3px) + root.heat-cell);
+                        height: root.heat-cell;
+                        background: @linear-gradient(90deg, #2563eb59, #2563eb00);
+                    }
+                    // 上
+                    if root.today-week >= 0 : Rectangle {
+                        x: root.today-week * (root.heat-cell + 3px);
+                        y: 0;
+                        width: root.heat-cell;
+                        height: root.today-day * (root.heat-cell + 3px);
+                        background: @linear-gradient(180deg, #2563eb00, #2563eb59);
+                    }
+                    // 下
+                    if root.today-week >= 0 : Rectangle {
+                        x: root.today-week * (root.heat-cell + 3px);
+                        y: root.today-day * (root.heat-cell + 3px) + root.heat-cell;
+                        width: root.heat-cell;
+                        height: parent.height - (root.today-day * (root.heat-cell + 3px) + root.heat-cell);
+                        background: @linear-gradient(180deg, #2563eb59, #2563eb00);
                     }
                 }
 
@@ -289,14 +486,14 @@ export component StatsPage inherits Rectangle {
                 HorizontalLayout {
                     spacing: 2px;
                     alignment: center;
-                    Text { text: "少"; font-size: 15px; color: #9ca3af; vertical-alignment: center; }
-                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #ebedf0; }
-                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #9be9a8; }
-                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #40c463; }
-                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #30a14e; }
-                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #216e39; }
-                    Text { text: "多"; font-size: 15px; color: #9ca3af; vertical-alignment: center; }
-                    Text { text: "（<100 / <500 / <1500 / ≥1500 键）"; font-size: 16px; color: #9ca3af; vertical-alignment: center; }
+                    Text { text: "少"; font-size: 15px; color: #94a3b8; vertical-alignment: center; }
+                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #e7ecf2; }
+                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #bbf7d0; }
+                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #4ade80; }
+                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #22c55e; }
+                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #15803d; }
+                    Text { text: "多"; font-size: 15px; color: #94a3b8; vertical-alignment: center; }
+                    Text { text: "（<100 / <500 / <1500 / ≥1500 键）"; font-size: 16px; color: #94a3b8; vertical-alignment: center; }
                 }
 
             }
@@ -306,62 +503,285 @@ export component StatsPage inherits Rectangle {
         // 没有字频数据时整张卡片不进布局。注意不能用 `visible: false`：
         // Slint 里那只是不画，min-height 108px + 12px 间距照样占位，
         // 会在热力图下面留一条 120px 的空灰边（2026-10-19 实测）。
-        if root.words.length > 0 : Rectangle {
-            background: white;
-            border-radius: 14px;
-            min-height: 108px;
-
+        // ── 键盘热力图（每个键按了多少次；数据来自 stat.bin 尾部扩展）──
+        Rectangle {
+            border-radius: 12px;
+            background: #ffffff;
             VerticalLayout {
-                padding: 14px;
-                spacing: 8px;
-
+                padding: 18px;
+                spacing: 12px;
+                alignment: start;
                 Text {
-                    text: "常用字";
-                    font-size: 15px;
-                    font-weight: 600;
-                    color: #374151;
+                    text: "键盘热力图";
+                    font-size: 22px;
+                    font-weight: 700;
+                    color: #0f172a;
                 }
+                // 主键盘区（2026-10-18 用户要求：做成真正的主键盘区）
+    // 指法分布（2026-10-19：移植蓝宝石的 hand/row/finger 统计）
+    Rectangle {
+        // 不写死高度：让卡片贴着三行文字的底部（用户 2026-10-25）
+        border-radius: 10px;
+        background: #ffffff;
+        border-width: 1px;
+        border-color: #c9d2de;
+        VerticalLayout {
+            padding: 12px;
+            spacing: 6px;
+            alignment: start;
+            Text {
+                text: "指法分布";
+                font-size: 22px;
+                font-weight: 700;
+                color: #17202b;
+            }
+            Text { text: "左右手　" + root.finger-hands; font-size: 12px; color: #334155; }
+            Text { text: "三行　　" + root.finger-rows; font-size: 12px; color: #334155; }
+            // 2026-10-24 修：这里原来写「八指」，但下面实际有 9 项
+            // （左手 4 指 + 拇指 1 + 右手 4 指）。不是 10 是因为空格只记给一只拇指。
+            Text { text: "九指　　" + root.finger-names; font-size: 12px; color: #4b5563; overflow: elide; }
+        }
+    }
 
+    // 时段统计（2026-10-31 用户要求）：一天 24 小时，每小时的按键量（0..100 百分比）。
+    Rectangle {
+        border-radius: 10px;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: #00000026;
+        drop-shadow-offset-y: 3px;
+        background: #ffffff;
+        border-width: 1px;
+        border-color: #c9d2de;
+        VerticalLayout {
+            padding: 12px;
+            spacing: 8px;
+            alignment: start;
+            Text {
+                text: "时段统计";
+                font-size: 22px;
+                font-weight: 700;
+                color: #17202b;
+            }
+            Text {
+                text: root.hour-summary;
+                font-size: 13px;
+                color: #334155;
+            }
+            Rectangle {
+                height: 1px;
+                background: #dbe3ee;
+            }
+            Rectangle {
+                height: 90px;
+                background: transparent;
                 HorizontalLayout {
-                    spacing: 10px;
-                    for word in root.words : Rectangle {
-                        background: #f1f5f9;
-                        border-radius: 8px;
-                        min-width: 54px;
-
+                    spacing: 2px;
+                    for value[index] in root.hour-keys : Rectangle {
+                        horizontal-stretch: 1;
+                        background: transparent;
                         VerticalLayout {
-                            padding: 8px;
-                            alignment: center;
-                            spacing: 2px;
-                            Text {
-                                text: word.word;
-                                font-size: 20px;
-                                font-weight: 700;
-                                color: #111827;
-                                horizontal-alignment: center;
-                            }
-                            Text {
-                                text: word.count;
-                                font-size: 16px;
-                                color: #6b7280;
-                                horizontal-alignment: center;
+                            width: 100%;
+                            alignment: end;
+                            Rectangle {
+                                width: 100%;
+                                height: (value * 1px) * 1;
+                                border-radius: 2px;
+                                background: value <= 0 ? #e2e8f0 : (index == root.hour-peak ? #2563eb : #93c5fd);
                             }
                         }
                     }
+                }
+            }
+            HorizontalLayout {
+                Text { text: "0"; font-size: 11px; color: #94a3b8; horizontal-stretch: 1; }
+                Text { text: "6"; font-size: 11px; color: #94a3b8; horizontal-stretch: 1; }
+                Text { text: "12"; font-size: 11px; color: #94a3b8; horizontal-stretch: 1; }
+                Text { text: "18"; font-size: 11px; color: #94a3b8; horizontal-stretch: 1; }
+                Text { text: "23 时"; font-size: 11px; color: #94a3b8; }
+            }
+        }
+    }
+
+                if root.key-counts.length >= 256 : VerticalLayout {
+                    spacing: 4px;
+                    // 不写 alignment: start —— 那会让每一行只占"首选宽度"，各行的
+                    // 键数不同 ⇒ 右端参差。让它撑满，键用 horizontal-stretch 分宽度。
+                    HorizontalLayout { spacing: 4px; horizontal-stretch: 1; width: 100%;
+                        KeyCap { label: "`~"; count: root.key-counts[192]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "1"; count: root.key-counts[49]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "2"; count: root.key-counts[50]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "3"; count: root.key-counts[51]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "4"; count: root.key-counts[52]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "5"; count: root.key-counts[53]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "6"; count: root.key-counts[54]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "7"; count: root.key-counts[55]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "8"; count: root.key-counts[56]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "9"; count: root.key-counts[57]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "0"; count: root.key-counts[48]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "-"; count: root.key-counts[189]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "="; count: root.key-counts[187]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "退格"; count: root.key-counts[8]; peak: root.key-peak; horizontal-stretch: 9; }
+                    }
+                    HorizontalLayout { spacing: 4px; horizontal-stretch: 1; width: 100%;
+                        KeyCap { label: "Tab"; count: root.key-counts[9]; peak: root.key-peak; horizontal-stretch: 8; }
+                        KeyCap { label: "Q"; count: root.key-counts[81]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "W"; count: root.key-counts[87]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "E"; count: root.key-counts[69]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "R"; count: root.key-counts[82]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "T"; count: root.key-counts[84]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "Y"; count: root.key-counts[89]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "U"; count: root.key-counts[85]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "I"; count: root.key-counts[73]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "O"; count: root.key-counts[79]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "P"; count: root.key-counts[80]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "["; count: root.key-counts[219]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "]"; count: root.key-counts[221]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "\\"; count: root.key-counts[220]; peak: root.key-peak; horizontal-stretch: 7; }
+                    }
+                    HorizontalLayout { spacing: 4px; horizontal-stretch: 1; width: 100%;
+                        KeyCap { label: "Caps"; count: root.key-counts[20]; peak: root.key-peak; horizontal-stretch: 10; }
+                        KeyCap { label: "A"; count: root.key-counts[65]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "S"; count: root.key-counts[83]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "D"; count: root.key-counts[68]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "F"; count: root.key-counts[70]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "G"; count: root.key-counts[71]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "H"; count: root.key-counts[72]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "J"; count: root.key-counts[74]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "K"; count: root.key-counts[75]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "L"; count: root.key-counts[76]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: ";"; count: root.key-counts[186]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "'"; count: root.key-counts[222]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "回车"; count: root.key-counts[13]; peak: root.key-peak; horizontal-stretch: 10; }
+                    }
+                    HorizontalLayout { spacing: 4px; horizontal-stretch: 1; width: 100%;
+                        KeyCap { label: "Shift"; count: root.key-counts[16]; peak: root.key-peak; horizontal-stretch: 15; }
+                        KeyCap { label: "Z"; count: root.key-counts[90]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "X"; count: root.key-counts[88]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "C"; count: root.key-counts[67]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "V"; count: root.key-counts[86]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "B"; count: root.key-counts[66]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "N"; count: root.key-counts[78]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "M"; count: root.key-counts[77]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: ","; count: root.key-counts[188]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "."; count: root.key-counts[190]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "/"; count: root.key-counts[191]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "Shift"; count: root.key-counts[160]; peak: root.key-peak; horizontal-stretch: 15; }
+                    }
+                    HorizontalLayout { spacing: 4px; horizontal-stretch: 1; width: 100%;
+                        KeyCap { label: "Ctrl"; count: root.key-counts[17]; peak: root.key-peak; horizontal-stretch: 9; }
+                        KeyCap { label: "Win"; count: root.key-counts[91]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "Alt"; count: root.key-counts[18]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "空格"; count: root.key-counts[32]; peak: root.key-peak; horizontal-stretch: 50; }
+                        KeyCap { label: "Alt"; count: root.key-counts[162]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "Win"; count: root.key-counts[92]; peak: root.key-peak; horizontal-stretch: 7; }
+                        KeyCap { label: "Ctrl"; count: root.key-counts[162]; peak: root.key-peak; horizontal-stretch: 9; }
+                        // 原来这里有一个 `Rectangle { horizontal-stretch: 1; }` 的尾部占位：
+                        // 它吃掉 1 份宽度，导致最后一行键宽比例和其它行不同（看起来"没对齐"）。
+                        // 整行已经撑满，占位没用了，删掉。
+                    }
+                }
+                if root.key-peak <= 1 : Text {
+                    text: "还没有键位数据：把要打字的程序关掉重开（TIP 是按进程加载的），打一会儿字就会出现。";
+                    font-size: 13px;
+                    color: #94a3b8;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        if root.words.length > 0 : Rectangle {
+            background: white;
+            border-radius: 14px;
+            // 用户 2026-10-30：「常用字做成词云」—— 原来 20 个等大方块的数字墙，
+            // 改成三行、字号＝频次（3 大 / 7 中 / 其余小），每行居中。
+            // 字号由 Rust 按 sqrt(频次 / 最高频次) 算好（14~44px），Slint 只管画。
+            height: 250px;
+
+            VerticalLayout {
+                padding: 14px;
+                padding-bottom: 18px;
+                spacing: 4px;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: "常用字";
+                        font-size: 22px;
+                        font-weight: 700;
+                        color: #334155;
+                    }
                     Rectangle { horizontal-stretch: 1; }
+                    Text {
+                        text: "字号 = 出现次数";
+                        font-size: 12px;
+                        color: #94a3b8;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // 第一行：最大的三个，带次数。
+                // 字数不给等高会各自居中、数字上下错位（2026-10-30 实测截图）——
+                // 所以把字放进固定 46px 的框里按底对齐，数字就落在同一条线上。
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 22px;
+                    for word in root.words : VerticalLayout {
+                        spacing: 2px;
+                        Rectangle {
+                            height: 46px;
+                            Text {
+                                text: word.word;
+                                font-size: word.size;
+                                font-weight: 700;
+                                color: #0f172a;
+                                horizontal-alignment: center;
+                                vertical-alignment: bottom;
+                            }
+                        }
+                        Text {
+                            text: word.count;
+                            font-size: 12px;
+                            color: #94a3b8;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+
+                // 第二行：中间七个
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 14px;
+                    for word in root.words2 : Text {
+                        text: word.word;
+                        font-size: word.size;
+                        color: #334155;
+                    }
+                }
+
+                // 第三行：剩下的十个，最小
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 10px;
+                    for word in root.words3 : Text {
+                        text: word.word;
+                        font-size: word.size;
+                        color: #64748b;
+                    }
                 }
             }
         }
 
         // 灵感来源：放在页面最下方、卡片之外的灰底上（用户 2026-10-19：
         // 从热力图卡片里拿出来，落到下面那块灰色区域）。
+        // 用户 2026-10-25：🐐🪶❄️ 是「羊毛雪花」的 emoji，要放在这四个字**前面**。
         Text {
-            text: "✨ 灵感来源：🐐🪶❄🌸 羊毛雪花 · input_statistic 统计插件";
-            font-size: 14px;
-            color: #9ca3af;
+            text: "灵感来源：🐐🪶❄🌸 羊毛雪花 · input_statistic 统计插件";
+            font-size: 12px;
+            color: #94a3b8;
             horizontal-alignment: center;
         }
 
+    }
     }
     }
 // 独立窗口包装：`/stat` 直接开这个。内容全在 StatsPage 里，这里只做属性透传。
@@ -377,20 +797,72 @@ export component StatsWindow inherits Window {
     in property <int> today-keys: 0;
     in property <string> quarter-label: "";
     in property <int> today-chars: 0;
+    // 累计上屏字数
+    in property <int> total-chars: 0;
+    in property <int> best-speed: 0;
     in property <int> today-speed: 0;
+    // 今日击键速度（键/秒，Rust 侧格式化好）
+    in property <string> today-key-speed-text: "0.0";
+    // 历史值小字（Rust 侧格式化好）
+    in property <string> all-speed-note: "";
+    in property <string> best-speed-note: "";
+    in property <string> best-key-speed-text: "0.0";
+    in property <string> all-key-speed-note: "";
+    in property <string> best-key-speed-note: "";
+    // 上屏字数合并卡：今天值 + 灰色累计；连续使用：当前 + 灰色历史最长
+    in property <string> total-chars-note: "";
+    in property <string> best-streak-note: "";
+    // 击键合并卡：今天值 + 灰色累计
+    in property <string> total-keys-note: "";
+    // 平均码长（键/字，两位小数）：今日文本 / 灰色历史
+    in property <string> code-len-text: "0.00";
+    in property <string> all-code-len-note: "";
+    // 键准（%）/ 平均词长（字/轮）：今日值 + 灰色历史值（用户 2026-10-26 要求）。
+    // 今日值来自 stat.bin v3 的当日天记录（effective_keys / commits），
+    // 灰色历史值来自尾部直方图（累计）—— 和上面几张卡的"今日 + 灰历史"一致。
+    in property <string> key-accuracy-text: "0.0";
+    in property <string> key-accuracy-note: "";
+    in property <string> word-len-text: "0.00";
+    in property <string> word-len-note: "";
+    // 打字时间：今日 / 累计「有效输入时长」，Rust 侧已按分钟格式化（今日 + 灰色累计）
+    in property <string> time-today-text: "0";
+    in property <string> time-total-note: "";
+    // 平均每日字数：全期（只除有击键的天）/ 近 7 天
+    in property <string> avg-daily-text: "0";
+    in property <string> avg-daily-note: "";
+    // 累计击键（所有天的 keys 之和）
+    in property <int> total-keys: 0;
     in property <int> streak-days: 0;
     in property <[StatDay]> days: [];
     in property <[StatWord]> words: [];
-    in property <string> level-title: "🌱 初识键盘";
+    in property <[StatWord]> words2: [];
+    in property <[StatWord]> words3: [];
+    in property <[int]> key-counts: [];
+    in property <[int]> code-lens: [];
+    // 时段统计：24 个小时桶，值是 0..100 的百分比（Rust 侧归一化好）。
+    in property <[int]> hour-keys: [];
+    /// 峰值桶下标（高亮用）。
+    in property <int> hour-peak: 0;
+    /// 摘要行：最活跃 X 时 · 共 N 分。
+    in property <string> hour-summary: "";
+    in property <int> key-peak: 1;
+    in property <string> finger-hands: "—";
+    in property <string> finger-rows: "—";
+    in property <string> finger-names: "—";
+    in property <string> level-title: "初识键盘";
     in property <int> level: 1;
     in property <int> exp-cur: 0;
     in property <int> exp-max: 100;
     in property <float> exp-ratio: 0.0;
     in property <string> exp-next: "";
     in property <string> realm: "凡键境";
+    // 名著字数水平（趣味对照，转发给内嵌 StatsPage）
+    in property <string> book-note: "";
     in property <string> status: "";
     in property <string> hint: "";
-    callback refresh();
+    // 今日格坐标（-1 = 不画），转发给内嵌 StatsPage 画十字渐变。
+    in property <int> today-week: -1;
+    in property <int> today-day: -1;
 
     // 热力格边长：53 列 + 52 个 3px 间隙正好铺满卡片内宽（贴到两端）。
     // 用 init / changed width 赋值而不是属性绑定 —— 绑定的话「格子宽 → 卡片高 →
@@ -405,10 +877,40 @@ export component StatsWindow inherits Window {
         heat-cell: root.heat-cell;
         today-keys: root.today-keys;
         today-chars: root.today-chars;
+        total-chars: root.total-chars;
+        best-speed: root.best-speed;
         today-speed: root.today-speed;
+        today-key-speed-text: root.today-key-speed-text;
+        all-speed-note: root.all-speed-note;
+        best-speed-note: root.best-speed-note;
+        best-key-speed-text: root.best-key-speed-text;
+        all-key-speed-note: root.all-key-speed-note;
+        best-key-speed-note: root.best-key-speed-note;
+        total-chars-note: root.total-chars-note;
+        best-streak-note: root.best-streak-note;
+        total-keys-note: root.total-keys-note;
+        code-len-text: root.code-len-text;
+        all-code-len-note: root.all-code-len-note;
+        key-accuracy-text: root.key-accuracy-text;
+        key-accuracy-note: root.key-accuracy-note;
+        word-len-text: root.word-len-text;
+        word-len-note: root.word-len-note;
+        time-today-text: root.time-today-text;
+        time-total-note: root.time-total-note;
+        avg-daily-text: root.avg-daily-text;
+        avg-daily-note: root.avg-daily-note;
+        total-keys: root.total-keys;
         streak-days: root.streak-days;
         days: root.days;
         words: root.words;
+        words2: root.words2;
+        words3: root.words3;
+        key-counts: root.key-counts;
+        code-lens: root.code-lens;
+        key-peak: root.key-peak;
+        finger-hands: root.finger-hands;
+        finger-rows: root.finger-rows;
+        finger-names: root.finger-names;
         level-title: root.level-title;
         level: root.level;
         exp-cur: root.exp-cur;
@@ -416,9 +918,11 @@ export component StatsWindow inherits Window {
         exp-ratio: root.exp-ratio;
         exp-next: root.exp-next;
         realm: root.realm;
+        book-note: root.book-note;
         status: root.status;
         hint: root.hint;
-        refresh => { root.refresh(); }
+        today-week: root.today-week;
+        today-day: root.today-day;
     }
 }
 
