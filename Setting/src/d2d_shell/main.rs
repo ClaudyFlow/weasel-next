@@ -111,6 +111,8 @@ const PAGE_UPDATE: usize = 4;
 
 /// 常规页的一行（只读预览版）。
 struct FieldRow {
+    #[allow(dead_code)]
+    field: weasel_settings::form::Field,
     title: String,
     value: String,
     kind: String,
@@ -122,6 +124,7 @@ struct FieldRow {
 impl FieldRow {
     /// 由 lib 的 `form::Field` 组装：值取"当前覆盖"或"继承值"。
     fn from_field(field: &weasel_settings::form::Field) -> Self {
+        let field = field.clone();
         let overridden = field.selected != 0;
         let value = if !overridden {
             format!("继承 {}", field.inherited_text)
@@ -155,6 +158,7 @@ impl FieldRow {
             kind: field.kind.clone(),
             overridden,
             description,
+            field,
         }
     }
 }
@@ -303,6 +307,9 @@ struct Shell {
     status: String,
     /// 主页数据（`weasel_settings::stats`，与 Slint 版同一份聚合）。
     stats: Option<weasel_settings::stats::Snapshot>,
+    /// 常规页可编辑的配置文档(点击字段即改即存)。
+    document: Option<weasel_settings::config::Document>,
+    paths: Option<weasel_common::process::RuntimePaths>,
     /// 时段统计（今天 24 小时）：`(每小时击键, 每小时有效毫秒)`；老 stat.bin 是全 0。
     hours: ([u32; 24], [u64; 24]),
     /// 主页副标题：天数 / 读文件告警。
@@ -661,10 +668,13 @@ impl Shell {
             self.fields.clear();
             return;
         };
-        match form::fields(section, &document) {
+        self.paths = Some(paths.clone());
+        let fields_result = form::fields(section, &document);
+        match fields_result {
             Ok(fields) => {
+                self.document = Some(document);
                 self.settings_note = format!(
-                    "{} · {} 个字段 · 只读预览（编辑控件下一轮）{}",
+                    "{} · {} 个字段 · 点击行循环选项,即改即存(文本/JSON 下一轮){}",
                     section.title,
                     fields.len(),
                     if catalog.notices.is_empty() {
@@ -680,6 +690,44 @@ impl Shell {
                 self.fields.clear();
             }
         }
+    }
+
+    /// 常规页字段点击:选项循环到下一档(继承→选项1→选项2→…),即改即存。
+    /// 文本/JSON 字段本轮不处理(要文本输入控件)。
+    fn cycle_field(&mut self, index: usize) {
+        use weasel_settings::form;
+        let Some(document) = &mut self.document else { return };
+        let Some(row) = self.fields.get_mut(index) else { return };
+        let field = &mut row.field;
+        if field.choices.len() < 2 {
+            self.settings_note = format!("{}:该字段暂不支持点击修改(文本/JSON 下一轮)", field.title);
+            return;
+        }
+        let next = ((field.selected.max(0) as usize) + 1) % field.choices.len();
+        let selected = next as i32;
+        let text = field.choices.get(next).cloned().unwrap_or_default();
+        field.selected = selected;
+        field.text = text.clone();
+        match field.value(selected, &text) {
+            Ok(value) => {
+                if let Err(error) = form::assign(&mut document.patch, &field.path, value) {
+                    self.settings_note = format!("{}:写入失败 {error}", field.title);
+                    return;
+                }
+            }
+            Err(error) => {
+                self.settings_note = format!("{}:取值失败 {error}", field.title);
+                return;
+            }
+        }
+        if let Err(error) = document.save() {
+            self.settings_note = format!("保存失败:{error}");
+            return;
+        }
+        // 重读,行显示回到真实状态(继承/覆盖、裁剪规则统一)
+        let note = format!("已保存:{} = {}", field.title, text);
+        self.refresh_settings();
+        self.settings_note = note;
     }
 
     /// 方案页的显示项（树结构）：`(是否系列标题, 行下标, 标题文字)`。
@@ -1988,7 +2036,9 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                             s.repaint();
                         }
                         Hover::Row(index) => {
-                            if s.page == PAGE_THEMES {
+                            if s.page == PAGE_SETTINGS {
+                                s.cycle_field(index);
+                            } else if s.page == PAGE_THEMES {
                                 s.select_scheme(index);
                             } else if s.page == PAGE_SCHEMAS {
                                 let items = s.schema_items();
@@ -2138,6 +2188,8 @@ fn run() -> Result<(), String> {
             rows: Vec::new(),
             status: String::new(),
             stats: None,
+            document: None,
+            paths: None,
             home_content_h: std::cell::Cell::new(0.0),
             hours: ([0; 24], [0; 24]),
             stats_note: String::new(),

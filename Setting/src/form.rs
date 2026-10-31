@@ -4,6 +4,7 @@ use crate::{catalog::Section, config::Document};
 use serde_json::Value;
 use weasel_common::settings::merge;
 
+#[derive(Clone)]
 pub struct Field {
     /// 写入覆盖配置时使用的完整 JSON 路径，包含 section 的挂载路径。
     pub path: Vec<String>,
