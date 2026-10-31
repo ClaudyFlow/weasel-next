@@ -79,7 +79,7 @@ const WINDOW_W: f32 = 1000.0;
 const WINDOW_H: f32 = 660.0;
 /// 主页(个人记录)的内容总高(DIP):生涯 + 9 卡 + 词云 + 时段 + 三张图各一行。
 /// 2026-10-31 改版后各功能独占一行,总高超出可视区,主页从此**可滚动**。
-const HOME_CONTENT_DIP: f32 = 1050.0;
+const HOME_CONTENT_DIP: f32 = 1090.0;
 
 /// 页签与 Slint 版对齐（`Setting/ui/main.slint` 的 `nav-items`，共 7 页）。
 const PAGES: [&str; 7] = ["主页", "外观", "方案", "常规", "更新", "词库", "下载"];
@@ -1268,7 +1268,7 @@ impl Shell {
 
         // ── 键盘热力 + 指法分布(独占一行)──
         let heat_y = hist_y + hist_h + gap;
-        let heat_h = 132.0 * s;
+        let heat_h = 170.0 * s;
         let (key_counts, _) = weasel_settings::stats::load_hist();
         draw_fill_round(rt, brush, x, heat_y, width, heat_h, 10.0 * s, 0x0FFFFFFF);
         self.text(rt, brush, "键盘热力", &f.label, x + 16.0 * s, heat_y + 8.0 * s, 300.0 * s, 16.0 * s, 0xFF8A94A3);
@@ -1298,12 +1298,13 @@ impl Shell {
             }
             ky += key_h + 3.0 * s;
         }
-        // 指法分布(右侧栏,照 Slint :527-536)
+        // 指法分布(照 Slint :527-536)——放键盘**下方**整行铺开:
+        // 之前塞右侧窄栏,长文案换行互叠(用户截图实锤)。
         let (hands, rows_f, names) = weasel_settings::stats::finger_breakdown(&key_counts);
-        let fx = x + width - 180.0 * s;
-        self.text(rt, brush, &format!("左右手 {hands}"), &f.note, fx, heat_y + 34.0 * s, 160.0 * s, 16.0 * s, 0xFFE4EAF5);
-        self.text(rt, brush, &format!("三行 {rows_f}"), &f.note, fx, heat_y + 56.0 * s, 160.0 * s, 16.0 * s, 0xFFE4EAF5);
-        self.text(rt, brush, &names, &f.label, fx, heat_y + 78.0 * s, 160.0 * s, 16.0 * s, 0xFFC9D2E0);
+        let info_y = ky + 4.0 * s;
+        self.text(rt, brush, &format!("左右手  {hands}"), &f.note, x + 16.0 * s, info_y, width - 32.0 * s, 16.0 * s, 0xFFC9D2E0);
+        self.text(rt, brush, &format!("三行      {rows_f}"), &f.note, x + 16.0 * s, info_y + 18.0 * s, width - 32.0 * s, 16.0 * s, 0xFFC9D2E0);
+        self.text(rt, brush, &format!("九指      {names}"), &f.note, x + 16.0 * s, info_y + 36.0 * s, width - 32.0 * s, 16.0 * s, 0xFFC9D2E0);
 
         // 页脚（照 Slint `stats.slint:713`）
         let (_, total_h) = self.client_size();
