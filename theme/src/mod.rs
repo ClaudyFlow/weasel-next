@@ -418,6 +418,10 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
     };
     // 自绘高斯模糊:`style/glass_blur: "self"` 时关 DWM 亚克力、改显示前抓屏。
     let glass_self = loaded.style.glass_blur.trim().eq_ignore_ascii_case("self");
+    crate::diagnostics::record(format_args!(
+        "glass_blur 配置: {:?} → glass_self={glass_self} (glass={glass})",
+        loaded.style.glass_blur
+    ));
     // 毛玻璃染色用配色背景色；`loaded` 之后会被 `App::new` 吞掉，先取出来。
     let tint = loaded.scheme.back_color;
     let window = Rc::new(Window {
@@ -783,6 +787,9 @@ impl Window {
             ) else {
                 return;
             };
+            crate::diagnostics::record(format_args!(
+                "自绘模糊: 抓屏 {w}x{h} → 位图 {bw}x{bh}(显示前,窗口未上屏)"
+            ));
             *backdrop = Some(paint::BackdropCache {
                 width: w,
                 height: h,
