@@ -245,7 +245,10 @@ fn request_mode_indicator(
     reason: ModeIndicatorReason,
     ascii_mode: bool,
 ) {
-    if !policy.allows(reason) || response.composing {
+    // 2026-11-01 18:2x：**组字中切中英也要弹提示**。原来这里有一条
+    // `|| response.composing`，把最常用的时机（打一半拼音按 Shift 换英文）的提示
+    // 整条丢掉 —— 用户报的就是这个：切了中英什么都没有。
+    if !policy.allows(reason) {
         return;
     }
     let id = allocate_mode_indicator_id(next_id);
@@ -2791,7 +2794,8 @@ impl Engine {
                         client.last_response.token = client.route.token.clone();
                         if response.composing {
                             client.pending_mode_indicator = None;
-                        } else if previous_ascii
+                        }
+                        if previous_ascii
                             .zip(response.ascii_mode)
                             .is_some_and(|(previous, next)| previous != next)
                         {
@@ -3141,7 +3145,10 @@ impl Processor<Work> for Engine {
                     client.pending_mode_indicator = None;
                     let now = Instant::now();
                     let anchor = update.anchor.unwrap_or_default();
-                    if now < pending.expires_at && anchor.valid && !client.last_response.composing {
+                    // 2026-11-01 18:4x：这里原来还有一条 `!client.last_response.composing`，
+                    // 于是就算请求发出来了，**发布快照这一步又把提示挡回去** ——
+                    // 组字中切中英永远不出提示（`theme.log` 里 `组字中徽标` 0 次就是这么来的）。
+                    if now < pending.expires_at && anchor.valid {
                         let mut snapshot = render_snapshot(
                             client_id,
                             client.revision,
