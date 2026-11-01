@@ -547,14 +547,20 @@ fn vertical_layout(
     let label_gate = if m.label_font_valid { 1.0 } else { 0.0 };
     let text_gate = if m.text_font_valid { 1.0 } else { 0.0 };
 
+    // 预编辑与辅助串（官方 VerticalLayout.cpp:15-30）
+    let has_preedit = !inline_preedit && view.preedit.is_some();
+
     let mut width = 0.0_f32;
-    let mut height = real_margin_y;
+    // 编码行**没有高亮框**，它的内边距就是面板内边距本身；候选行的高亮框则会向外扩
+    // `hilite_padding`。两者共用 real_margin 做起点，所以有编码行时把起点往前挪一个
+    // padding，让「编码文字」和「高亮框」到面板边的距离都是 1em（= HTML 基准的 --gap）。
+    let pad_x = m.hilite_padding_x;
+    let pad_y = m.hilite_padding_y;
+    let mut height = real_margin_y - if has_preedit { pad_y } else { 0.0 };
     let mut preedit = Rect::default();
     // 我们的快照没有辅助串（官方 `Context::aux`），留一个空矩形占位，布局分支保持一致
     let aux = Rect::default();
 
-    // 预编辑与辅助串（官方 VerticalLayout.cpp:15-30）
-    let has_preedit = !inline_preedit && view.preedit.is_some();
     if has_preedit {
         layout_inline_rect(
             m,
@@ -563,7 +569,7 @@ fn vertical_layout(
             true,
             pgw,
             pgh,
-            real_margin_x,
+            real_margin_x - pad_x,
             &mut width,
             &mut height,
             &mut preedit,
@@ -689,14 +695,25 @@ fn vertical_layout(
             }
         }
         if count > 0 {
-            height = mintop[row_cnt] + rows_height[row_cnt] - offset_y;
+            // 行坐标是从 `height`（**不含** offset_y）起算的，行里要统一补上 offset_y
+            // （预编辑行带了 offset_y、纵排分支也带，只有这里漏了）——不补的话候选文字
+            // 会比编码行高 6 DIP，看起来就是「编码与候选贴在一起」（2026-11-01 用户报）。
+            for row in &mut rows {
+                row.rect.offset(0.0, offset_y);
+                row.label.offset(0.0, offset_y);
+                row.text.offset(0.0, offset_y);
+                row.comment.offset(0.0, offset_y);
+            }
+            height = mintop[row_cnt] + rows_height[row_cnt];
             width = width.max(max_width_of_rows);
         } else {
             height -= m.spacing + offset_y;
             width += m.hilite_spacing + m.border;
         }
         width += real_margin_x;
-        height += real_margin_y;
+        // 注意：这里**不能**再加 `height += real_margin_y`——收尾段（官方
+        // VerticalLayout.cpp:138-147 的移植）已经统一加过一次，两处都加会让面板
+        // 底部多出一整条 `margin_y` 的空白（2026-11-01 截图里"下边空一大块"）。
     } else {
         // ---- VerticalLayout：一个候选一行（官方 VerticalLayout.cpp:36-110）----
         for i in 0..count {
@@ -874,7 +891,11 @@ fn vertical_layout(
         }
     }
 
-    let content_size = Size::new(width + offset_x * 2.0, height + offset_y * 2.0);
+    // 横向排布时 `width` 从 `offset_x + real_margin_x` 起算（第一项的左边已经含 offset），
+    // 再 +2×offset 会让面板右边凭空多出 offset 的空白 ⇒ 左右内边距不对称
+    // （左 1em、右 1em+offset；2026-11-01 用户报"大窗左右内边距不是 1em"）。
+    let extra_x = if horizontal_rows { offset_x } else { offset_x * 2.0 };
+    let content_size = Size::new(width + extra_x, height + offset_y * 2.0);
     let highlight = rows.get(id).map(|row| row.rect).unwrap_or_default();
 
     // 翻页按钮（官方 VerticalLayout.cpp:162-178）
@@ -1108,49 +1129,55 @@ mod tests {
         }
     }
 
+    /// HTML 预览（`_shots/cand_preview.html`）是样式的**设计基准**，这里把四条
+    /// "看得见的间隙"钉成回归断言（2026-11-01 用户两次报「大窗左右内边距不是 1em」）：
+    ///   面板边 → 高亮框        = 1em    (--gap)
+    ///   面板边 → 编码文字      = 1em    (编码行没有高亮框，内边距就是 --gap)
+    ///   高亮框 → 相邻候选文字  = 0.5em  (--item-gap；HTML 只有高亮项带 0.5em padding)
+    ///   编码行底 → 高亮框顶     = 0.5em  (候选行的 margin-top = --pad)
     #[test]
-    fn matches_hand_computed_official_geometry() {
-        // 手算（96 DPI、两条候选、无注释、无标记、无预编辑）。间距/圆角已跟字高绑定：
-        //   字高 = 14pt * 96/72 = 18.6667；margin = 一个字高 18.6667；
-        //   candidate_spacing = 一个全角字符 = 字高 18.6667；offset = border*2 = 6
-        //   行 0：top = margin 18.6667 + offset 6 = 24.6667，行高 19 → 底 43.6667
-        //   行 1：top = 43.6667 + 18.6667 = 62.3333，底 = 81.3333
-        //   content 高 = 81.3333 + margin 18.6667 = 100 → contentSize 高 = 100 + offset 6
-        //   宽仍被 min_width 160 顶住 → contentSize = (172, 96.6667)
-        let m = metrics();
-        let mut sizes = Measured {
-            label: vec![Size::new(16.0, 19.0); 2],
-            text: vec![Size::new(48.0, 19.0); 2],
-            comment: vec![Size::ZERO; 2],
-            ..Default::default()
+    fn html_em_baseline_gaps() {
+        let mut style = UIStyle::default();
+        style.horizontal = true;
+        let m = Metrics::new(&style, 96.0);
+        let font_h = m.font_point; // 14pt @96dpi = 18.6667
+        let mut view = view(3);
+        view.preedit = Some(Preedit {
+            text: "jiu".into(),
+            cursor: 3,
+        });
+        let mut sizes = measured(3);
+        sizes.preedit = Parts {
+            before: Size::ZERO,
+            hilite: Size::ZERO,
+            after: Size::ZERO,
+            total: Size::new(30.0, 19.0),
         };
-        sizes.page_prev = Size::new(8.0, 18.0);
-        sizes.page_next = Size::new(8.0, 18.0);
-        let layout = Layout::build(&m, &view(2), &sizes);
+        let layout = Layout::build(&m, &view, &sizes);
+        let panel = layout.content;
+        let hilite0 = layout.highlight_rect(&m, 0);
+        let hilite_last = layout.highlight_rect(&m, 2);
 
-        assert_eq!(layout.content_size, Size::new(172.0, 106.0), "contentSize 手算值");
-        assert_eq!(layout.content, Rect::new(6.0, 6.0, 166.0, 100.0), "content 矩形");
-        assert_eq!(
-            layout.rows[0].label,
-            Rect::new(24.666668, 24.666668, 40.666668, 43.666668),
-            "行 0 序号矩形（margin 一个字高 18.67 + offset 6）"
+        let gap = |actual: f32, want: f32, what: &str| {
+            assert!(
+                (actual - want).abs() < 0.05,
+                "{what}：期望 {want:.2}，实际 {actual:.2}"
+            );
+        };
+        gap(panel.left, 6.0, "面板左边缘（border*2 offset）");
+        gap(layout.preedit.left - panel.left, font_h, "面板左 → 编码文字");
+        gap(hilite0.left - panel.left, font_h, "面板左 → 高亮框");
+        gap(panel.right - hilite_last.right, font_h, "高亮框 → 面板右");
+        gap(layout.rows[1].label.left - hilite0.right, font_h / 2.0, "高亮框 → 下一个候选文字");
+        gap(hilite0.top - layout.preedit.bottom, font_h / 2.0, "编码行底 → 高亮框顶");
+        let hilite1 = layout.highlight_rect(&m, 1);
+        assert!(
+            hilite1.left - hilite0.right > -0.05,
+            "相邻两框不能重叠（间距 {:.2}）",
+            hilite1.left - hilite0.right
         );
-        assert_eq!(
-            layout.rows[0].text,
-            Rect::new(44.666668, 24.666668, 92.66667, 43.666668),
-            "行 0 正文矩形（label 之后 hilite_spacing）"
-        );
-        assert_eq!(layout.rows[1].label.top, 62.333336, "行 1 = 行 0 底 + 一个全角 18.67");
-        assert_eq!(
-            layout.rows[0].rect,
-            Rect::new(24.666668, 24.666668, 147.33333, 43.666668),
-            "高亮矩形（右边界贴面板右边距）"
-        );
-        assert_eq!(
-            layout.highlight_rect(&m, 0),
-            Rect::new(22.666668, 22.666668, 149.33333, 45.666668),
-            "绘制/命中用矩形 = 行矩形外扩 hilite_padding"
-        );
+        // 高亮框仍是以文字为中心向外扩 pad
+        gap(hilite0.left, layout.rows[0].label.left - m.hilite_padding_x, "框左 = 文字左 − pad");
     }
 
     #[test]

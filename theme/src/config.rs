@@ -492,15 +492,29 @@ impl Metrics {
             },
             // 圆角 / 间距 / 内边距**全部按字高推导**（= HTML 预览里的 em）：
             //   大框四边 1em、大框圆角 1em、小框四边 0.5em、小框圆角 0.5em、
-            //   候选间距 0.5em、编码与候选间距 0.5em、编码与箭头最小间距 0.5em
+            //   框与框 0.5em、编码与框 0.5em、编码与箭头最小间距 0.5em
+            //
+            // ⚠️ 关键：高亮框是**以文字为中心向外扩 hilite_padding**（官方语义，
+            //    `Layout::inflated_candidate`），而 HTML 的 padding 是**向内撑**。
+            //    所以「面板边→框边」= margin − pad、「编码→框」= spacing − pad、
+            //    「框↔框」= candidate_spacing − 2×pad。要让外面的**可见间隙**等于
+            //    HTML 基准（1em / 0.5em / 0.5em），必须把这些 pad 加回去。
+            //    2026-11-01 16:2x 用户报「编码与候选贴在一起、左侧不是 1em」就是这么来的：
+            //    原来 margin=1em、spacing=0.5em、candidate_spacing=0.5em 直接被 pad 吃掉，
+            //    实际可见间隙是 0.5em / 0 / −0.5em（相邻两框还互相重叠）。
             round_corner_ex: font_h,
             round_corner: font_h / 2.0,
             border: abs_scaled(border),
-            // margin 仍保留 yaml 的符号（负 margin = 内容往外挪），绝对值固定一个字高
-            margin_x: margin_sign_x as f32 * font_h,
-            margin_y: margin_sign_y as f32 * font_h,
-            spacing: font_h / 2.0,
-            candidate_spacing: font_h / 2.0,
+            // margin 仍保留 yaml 的符号（负 margin = 内容往外挪），绝对值 = 1em 边距 + pad 外扩
+            margin_x: margin_sign_x as f32 * (font_h + font_h / 2.0),
+            margin_y: margin_sign_y as f32 * (font_h + font_h / 2.0),
+            // 编码 ↔ 候选框：0.5em 可见间隙 + 框外扩 0.5em
+            spacing: font_h,
+            // 候选框 ↔ 相邻候选**文字**：框外扩 0.5em + 可见间隙 0.5em（= 1em）。
+            // HTML 里只有"当前高亮项"带 0.5em padding，所以框边到邻居文字就是 --item-gap 0.5em；
+            // 两框间距因此正好 2×pad（相切、不重叠，也满足官方的 candidate_spacing ≥ 2×padding）。
+            candidate_spacing: font_h,
+            // 编码 ↔ 翻页箭头：箭头不吃外扩，0.5em 就是 0.5em
             hilite_spacing: font_h / 2.0,
             hilite_padding_x: font_h / 2.0,
             hilite_padding_y: font_h / 2.0,
@@ -675,17 +689,19 @@ mod tests {
         assert_eq!(m.border, 3.0);
         // 间距/圆角跟字高绑定（见 Metrics::new ⑤）：14pt 在 96 DPI 下 = 18.6667 DIP
         let font_h = 14.0f32 * 96.0 / 72.0;
-        assert!((m.margin_x - font_h).abs() < 0.01, "margin_x = {}", m.margin_x);
-        assert!((m.margin_y - font_h).abs() < 0.01, "margin_y = {}", m.margin_y);
+        let pad = font_h / 2.0;
+        // margin = 1em 面板内边距 + 0.5em 高亮框外扩 = 1.5em
+        assert!((m.margin_x - font_h * 1.5).abs() < 0.01, "margin_x = {}", m.margin_x);
+        assert!((m.margin_y - font_h * 1.5).abs() < 0.01, "margin_y = {}", m.margin_y);
         assert!((m.spacing - font_h).abs() < 0.01, "spacing = {}", m.spacing);
         assert!(
             (m.candidate_spacing - font_h).abs() < 0.01,
-            "候选之间 = 一个全角字符 = {}",
+            "候选间文字距 = 1em（框外可见 0.5em）= {}",
             m.candidate_spacing
         );
-        assert_eq!(m.hilite_spacing, 4.0);
-        assert_eq!(m.hilite_padding_x, 2.0);
-        assert_eq!(m.hilite_padding_y, 2.0);
+        assert!((m.hilite_spacing - pad).abs() < 0.01, "hilite_spacing = {}", m.hilite_spacing);
+        assert!((m.hilite_padding_x - pad).abs() < 0.01, "小框四边 = 0.5em = {}", m.hilite_padding_x);
+        assert!((m.hilite_padding_y - pad).abs() < 0.01);
         assert!(
             (m.round_corner - font_h / 2.0).abs() < 0.01,
             "候选小圆角 = 半个字高 = {}",
@@ -708,8 +724,11 @@ mod tests {
     fn dpi_scaling_matches_official_layout_ctor() {
         let m = Metrics::new(&official_default(), 144.0);
         assert_eq!(m.border, 4.0, "3 * 144/96 取整");
-        // 字高 = 14 * 144/72 = 28 DIP
-        assert!((m.margin_x - 28.0).abs() < 0.01, "margin_x = {}", m.margin_x);
+        // 字高 = 14 * 144/72 = 28 DIP ⇒ margin = 1.5em = 42
+        assert!((m.margin_x - 42.0).abs() < 0.01, "margin_x = {}", m.margin_x);
+        assert!((m.margin_y - 42.0).abs() < 0.01, "margin_y = {}", m.margin_y);
+        assert!((m.spacing - 28.0).abs() < 0.01, "spacing = 1em");
+        assert!((m.candidate_spacing - 28.0).abs() < 0.01, "candidate_spacing = 1em");
         assert_eq!(m.min_width, 240.0);
         assert!((m.round_corner - 14.0).abs() < 0.01, "候选小圆角 = 字高/2 = {}", m.round_corner);
         assert!((m.round_corner_ex - 28.0).abs() < 0.01, "外侧大圆角 = 字高 = {}", m.round_corner_ex);
@@ -719,10 +738,12 @@ mod tests {
         assert_eq!((ox, oy), (8.0, 8.0), "border 取整后再乘 2");
     }
 
+    /// 2026-11-01 定：⑤ 段把 margin / spacing / candidate_spacing / padding 全部
+    /// 改成**按字高推导**（等价 CSS em），yaml 里这些旋钮一律失效，只剩 `font_point`
+    /// 能调大小 —— 这条守住"改 yaml 也不会偷偷改布局"。
     #[test]
-    fn padding_and_spacing_fixups_follow_official() {
+    fn layout_knobs_in_yaml_are_ignored() {
         let mut style = official_default();
-        // 官方 1299-1315：spacing/candidate_spacing/hilite_spacing 都要被 padding 顶上去
         style.layout.hilite_padding = 6;
         style.layout.hilite_padding_x = 6;
         style.layout.hilite_padding_y = 6;
@@ -732,23 +753,18 @@ mod tests {
         style.layout.margin_x = 0;
         style.layout.margin_y = 0;
         let m = Metrics::new(&style, 96.0);
-        // 官方 1299-1315 那套"padding 把 spacing 顶上去"对 spacing / candidate_spacing
-        // **不再生效**：这两个现在只跟字高走（用户 2026-11-01 定）。
-        // hilite_spacing 没纳入新规则，仍保留"≥ padding_x"的夹取。
         let font_h = 14.0f32 * 96.0 / 72.0;
+        assert!((m.margin_x - font_h * 1.5).abs() < 0.01, "margin_x = {}", m.margin_x);
+        assert!((m.margin_y - font_h * 1.5).abs() < 0.01, "margin_y = {}", m.margin_y);
         assert!((m.spacing - font_h).abs() < 0.01, "spacing = {}", m.spacing);
         assert!(
             (m.candidate_spacing - font_h).abs() < 0.01,
             "candidate_spacing = {}",
             m.candidate_spacing
         );
-        assert_eq!(m.hilite_spacing, 6.0, "非 inline：hilite_spacing ≥ padding_x");
-        assert!(
-            (m.margin_x - font_h).abs() < 0.01,
-            "margin 不再取 max(padding, |margin|)，固定一个字高 = {}",
-            m.margin_x
-        );
-        assert!((m.margin_y - font_h).abs() < 0.01);
+        assert!((m.hilite_spacing - font_h / 2.0).abs() < 0.01, "hilite_spacing = {}", m.hilite_spacing);
+        assert!((m.hilite_padding_x - font_h / 2.0).abs() < 0.01, "hilite_padding_x = {}", m.hilite_padding_x);
+        assert!((m.hilite_padding_y - font_h / 2.0).abs() < 0.01, "hilite_padding_y = {}", m.hilite_padding_y);
     }
 
     #[test]
@@ -757,13 +773,17 @@ mod tests {
         style.layout.margin_x = -20;
         style.layout.margin_y = -1;
         let m = Metrics::new(&style, 96.0);
-        // 绝对值不再被 padding 顶，固定一个字高；yaml 里的 -20 / -1 只留符号
+        // 绝对值不再被 padding 顶，固定 1.5em（1em 边距 + 0.5em 框外扩）；yaml 的 -20 / -1 只留符号
         let font_h = 14.0f32 * 96.0 / 72.0;
-        assert!((m.margin_x + font_h).abs() < 0.01, "负 margin 保持负号 = {}", m.margin_x);
-        assert!((m.margin_y + font_h).abs() < 0.01, "= {}", m.margin_y);
-        // 官方 real_margin 取绝对值
-        assert!((m.real_margin_x() - font_h).abs() < 0.01);
-        assert!((m.real_margin_y() - font_h).abs() < 0.01);
+        assert!(
+            (m.margin_x + font_h * 1.5).abs() < 0.01,
+            "负 margin 保持负号 = {}",
+            m.margin_x
+        );
+        assert!((m.margin_y + font_h * 1.5).abs() < 0.01, "= {}", m.margin_y);
+        // real_margin 取绝对值
+        assert!((m.real_margin_x() - font_h * 1.5).abs() < 0.01);
+        assert!((m.real_margin_y() - font_h * 1.5).abs() < 0.01);
     }
 
     #[test]
