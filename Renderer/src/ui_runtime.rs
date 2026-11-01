@@ -742,9 +742,19 @@ fn run_ui(
                     .owner;
                 presentation.refresh(owner)?;
             }
-            if !is_thread_message(&message, WM_RENDERER_UPDATE)
-                && !is_thread_message(&message, WM_RENDERER_THEME)
-                && message.message != WM_TIMER as u32
+            // WM_TIMER 要分开看：
+            //  * 线程级计时器（`SetTimer(None, ...)`，`hwnd` 为空）是这里自己维护的
+            //    模式提示倒计时，绝不能往下派发；
+            //  * **窗口级计时器**（`SetTimer(hwnd, ...)`）必须派发——主题窗口靠它
+            //    驱动高亮滑动动画（`ANIM_TIMER_ID`）和设备丢失重试（`RETRY_TIMER`）。
+            //    2026-11-01：原来把 `WM_TIMER` 一律丢掉，动画每 16ms 的那一帧永远
+            //    收不到，框滑到一半就"卡死"在那里（用户截图），只有下一次按键引发的
+            //    重绘才会跳到位。
+            let window_timer = message.message == WM_TIMER as u32 && !message.hwnd.0.is_null();
+            if window_timer
+                || (!is_thread_message(&message, WM_RENDERER_UPDATE)
+                    && !is_thread_message(&message, WM_RENDERER_THEME)
+                    && message.message != WM_TIMER as u32)
             {
                 let _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
