@@ -101,8 +101,9 @@ pub struct Painter<'a> {
     pub glass_self: bool,
     /// 显示前抓好的模糊背景缓存（mod 侧 [`BackdropCache`]；`None` = 没抓到）。
     pub backdrop: Option<&'a BackdropCache>,
-    /// 高亮滑动动画：`(from 下标, to 下标, 进度 0..1)`；`None` = 不播动画。
-    pub hilite_anim: Option<(usize, usize, f32)>,
+    /// 高亮滑动动画：`(当前矩形, 目标下标)`；`None` = 不播动画。
+    /// 矩形已经由模组侧按 CSS 语义插值好（只滑位置、宽高取目标），这里只管画。
+    pub hilite_anim: Option<(Rect, usize)>,
 }
 
 /// 显示前抓好的模糊背景（自绘高斯模糊的缓存单元）。
@@ -920,22 +921,10 @@ impl Painter<'_> {
                 );
             }
         }
-        // ③ 高亮滑动动画：把"旧位置 → 新位置"插值成一个矩形（必须画在文字之前）
-        let anim_rect = self.hilite_anim.and_then(|(from, to, t)| {
-            if from >= count || to >= count {
-                return None;
-            }
-            let a = layout.highlight_rect(self.m, from);
-            let b = layout.highlight_rect(self.m, to);
-            // HTML 的 `.hilite` 只过渡 `left`/`top`，宽高**瞬间定死**
-            //（原文注释：只滑位置；宽高瞬间定死 —— 否则动画中"小窗变大小"）。
-            // 这里照抄：位置插值、宽高取目标框。四边一起插值会把框在中途压扁/拉长，
-            // 还会盖到邻居候选的字上（2026-11-01 用户截图里"框卡在 2 和 3 之间"）。
-            let lerp = |x: f32, y: f32| x + (y - x) * t;
-            let left = lerp(a.left, b.left);
-            let top = lerp(a.top, b.top);
-            Some(Rect::new(left, top, left + b.width(), top + b.height()))
-        });
+        // ③ 高亮滑动动画：模组侧已经按 CSS 语义插值好矩形（只滑位置、宽高取目标），
+        //    这里只负责画，并且跳过目标项的静态高亮（否则会叠出两块）。
+        let anim_rect = self.hilite_anim.map(|(rect, _)| rect);
+        let anim_target = self.hilite_anim.map(|(_, target)| target);
         if let Some(rect) = anim_rect {
             self.highlight_rect(
                 &rect,
@@ -961,8 +950,8 @@ impl Painter<'_> {
             } else {
                 self.scheme.candidate_border_color
             };
-            // 动画进行中跳过选中项的静态高亮（由下面的插值矩形代替）
-            if !(is_selected && anim_rect.is_some()) {
+            // 动画进行中跳过**目标项**的静态高亮（由上面的滑动矩形代替）
+            if anim_target != Some(i) {
                 self.highlight_rect(
                     &layout.highlight_rect(self.m, i),
                     self.m.round_corner,

@@ -22,7 +22,7 @@ use crate::d2d_bindings::*;
 use crate::theme::paint::{d2d_color, Formats, Painter};
 use crate::theme_api::{CandidateView, EventSink, ThemeBackend, UiAction, UiMode};
 use config::Metrics;
-use layout::{Hit, Layout, Measured, Parts, Size};
+use layout::{Hit, Layout, Measured, Parts, Rect, Size};
 use std::{
     cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -355,6 +355,23 @@ struct App {
 const ANIM_DURATION: f32 = 0.10;
 /// 动画定时器 id。
 const ANIM_TIMER_ID: usize = 0x5757;
+/// 动画定时器间隔（毫秒）。`WM_TIMER` 的最小粒度约 10ms，100ms 的滑动因此有 ~10 帧。
+const ANIM_TICK_MS: u32 = 10;
+
+/// 一段高亮滑动（照 HTML 的 CSS transition 语义）。
+///
+/// HTML 里 `.hilite` 只对 `left`/`top` 做 100ms `cubic-bezier(.22,.61,.36,1)` 过渡，
+/// 宽高瞬间定死；而且 CSS 过渡**改向时从当前算出来的位置接着滑**。所以这里存的是
+/// 「起点矩形 / 终点矩形」，不是「旧下标 / 新下标」——旧下标只用来起头，动画中途
+/// 再按键就直接从视觉位置改向。
+#[derive(Clone, Copy)]
+struct Anim {
+    from: Rect,
+    to: Rect,
+    /// 目标候选下标（这段动画期间跳过它的静态高亮块，由插值矩形代替）。
+    target: usize,
+    start: std::time::Instant,
+}
 
 struct Window {
     hwnd: Cell<HWND>,
@@ -367,8 +384,10 @@ struct Window {
     preview: bool,
     /// 自绘高斯模糊（`style/glass_blur: "self"`）：关 DWM 亚克力，改在显示前抓屏。
     glass_self: bool,
-    /// 高亮滑动动画：`(from, to, 起始时刻)`；`None` = 没在播。
-    anim: std::cell::RefCell<Option<(usize, usize, std::time::Instant)>>,
+    /// 高亮滑动动画；`None` = 没在播。
+    anim: std::cell::RefCell<Option<Anim>>,
+    /// 上一帧真正画出来的高亮矩形（动画改向时从它接着滑）。
+    visual_hilite: std::cell::Cell<Option<Rect>>,
     /// 上一帧的选中下标（用来判断"刚换了候选"）。
     last_selected: Cell<usize>,
 }
@@ -438,6 +457,7 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
         dpi: Cell::new(96),
         glass_self,
         anim: std::cell::RefCell::new(None),
+        visual_hilite: std::cell::Cell::new(None),
         last_selected: Cell::new(usize::MAX),
         app: RefCell::new(App::new(loaded, 96.0, glass)?),
         error: RefCell::new(None),
@@ -1026,43 +1046,62 @@ impl Window {
                 b: 0.0,
                 a: 0.0,
             }));
-            // ---- 高亮滑动动画：检测选中项变化 ----
+            // ---- 高亮滑动动画：照 HTML 的 `.hilite`（只滑位置，宽高瞬间定死）----
             let selected_now = content
                 .as_ref()
                 .map(|c| c.snapshot.selected_index as usize)
                 .unwrap_or(0);
+            let target_rect = content
+                .as_ref()
+                .map(|c| c.layout.highlight_rect(metrics, selected_now));
             {
                 let mut anim = self.anim.borrow_mut();
                 if self.last_selected.get() != usize::MAX
                     && self.last_selected.get() != selected_now
                 {
-                    crate::diagnostics::record(format_args!(
-                        "高亮动画: {} → {}（{}ms 缓出）",
-                        self.last_selected.get(), selected_now, (ANIM_DURATION * 1000.0) as u32
-                    ));
-                    *anim = Some((self.last_selected.get(), selected_now, std::time::Instant::now()));
-                    // 16ms 定时器驱动重画（到点自己在 paint 里停）
-                    let _ = SetTimer(Some(self.hwnd.get()), ANIM_TIMER_ID, 16, None);
+                    if let Some(to) = target_rect {
+                        // CSS 过渡的语义：**改向时从当前算出来的位置接着滑**，而不是从
+                        // 旧候选的矩形重新起步 —— 连按 ↓ 才不会一格一格地顿。
+                        let from = self.visual_hilite.get().unwrap_or(to);
+                        crate::diagnostics::record(format_args!(
+                            "高亮动画: {} → {}（{}ms 缓出）",
+                            self.last_selected.get(), selected_now, (ANIM_DURATION * 1000.0) as u32
+                        ));
+                        *anim = Some(Anim {
+                            from,
+                            to,
+                            target: selected_now,
+                            start: std::time::Instant::now(),
+                        });
+                        let _ = SetTimer(Some(self.hwnd.get()), ANIM_TIMER_ID, ANIM_TICK_MS, None);
+                    }
                 }
                 self.last_selected.set(selected_now);
             }
             let hilite_anim = {
                 let anim = self.anim.borrow();
                 match anim.as_ref() {
-                    Some((from, to, start)) => {
-                        let elapsed = start.elapsed().as_secs_f32();
-                        let t = (elapsed / ANIM_DURATION).clamp(0.0, 1.0);
+                    Some(a) => {
+                        let t = (a.start.elapsed().as_secs_f32() / ANIM_DURATION).clamp(0.0, 1.0);
                         if t >= 1.0 {
                             None
                         } else {
                             // 缓出：1 - (1-t)^3 近似 cubic-bezier(.22,.61,.36,1)
                             let eased = 1.0 - (1.0 - t).powi(3);
-                            Some((*from, *to, eased))
+                            let lerp = |x: f32, y: f32| x + (y - x) * eased;
+                            let left = lerp(a.from.left, a.to.left);
+                            let top = lerp(a.from.top, a.to.top);
+                            Some((
+                                Rect::new(left, top, left + a.to.width(), top + a.to.height()),
+                                a.target,
+                            ))
                         }
                     }
                     None => None,
                 }
             };
+            self.visual_hilite
+                .set(hilite_anim.map(|(rect, _)| rect).or(target_rect));
             if let Some(content) = content.as_ref() {
                 let backdrop_ref = backdrop.as_ref();
                 let mut painter = Painter::new(
@@ -1451,17 +1490,27 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                 // 加了 WS_THICKFRAME 之后：客户区要铺满整个窗口，且不提供缩放/拖动边框。
                 WM_NCCALCSIZE if wp.0 != 0 => return LRESULT(0),
                 WM_NCHITTEST => return LRESULT(1), // HTCLIENT
-                // 动画定时器：每 16ms 重画一帧；动画结束就停表（WM_TIMER）
+                // 动画定时器：到点**直接画**一帧（不走 invalidate → WM_PAINT，
+                // 那条路要等消息队列空下来，实测就是"滑动一顿一顿"的来源）。
                 0x0113 if wp.0 == ANIM_TIMER_ID => {
                     let done = match window.anim.borrow().as_ref() {
-                        Some((_, _, start)) => start.elapsed().as_secs_f32() >= ANIM_DURATION,
+                        Some(a) => a.start.elapsed().as_secs_f32() >= ANIM_DURATION,
                         None => true,
                     };
                     if done {
                         *window.anim.borrow_mut() = None;
                         let _ = KillTimer(Some(hwnd), ANIM_TIMER_ID);
                     }
-                    window.invalidate();
+                    let started = std::time::Instant::now();
+                    if let Err(error) = window.paint() {
+                        window.graphics_error(error);
+                    }
+                    let cost = started.elapsed().as_secs_f32() * 1000.0;
+                    if cost > 8.0 {
+                        crate::diagnostics::record(format_args!(
+                            "动画帧耗时 {cost:.1}ms（超过 8ms，滑动会顿）"
+                        ));
+                    }
                     return LRESULT(0);
                 }
                 WM_ERASEBKGND => return LRESULT(1),
