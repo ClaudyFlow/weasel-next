@@ -351,6 +351,11 @@ struct App {
 }
 
 /// 窗口回调可访问的稳定状态分配。
+/// 高亮滑动动画时长（秒）。
+const ANIM_DURATION: f32 = 0.10;
+/// 动画定时器 id。
+const ANIM_TIMER_ID: usize = 0x5757;
+
 struct Window {
     hwnd: Cell<HWND>,
     dpi: Cell<u32>,
@@ -362,6 +367,10 @@ struct Window {
     preview: bool,
     /// 自绘高斯模糊（`style/glass_blur: "self"`）：关 DWM 亚克力，改在显示前抓屏。
     glass_self: bool,
+    /// 高亮滑动动画：`(from, to, 起始时刻)`；`None` = 没在播。
+    anim: std::cell::RefCell<Option<(usize, usize, std::time::Instant)>>,
+    /// 上一帧的选中下标（用来判断"刚换了候选"）。
+    last_selected: Cell<usize>,
 }
 
 /// Direct2D 设备丢失后的有限重试状态。
@@ -428,6 +437,8 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
         hwnd: Cell::new(HWND::default()),
         dpi: Cell::new(96),
         glass_self,
+        anim: std::cell::RefCell::new(None),
+        last_selected: Cell::new(usize::MAX),
         app: RefCell::new(App::new(loaded, 96.0, glass)?),
         error: RefCell::new(None),
         recovery: RefCell::new(Recovery::default()),
@@ -1006,6 +1017,43 @@ impl Window {
                 b: 0.0,
                 a: 0.0,
             }));
+            // ---- 高亮滑动动画：检测选中项变化 ----
+            let selected_now = content
+                .as_ref()
+                .map(|c| c.snapshot.selected_index as usize)
+                .unwrap_or(0);
+            {
+                let mut anim = self.anim.borrow_mut();
+                if self.last_selected.get() != usize::MAX
+                    && self.last_selected.get() != selected_now
+                {
+                    crate::diagnostics::record(format_args!(
+                        "高亮动画: {} → {}（{}ms 缓出）",
+                        self.last_selected.get(), selected_now, (ANIM_DURATION * 1000.0) as u32
+                    ));
+                    *anim = Some((self.last_selected.get(), selected_now, std::time::Instant::now()));
+                    // 16ms 定时器驱动重画（到点自己在 paint 里停）
+                    let _ = SetTimer(Some(self.hwnd.get()), ANIM_TIMER_ID, 16, None);
+                }
+                self.last_selected.set(selected_now);
+            }
+            let hilite_anim = {
+                let anim = self.anim.borrow();
+                match anim.as_ref() {
+                    Some((from, to, start)) => {
+                        let elapsed = start.elapsed().as_secs_f32();
+                        let t = (elapsed / ANIM_DURATION).clamp(0.0, 1.0);
+                        if t >= 1.0 {
+                            None
+                        } else {
+                            // 缓出：1 - (1-t)^3 近似 cubic-bezier(.22,.61,.36,1)
+                            let eased = 1.0 - (1.0 - t).powi(3);
+                            Some((*from, *to, eased))
+                        }
+                    }
+                    None => None,
+                }
+            };
             if let Some(content) = content.as_ref() {
                 let backdrop_ref = backdrop.as_ref();
                 let mut painter = Painter::new(
@@ -1022,6 +1070,7 @@ impl Window {
                 painter.hwnd = self.hwnd.get().0 as isize;
                 painter.glass_self = self.glass_self;
                 painter.backdrop = backdrop_ref;
+                painter.hilite_anim = hilite_anim;
                 painter.hover_index = match hovered {
                     Some(Hit::Candidate(i)) => Some(*i),
                     _ => None,
@@ -1393,6 +1442,19 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                 // 加了 WS_THICKFRAME 之后：客户区要铺满整个窗口，且不提供缩放/拖动边框。
                 WM_NCCALCSIZE if wp.0 != 0 => return LRESULT(0),
                 WM_NCHITTEST => return LRESULT(1), // HTCLIENT
+                // 动画定时器：每 16ms 重画一帧；动画结束就停表（WM_TIMER）
+                0x0113 if wp.0 == ANIM_TIMER_ID => {
+                    let done = match window.anim.borrow().as_ref() {
+                        Some((_, _, start)) => start.elapsed().as_secs_f32() >= ANIM_DURATION,
+                        None => true,
+                    };
+                    if done {
+                        *window.anim.borrow_mut() = None;
+                        let _ = KillTimer(Some(hwnd), ANIM_TIMER_ID);
+                    }
+                    window.invalidate();
+                    return LRESULT(0);
+                }
                 WM_ERASEBKGND => return LRESULT(1),
                 WM_CLOSE => {
                     if window.preview {

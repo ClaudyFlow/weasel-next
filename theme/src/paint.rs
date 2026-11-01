@@ -48,6 +48,8 @@ pub struct Painter<'a> {
     pub glass_self: bool,
     /// 显示前抓好的模糊背景缓存（mod 侧 [`BackdropCache`]；`None` = 没抓到）。
     pub backdrop: Option<&'a BackdropCache>,
+    /// 高亮滑动动画：`(from 下标, to 下标, 进度 0..1)`；`None` = 不播动画。
+    pub hilite_anim: Option<(usize, usize, f32)>,
 }
 
 /// 显示前抓好的模糊背景（自绘高斯模糊的缓存单元）。
@@ -273,6 +275,7 @@ impl<'a> Painter<'a> {
             glass,
             hwnd: 0,
             glass_self: false,
+            hilite_anim: None,
             backdrop: None,
         }
     }
@@ -452,7 +455,10 @@ impl Painter<'_> {
                     .filter(|text| !text.is_empty())
                     .or_else(|| std::env::var("WEASEL_MATERIAL").ok())
                     .unwrap_or_default();
+                let plain = material == "plain";
                 let back_color = match material.as_str() {
+                    // 纯白框（重画里程碑 1）：不透明白，无玻璃无材质
+                    "plain" => 0xFF_FFFF_FF,
                     // 亚克力：乳白半透（不模糊，比玻璃"实"）
                     "acrylic" => {
                         let base = lighten_color(self.scheme.back_color, 0.22);
@@ -473,7 +479,7 @@ impl Painter<'_> {
                 // 玻璃态：面板画满**整个窗口矩形**，而不是内缩 `offset` 的内框。
                 // 否则窗口比面板大一圈，那圈被 DWM 亚克力填满 ⇒ 边框外面多出一层灰（用户 13:4x 报的"还有一层"）。
                 // 代价：投影没有落脚处（`offset` 那圈就是给投影的），玻璃态干脆不要投影。
-                let back_rect = if self.glass {
+                let back_rect = if self.glass && !plain {
                     Rect::new(
                         0.0,
                         0.0,
@@ -483,12 +489,12 @@ impl Painter<'_> {
                 } else {
                     layout.content
                 };
-                if self.glass_self {
+                if self.glass_self && !plain {
                     self.draw_hand_backdrop(&back_rect, style.round_corner_ex);
                 }
                 // 亮度层：先铺深色压住背景纹理，再叠皮肤色 tint。
                 // 少了这层，20% 的面板叠在什么背景上都是一片浑浊的灰。
-                if self.glass || self.glass_self {
+                if (self.glass || self.glass_self) && !plain {
                     self.fill_geometry(
                         &back_rect,
                         glass_scrim(),
@@ -504,11 +510,11 @@ impl Painter<'_> {
                     back_color,
                     // 自绘模糊这档**不画投影**：投影画在 offset 那圈里，而窗口就是面板本身，
                     // 投影会从圆角外侧顶出一圈深色方框（20:5x 用户截图里的"黑边"）。
-                    if self.glass { 0 } else { self.scheme.shadow_color },
+                    if (self.glass || plain) { 0 } else { self.scheme.shadow_color }, // plain 不要投影，否则面板外一圈黑
                     // 玻璃档的描边用白色高光：原来用配色的 border_color
                     // （steam 是深灰 #353638）压在蓝色模糊上就是一圈脏黑边（21:2x 用户截图）。
                     // 但 25% 白太淡 ⇒ 窗口边界糊在背景里（"smeared"），提到 55% 才收得住边。
-                    if self.glass || self.glass_self { 0x8CFF_FFFF } else { self.scheme.border_color },
+                    if (self.glass || self.glass_self) && !plain { 0x8CFF_FFFF } else { self.scheme.border_color },
                     &RoundInfo::default(),
                 );
                 if material == "metal" {
@@ -868,6 +874,32 @@ impl Painter<'_> {
                 );
             }
         }
+        // ③ 高亮滑动动画：把"旧位置 → 新位置"插值成一个矩形（必须画在文字之前）
+        let anim_rect = self.hilite_anim.and_then(|(from, to, t)| {
+            if from >= count || to >= count {
+                return None;
+            }
+            let a = layout.highlight_rect(self.m, from);
+            let b = layout.highlight_rect(self.m, to);
+            let lerp = |x: f32, y: f32| x + (y - x) * t;
+            Some(Rect::new(
+                lerp(a.left, b.left),
+                lerp(a.top, b.top),
+                lerp(a.right, b.right),
+                lerp(a.bottom, b.bottom),
+            ))
+        });
+        if let Some(rect) = anim_rect {
+            self.highlight_rect(
+                &rect,
+                self.m.round_corner,
+                self.m.border,
+                self.scheme.hilited_candidate_back_color,
+                0,
+                self.scheme.hilited_candidate_border_color,
+                &RoundInfo::default(),
+            );
+        }
         // ③ 每个候选：底 + 框 + 序号 + 正文 + 注释（官方 L670-699）
         for i in 0..count {
             let is_selected = i == highlighted;
@@ -882,15 +914,18 @@ impl Painter<'_> {
             } else {
                 self.scheme.candidate_border_color
             };
-            self.highlight_rect(
-                &layout.highlight_rect(self.m, i),
-                self.m.round_corner,
-                self.m.border,
-                back,
-                0,
-                border_color,
-                &layout.round_info[i],
-            );
+            // 动画进行中跳过选中项的静态高亮（由下面的插值矩形代替）
+            if !(is_selected && anim_rect.is_some()) {
+                self.highlight_rect(
+                    &layout.highlight_rect(self.m, i),
+                    self.m.round_corner,
+                    self.m.border,
+                    back,
+                    0,
+                    border_color,
+                    &layout.round_info[i],
+                );
+            }
 
             let label_color = if is_selected {
                 self.scheme.hilited_label_color

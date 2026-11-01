@@ -483,25 +483,27 @@ impl Metrics {
         let scaled = |value: i32| (value as f32 * scale) as i32 as f32;
         let abs_scaled = |value: i32| (value.abs() as f32 * scale) as i32 as f32;
 
-        Self {
+        let metrics = Self {
             layout_type,
             align: match l.align_type.to_ascii_lowercase().as_str() {
                 "top" => Align::Top,
                 "bottom" => Align::Bottom,
                 _ => Align::Center,
             },
-            // 圆角 / 间距全部按字高（见 ⑤）
+            // 圆角 / 间距 / 内边距**全部按字高推导**（= HTML 预览里的 em）：
+            //   大框四边 1em、大框圆角 1em、小框四边 0.5em、小框圆角 0.5em、
+            //   候选间距 0.5em、编码与候选间距 0.5em、编码与箭头最小间距 0.5em
             round_corner_ex: font_h,
             round_corner: font_h / 2.0,
             border: abs_scaled(border),
             // margin 仍保留 yaml 的符号（负 margin = 内容往外挪），绝对值固定一个字高
             margin_x: margin_sign_x as f32 * font_h,
             margin_y: margin_sign_y as f32 * font_h,
-            spacing: font_h,
-            candidate_spacing: font_h,
-            hilite_spacing: abs_scaled(hilite_spacing),
-            hilite_padding_x: abs_scaled(pad_x),
-            hilite_padding_y: abs_scaled(pad_y),
+            spacing: font_h / 2.0,
+            candidate_spacing: font_h / 2.0,
+            hilite_spacing: font_h / 2.0,
+            hilite_padding_x: font_h / 2.0,
+            hilite_padding_y: font_h / 2.0,
             shadow_radius: abs_scaled(l.shadow_radius),
             shadow_offset_x: scaled(l.shadow_offset_x),
             shadow_offset_y: scaled(l.shadow_offset_y),
@@ -544,7 +546,21 @@ impl Metrics {
             label_font_valid: style.label_font_point > 0,
             text_font_valid: style.font_point > 0,
             comment_font_valid: style.comment_font_point > 0,
-        }
+        };
+        crate::diagnostics::record(format_args!(
+            "尺寸生效：字高 {:.1} · marginX {:.1} · marginY {:.1} · spacing {:.1} · candSpacing {:.1} · hiliteSpacing {:.1} · hilitePad {:.1}/{:.1} · 圆角 {:.1}/{:.1}",
+            metrics.font_point,
+            metrics.margin_x,
+            metrics.margin_y,
+            metrics.spacing,
+            metrics.candidate_spacing,
+            metrics.hilite_spacing,
+            metrics.hilite_padding_x,
+            metrics.hilite_padding_y,
+            metrics.round_corner_ex,
+            metrics.round_corner
+        ));
+        metrics
     }
 
     /// 把配色带来的开关补上（官方 `Layout` 里直接读 `_style` 的那些颜色判断）。
