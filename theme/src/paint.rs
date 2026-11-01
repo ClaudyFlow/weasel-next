@@ -49,7 +49,7 @@ pub fn plain_scheme(base: &ColorScheme) -> ColorScheme {
     const HILITE_BG: u32 = 0xFF_3B_4A_63;
 
     let mut scheme = base.clone();
-    scheme.back_color = 0xFF_FF_FF_FF;
+    scheme.back_color = 0x80FF_FFFF;
     // HTML 的面板没有描边、没有投影；边框和阴影全透明（透明就不画）。
     scheme.border_color = 0;
     scheme.shadow_color = 0;
@@ -504,8 +504,8 @@ impl Painter<'_> {
                 let material = material();
                 let plain = material == "plain";
                 let back_color = match material.as_str() {
-                    // 纯白框（重画里程碑 1）：不透明白，无玻璃无材质
-                    "plain" => 0xFF_FFFF_FF,
+                    // 纯白框：**50% 白**（`0x80` = 128/255），背景透出来一点，但不要玻璃/模糊
+                    "plain" => 0x80FF_FFFF,
                     // 亚克力：乳白半透（不模糊，比玻璃"实"）
                     "acrylic" => {
                         let base = lighten_color(self.scheme.back_color, 0.22);

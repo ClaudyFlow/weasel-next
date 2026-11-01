@@ -1010,6 +1010,7 @@ impl Window {
         unsafe {
             let _ = KillTimer(Some(self.hwnd.get()), RETRY_TIMER);
             if self.anim.borrow_mut().take().is_some() {
+                crate::diagnostics::record(format_args!("hide 清掉了进行中的动画"));
                 let _ = KillTimer(Some(self.hwnd.get()), ANIM_TIMER_ID);
                 unsafe {
                     timeEndPeriod(1);
@@ -1093,7 +1094,12 @@ impl Window {
                         unsafe {
                             timeBeginPeriod(1);
                         }
-                        let _ = SetTimer(Some(self.hwnd.get()), ANIM_TIMER_ID, ANIM_TICK_MS, None);
+                        let timer = SetTimer(Some(self.hwnd.get()), ANIM_TIMER_ID, ANIM_TICK_MS, None);
+                        crate::diagnostics::record(format_args!(
+                            "动画计时器 armed id={timer} hwnd={:?} 线程={:?}（间隔 {ANIM_TICK_MS}ms）",
+                            self.hwnd.get().0,
+                            std::thread::current().id()
+                        ));
                     }
                 }
                 self.last_selected.set(selected_now);
@@ -1517,6 +1523,11 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                         Some(a) => a.start.elapsed().as_secs_f32() >= ANIM_DURATION,
                         None => true,
                     };
+                    if window.anim.borrow().is_none() {
+                        crate::diagnostics::record(format_args!(
+                            "计时器空转：没有动画状态（id={}）", wp.0
+                        ));
+                    }
                     let t_now = window.anim.borrow().as_ref().map(|a| {
                         (a.start.elapsed().as_secs_f32() / ANIM_DURATION).clamp(0.0, 1.0)
                     });
@@ -1541,6 +1552,14 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                         ));
                     }
                     return LRESULT(0);
+                }
+                0x0113 => {
+                    crate::diagnostics::record(format_args!(
+                        "WM_TIMER 未知 id={} 线程={:?}（期望 {ANIM_TIMER_ID}）",
+                        wp.0,
+                        std::thread::current().id()
+                    ));
+                    return DefWindowProcW(hwnd, msg, wp, lp);
                 }
                 WM_ERASEBKGND => return LRESULT(1),
                 WM_CLOSE => {

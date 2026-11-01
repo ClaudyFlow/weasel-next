@@ -672,6 +672,10 @@ fn run_ui(
             health?;
         }
         let thread_id = GetCurrentThreadId();
+        crate::diagnostics::record(format_args!(
+            "UI 循环线程 = {:?}（Win32 id={thread_id}）",
+            std::thread::current().id()
+        ));
         let _appearance =
             crate::appearance::AppearanceSubscription::new(thread_id, WM_RENDERER_THEME);
         ready

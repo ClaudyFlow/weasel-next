@@ -67,6 +67,11 @@ fn pump_messages() {
 }
 
 fn worker(hwnd: usize, commands: mpsc::Receiver<Command>, results: mpsc::Sender<Completion>) {
+    // 诊断用：`WEASEL_PREVIEW_ANIM=1` 时每 ~480ms 换一个选中项，用来在**没有真实按键**
+    // 的情况下验证高亮滑动动画（帧率、改向、卡不卡）。正式使用不受影响。
+    let anim_enabled = std::env::var_os("WEASEL_PREVIEW_ANIM").is_some();
+    let mut anim_sender: Option<crate::ui_runtime::UiCommandSender> = None;
+    let mut anim_tick: u32 = 0;
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -76,6 +81,21 @@ fn worker(hwnd: usize, commands: mpsc::Receiver<Command>, results: mpsc::Sender<
         loop {
             // 等命令时顺便把本线程窗口的消息泵掉（16ms 一轮）
             pump_messages();
+            if let Some(sender) = &anim_sender {
+                anim_tick += 1;
+                if anim_tick % 30 == 0 {
+                    let step = anim_tick / 30;
+                    let mut snap = crate::preview::synthetic_snapshot();
+                    snap.selected_index = step % 5;
+                    snap.revision = snap.revision.wrapping_add(step as u64);
+                    // sequence 必须递增，否则 mailbox 会当成重放丢掉
+                    snap.sequence = snap.sequence.wrapping_add(step as u64);
+                    let _ = sender.send(crate::ui_runtime::UiCommand::Render(
+                        crate::preview::PREVIEW_OWNER,
+                        snap,
+                    ));
+                }
+            }
             let command = match commands.recv_timeout(std::time::Duration::from_millis(16)) {
                 Ok(command) => command,
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -88,6 +108,10 @@ fn worker(hwnd: usize, commands: mpsc::Receiver<Command>, results: mpsc::Sender<
                 let settings = runtime.block_on(crate::rpc::load_theme(true))?;
                 let requested = settings.required::<String>(".theme")?;
                 let mut next = UiHandle::start(&requested, UiMode::Preview, &settings)?;
+                if anim_enabled {
+                    anim_sender = Some(next.command_sender());
+                    anim_tick = 0;
+                }
                 next.events.close();
                 let selected = next.theme;
                 let old = current.replace(next);
