@@ -34,6 +34,38 @@ use windows_strings::w;
 const CLASS: windows_strings::PCWSTR = w!("Weasel.ThemeOfficial.Official");
 const RETRY_TIMER: usize = 1;
 
+/// 抓屏亲和性：`WDA_NONE` = 正常（会被截进画面里）；
+/// `WDA_EXCLUDEFROMCAPTURE` = 本窗口对**所有截屏 API 隐形**，截到的是它背后的画面。
+const WDA_NONE: u32 = 0x0000_0000;
+const WDA_EXCLUDEFROMCAPTURE: u32 = 0x0000_0011;
+
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn SetWindowDisplayAffinity(hwnd: HWND, affinity: u32) -> windows_core::BOOL;
+}
+#[link(name = "dwmapi")]
+unsafe extern "system" {
+    fn DwmFlush() -> i32;
+}
+
+/// 抓屏期间临时把窗口排除出画面，离开作用域立刻还原（含早退/panic 路径）。
+struct CaptureAffinity {
+    hwnd: HWND,
+    active: bool,
+}
+
+impl Drop for CaptureAffinity {
+    fn drop(&mut self) {
+        if self.active {
+            unsafe {
+                // 还原不必等帧：晚一帧被用户截图截到"少个候选窗"无所谓，
+                // 但多等一帧要付 16ms（每键都付不起）。
+                let _ = SetWindowDisplayAffinity(self.hwnd, WDA_NONE);
+            }
+        }
+    }
+}
+
 /// 官方 `MoveTo` 里给插入点下方留的 6 像素（WeaselPanel.cpp:196/213）。
 const CARET_GAP: i32 = 6;
 
@@ -353,21 +385,92 @@ struct App {
 /// 窗口回调可访问的稳定状态分配。
 /// 高亮滑动动画时长（秒）。
 const ANIM_DURATION: f32 = 0.10;
-/// 动画定时器 id。
-const ANIM_TIMER_ID: usize = 0x5757;
-/// 动画定时器间隔（毫秒）。
+/// 动画帧消息。
 ///
-/// `WM_TIMER` 的实际粒度取决于系统计时器精度：默认 15.6ms，动画只有 ~6 帧且间隔不匀。
-/// 动画期间用 `timeBeginPeriod(1)` 把精度提到 1ms，并 8ms 一跳 ⇒ 100ms 约 12 帧，
-/// 这是 CSS 在 60Hz 下（6 帧）的两倍，足够顺。
-const ANIM_TICK_MS: u32 = 8;
+/// 2026-11-01：原来用 `WM_TIMER` 驱动每 8ms 一帧，**实测一帧都没到** —— theme.log 里
+/// `动画计时器 armed` 有记录、`动画帧 t=` 一条都没有，所以高亮是瞬移的（用户看到
+/// “候选没有从左向右运动”）。
+///
+/// 根因：`WM_TIMER` 和 `WM_PAINT` 一样是“队列空了才生成”的低优先级消息，只要渲染器
+/// 那条消息循环没把它 `DispatchMessageW` 出去，就永远收不到。改成 **自排程**：画完一
+/// 帧 `PostMessageW` 下一帧 —— 就是 VSCode / CSS 那套 `requestAnimationFrame` 模型，
+/// 帧消息是普通投递消息，一定会被取走派发，不再看计时器的脸色。
+const ANIM_MSG: i32 = WM_APP + 0x2a;
+/// 一帧的目标间隔（毫秒）：100ms ≈ 12 帧，是 60Hz 下 CSS 过渡（6 帧）的两倍。
+const ANIM_FRAME_MS: u32 = 8;
 
-/// 系统计时器精度（`winmm`）。只在动画期间抬到 1ms，结束立刻还回去。
+/// 系统计时器精度（`winmm`）。只在动画期间抬到 1ms，结束立刻还回去 —— 否则 `Sleep(8)`
+/// 会被系统四舍五入到 15.6ms，一帧的间隔就不匀了。
 #[link(name = "winmm")]
 unsafe extern "system" {
     fn timeBeginPeriod(period: u32) -> u32;
     fn timeEndPeriod(period: u32) -> u32;
 }
+
+/// 帧间等待（`kernel32`）。只等“到下一帧”的那几毫秒，画完立刻把控制权还给消息循环，
+/// 所以按键最多被压后一帧的时间。
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn Sleep(ms: u32);
+}
+
+/// `PostMessageW`（`user32`）。绑定里没有，直接声明即可（HWND 是 `#[repr(transparent)]`）。
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn PostMessageW(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) -> i32;
+}
+
+/// 排下一帧（自排程的 rAF）。
+unsafe fn post_anim_frame(hwnd: HWND) {
+    unsafe {
+        let _ = PostMessageW(hwnd, ANIM_MSG as u32, 0, 0);
+    }
+}
+
+/// CSS `cubic-bezier(x1, y1, x2, y2)` 求值 —— VSCode 的过渡、CSS 的 `transition` 都用它。
+///
+/// 曲线在 x 上单调，所以对 x 二分求出参数 `s`，再回代算 y。以前用 `1 - (1-t)^3` 近似
+/// `cubic-bezier(.22,.61,.36,1)`：那条近似在起步阶段比真曲线慢一半（t=0.2 时 0.49 vs
+/// 0.71），头两帧几乎没位移，看起来就是“没在动”。
+struct Bezier {
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+}
+
+impl Bezier {
+    const fn new(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
+        Self { x1, y1, x2, y2 }
+    }
+    fn at(&self, s: f32, a: f32, b: f32) -> f32 {
+        let u = 1.0 - s;
+        3.0 * u * u * s * a + 3.0 * u * s * s * b + s * s * s
+    }
+    /// 时间进度 `t`（0..1）→ 动画进度（0..1）。
+    fn ease(&self, t: f32) -> f32 {
+        if t <= 0.0 {
+            return 0.0;
+        }
+        if t >= 1.0 {
+            return 1.0;
+        }
+        let mut lo = 0.0f32;
+        let mut hi = 1.0f32;
+        for _ in 0..18 {
+            let s = (lo + hi) * 0.5;
+            if self.at(s, self.x1, self.x2) < t {
+                lo = s;
+            } else {
+                hi = s;
+            }
+        }
+        self.at((lo + hi) * 0.5, self.y1, self.y2)
+    }
+}
+
+/// 高亮滑动的缓出曲线，与 HTML 预览里 `.hilite` 的 `cubic-bezier(.22,.61,.36,1)` 同一个。
+const SLIDE_EASE: Bezier = Bezier::new(0.22, 0.61, 0.36, 1.0);
 
 /// 一段高亮滑动（照 HTML 的 CSS transition 语义）。
 ///
@@ -382,6 +485,10 @@ struct Anim {
     /// 目标候选下标（这段动画期间跳过它的静态高亮块，由插值矩形代替）。
     target: usize,
     start: std::time::Instant,
+    /// 上一帧的时刻（用来算“还要等多久才到下一帧”）。
+    last: std::time::Instant,
+    /// 已经画了几帧（结束后记进日志，便于确认动画真的在跑）。
+    frames: u32,
 }
 
 struct Window {
@@ -395,6 +502,15 @@ struct Window {
     preview: bool,
     /// 自绘高斯模糊（`style/glass_blur: "self"`）：关 DWM 亚克力，改在显示前抓屏。
     glass_self: bool,
+    /// 窗口当前是否**已经上屏**（`ShowWindow(SW_SHOW*)` 之后、`SW_HIDE` 之前）。
+    ///
+    /// 抓背景必须在上屏**之前**：上屏后抓到的"背景"就是这个窗口自己（DWM 已经把
+    /// 它合成进桌面了），糊一遍再垫到面板底下，右半边就是一团白云 + 文字鬼影
+    /// （2026-11-01 17:5x 用户：「右面是什么」）。加宽候选窗时走
+    /// `WM_WINDOWPOSCHANGED` 重抓，那时窗口早已上屏 —— 就是这个 bug 的来源。
+    shown: Cell<bool>,
+    /// 上次成功抓背景的时刻（上屏后重抓的节流用）。
+    last_backdrop: Cell<Option<std::time::Instant>>,
     /// 高亮滑动动画；`None` = 没在播。
     anim: std::cell::RefCell<Option<Anim>>,
     /// 上一帧真正画出来的高亮矩形（动画改向时从它接着滑）。
@@ -467,6 +583,8 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
         hwnd: Cell::new(HWND::default()),
         dpi: Cell::new(96),
         glass_self,
+        shown: Cell::new(false),
+        last_backdrop: Cell::new(None),
         anim: std::cell::RefCell::new(None),
         visual_hilite: std::cell::Cell::new(None),
         last_selected: Cell::new(usize::MAX),
@@ -559,6 +677,19 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
                 &disabled as *const _ as *const core::ffi::c_void,
                 core::mem::size_of::<i32>() as u32,
             );
+            // **单层**（用户 17:3x：「我是不是让你做一个单层，怎么还有一个外层」）：
+            // Win11 会给带 `WS_THICKFRAME` 的窗口、沿 DWM 圆角轮廓画一圈 1px 的系统描边。
+            // 面板不透明时被完全盖住看不出；改成 50% 透明之后，窗口边缘（面板外 ~8px）
+            // 就露出一圈浅色"外层"（实测：屏幕坐标下比面板边外 8px 处那条线比背景亮 26 级）。
+            // `DWMWA_BORDER_COLOR(34) = DWMWA_COLOR_NONE(0xFFFFFFFE)` 让 DWM 不画它。
+            // Win10 不认这个属性 —— 调用失败就算了（`let _`）。
+            let no_border: u32 = 0xFFFF_FFFE;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                34, // DWMWA_BORDER_COLOR
+                &no_border as *const _ as *const core::ffi::c_void,
+                core::mem::size_of::<u32>() as u32,
+            );
         }
         if glass {
             accent::sync_acrylic(hwnd, true, tint);
@@ -619,7 +750,8 @@ unsafe fn apply_taskbar_icon(hwnd: HWND, icon: HICON) {
 
 impl App {
     fn new(loaded: config::Loaded, dpi: f32, glass: bool) -> Result<Self, String> {
-        let metrics = Metrics::new(&loaded.style, dpi).with_colors(&loaded.scheme);
+        let metrics = config::metrics(&loaded.style, dpi, paint::material() == "plain")
+            .with_colors(&loaded.scheme);
         crate::diagnostics::record(format_args!("主题配置: {}", loaded.source));
         crate::diagnostics::record(format_args!(
             "毛玻璃: {}",
@@ -645,7 +777,8 @@ impl App {
 
     /// DPI 变了：按原始 style 重新缩放度量与字号。
     fn set_dpi(&mut self, dpi: u32) {
-        self.metrics = Metrics::new(&self.raw_style, dpi.max(1) as f32).with_colors(&self.scheme);
+        self.metrics = config::metrics(&self.raw_style, dpi.max(1) as f32, paint::material() == "plain")
+            .with_colors(&self.scheme);
         let _ = self.graphics.refresh_formats(&self.metrics);
         if let Some(content) = &mut self.content {
             content.measured = self.graphics.measure_all(&self.metrics, &content.snapshot);
@@ -680,7 +813,8 @@ impl App {
             Err(_) => self.raw_style.glass,
         };
         self.metrics =
-            Metrics::new(&self.raw_style, dpi.max(1) as f32).with_colors(&self.scheme);
+            config::metrics(&self.raw_style, dpi.max(1) as f32, paint::material() == "plain")
+                .with_colors(&self.scheme);
         let _ = self.graphics.refresh_formats(&self.metrics);
         if let Some(presenter) = self.graphics.target.as_ref() {
             apply_antialias(presenter, self.metrics.antialias);
@@ -803,7 +937,7 @@ impl Window {
         accent::sync_acrylic(hwnd, glass, tint);
     }
 
-    /// 显示前抓屏 + 箱式模糊 + 建 D2D 位图，存进 [`App::backdrop`]。
+    /// 抓屏 + 高斯模糊 + 建 D2D 位图，存进 [`App::backdrop`]。
     ///
     /// 失败静默（`paint` 端缓存为 `None` 就不铺模糊，面板底色照旧）。
     fn capture_backdrop(&self) {
@@ -811,6 +945,42 @@ impl Window {
         if hwnd.0.is_null() {
             return;
         }
+        // 「只识别背景」（用户 17:4x）：抓屏前把**本窗口**从屏幕内容里排除掉
+        // （`SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`），抓完立刻恢复
+        // `WDA_NONE` —— 否则用户自己截图就截不到候选窗了。
+        // 这样即使窗口已经上屏（加宽 / 跟着光标移动），抓到的也只有背景，
+        // 不会把自己那块白面板糊进去（17:3x「右面是什么」就是自拍鬼影）。
+        // 只有 Win10 2004+ 支持；老系统这一步失败 ⇒ 上屏后放弃抓屏，
+        // 回退成"显示前抓一次 + 拉伸"。
+        // **每次都排除自己**（不只是上屏时）。`hide()` 之后 DWM 不一定已经把上一帧撤掉，
+        // 那一刻抓屏抓到的还是我们自己那块面 —— 实测抓到过 `平均亮度 127` 的"背景"
+        // （真背景 28），面板 = 50% 白 + 一张本来就 50% 白的自拍 ⇒ 198，看着就是不透明
+        // （用户 18:0x：「为什么不透明」）。
+        if self.shown.get() {
+            // 节流：上屏后重抓最多 ~8 次/秒。抓一次要 DwmFlush 等一帧 + 抓屏 +
+            // 高斯（≈20ms），每键都做会让打字发涩；背景本身不会一帧一变。
+            if let Some(last) = self.last_backdrop.get() {
+                if last.elapsed() < std::time::Duration::from_millis(120) {
+                    return;
+                }
+            }
+        }
+        let excluded = unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE).as_bool() };
+        // 老系统（不支持这个亲和性）：上屏状态下抓不到干净背景，干脆不抓，
+        // 回退成"显示前抓一次 + 拉伸"。
+        if !excluded && self.shown.get() {
+            return;
+        }
+        if excluded {
+            // 等一帧，让 DWM 真的按新的抓屏亲和性合成一次
+            unsafe {
+                let _ = DwmFlush();
+            }
+        }
+        let _affinity = CaptureAffinity {
+            hwnd,
+            active: excluded,
+        };
         let mut app = self.app.borrow_mut();
         let antialias = app.metrics.antialias;
         let App {
@@ -878,14 +1048,25 @@ impl Window {
             ) else {
                 return;
             };
+            let mean = {
+                let mut sum: u64 = 0;
+                let mut n: u64 = 0;
+                for pixel in rgba.chunks_exact(4).step_by(37) {
+                    sum += pixel[1] as u64;
+                    n += 1;
+                }
+                if n == 0 { 0 } else { (sum / n) as u32 }
+            };
             crate::diagnostics::record(format_args!(
-                "自绘模糊: 抓屏 {w}x{h} → 位图 {bw}x{bh}(显示前,窗口未上屏)"
+                "自绘模糊: 抓屏 {w}x{h} → 位图 {bw}x{bh} · 平均亮度 {mean} · 排除自身={excluded}"
             ));
             *backdrop = Some(paint::BackdropCache {
                 width: w,
                 height: h,
                 bitmap,
+                luma: mean,
             });
+            self.last_backdrop.set(Some(std::time::Instant::now()));
         }
     }
 
@@ -998,6 +1179,7 @@ impl Window {
                 if self.preview { SW_SHOW } else { SW_SHOWNOACTIVATE },
             );
         }
+        self.shown.set(true);
         self.invalidate();
         self.health()
     }
@@ -1011,13 +1193,25 @@ impl Window {
             let _ = KillTimer(Some(self.hwnd.get()), RETRY_TIMER);
             if self.anim.borrow_mut().take().is_some() {
                 crate::diagnostics::record(format_args!("hide 清掉了进行中的动画"));
-                let _ = KillTimer(Some(self.hwnd.get()), ANIM_TIMER_ID);
                 unsafe {
                     timeEndPeriod(1);
                 }
             }
+            // 隐藏前先把表面清成**全透明**再上屏一次：DWM 有时不会立刻把窗口
+            // 撤出合成，残留的就会是上一帧那张模糊背景（用户 18:1x：「打完字有时
+            // 候这个背景还是会显示」）。清成空气之后，就算晚一帧也看不见东西。
+            if let Some(presenter) = self.app.borrow().graphics.target.as_ref() {
+                // ⚠️ D2D 的 `Clear` 必须在 `BeginDraw`/`EndDraw` 之间调，否则上下文进入
+                // 非法状态 —— 下一次 `EndDraw` 就报 `0x88990001 (D2DERR_WRONG_STATE)`，
+                // 进而 `graphics_error` → 健康检查失败 → **渲染器整个退出**（候选窗消失）。
+                // 2026-11-01 18:3x 就这么把候选窗整没了。
+                presenter.begin_draw();
+                presenter.clear_transparent();
+                let _ = presenter.end_draw();
+            }
             let _ = ShowWindow(self.hwnd.get(), SW_HIDE);
         }
+        self.shown.set(false);
     }
 
     /// 绘制一帧（官方 `DoPaint`）。
@@ -1044,7 +1238,10 @@ impl Window {
         // 全是白字 ⇒ 看不见（2026-11-01 用户截图）。其它材质保持配色表原样。
         let plain_palette;
         let scheme = if paint::material() == "plain" {
-            plain_palette = paint::plain_scheme(scheme);
+            // 面板不再铺白（直接透明），文字颜色要跟着**背景亮度**走：
+            // 深色背景上用浅色字，否则黑字糊在黑背景里看不见。
+            let backdrop_is_dark = backdrop.as_ref().map(|b| b.luma < 128).unwrap_or(false);
+            plain_palette = paint::plain_scheme(scheme, backdrop_is_dark);
             &plain_palette
         } else {
             scheme
@@ -1090,15 +1287,16 @@ impl Window {
                             to,
                             target: selected_now,
                             start: std::time::Instant::now(),
+                            last: std::time::Instant::now(),
+                            frames: 0,
                         });
-                        unsafe {
-                            timeBeginPeriod(1);
-                        }
-                        let timer = SetTimer(Some(self.hwnd.get()), ANIM_TIMER_ID, ANIM_TICK_MS, None);
+                        timeBeginPeriod(1);
+                        // 自排程：画完这一帧再投下一帧，不依赖 WM_TIMER 是否被派发。
+                        post_anim_frame(self.hwnd.get());
                         crate::diagnostics::record(format_args!(
-                            "动画计时器 armed id={timer} hwnd={:?} 线程={:?}（间隔 {ANIM_TICK_MS}ms）",
+                            "高亮动画启动 hwnd={:?}（{:.0}ms / {ANIM_FRAME_MS}ms 一帧）",
                             self.hwnd.get().0,
-                            std::thread::current().id()
+                            ANIM_DURATION * 1000.0
                         ));
                     }
                 }
@@ -1112,15 +1310,18 @@ impl Window {
                         if t >= 1.0 {
                             None
                         } else {
-                            // 缓出：1 - (1-t)^3 近似 cubic-bezier(.22,.61,.36,1)
-                            let eased = 1.0 - (1.0 - t).powi(3);
+                            // 与 HTML 预览同一条 CSS 缓动曲线（cubic-bezier(.22,.61,.36,1)）
+                            let eased = SLIDE_EASE.ease(t);
                             let lerp = |x: f32, y: f32| x + (y - x) * eased;
+                            // **照 HTML/CSS 的语义**：`.hilite` 过渡的是 left 与 width，
+                            // 等于四条边各自插值 —— 换到更宽/更窄的候选时框跟着伸缩。
+                            // 2026-11-01 18:4x 用户：「宽度没有变化，和 html 版不一样」；
+                            // 之前为了治"边滑边压扁"把宽高钉成目标值，钉过头了。
                             let left = lerp(a.from.left, a.to.left);
                             let top = lerp(a.from.top, a.to.top);
-                            Some((
-                                Rect::new(left, top, left + a.to.width(), top + a.to.height()),
-                                a.target,
-                            ))
+                            let right = lerp(a.from.right, a.to.right);
+                            let bottom = lerp(a.from.bottom, a.to.bottom);
+                            Some((Rect::new(left, top, right, bottom), a.target))
                         }
                     }
                     None => None,
@@ -1149,13 +1350,20 @@ impl Window {
                     Some(Hit::Candidate(i)) => Some(*i),
                     _ => None,
                 };
-                if content.snapshot.mode_indicator.is_some() && content.snapshot.items.is_empty() {
-                    draw_mode_indicator(
-                        &painter,
-                        &content.layout,
-                        &graphics.indicator,
-                        content.snapshot.ascii_mode.unwrap_or(false),
-                    );
+                if content.snapshot.mode_indicator.is_some() {
+                    let ascii = content.snapshot.ascii_mode.unwrap_or(false);
+                    if content.snapshot.items.is_empty() {
+                        draw_mode_indicator(
+                            &painter,
+                            &content.layout,
+                            &graphics.indicator,
+                            ascii,
+                        );
+                    } else {
+                        // 组字中切中英（打一半拼音按 Shift）：候选窗不会消失，
+                        // 所以在预编辑文字后面挂一个小徽标「中 / 英」。
+                        draw_mode_badge(&painter, &content.layout, &graphics.indicator, ascii);
+                    }
                 } else {
                     let empty = empty_context(&content.snapshot);
                     painter
@@ -1343,6 +1551,68 @@ fn reposition(
     Position { x, y, sticky }
 }
 
+/// 组字中的中/英提示：预编辑文字后面一个**小圆角徽标**（「中」/「英」）。
+///
+/// 为什么不复用 [`draw_mode_indicator`]：那个是"候选窗只剩一个图标"的整窗模式，
+/// 组字时候选窗里还有候选，只能用一小块地方表达。
+fn draw_mode_badge(
+    painter: &Painter<'_>,
+    layout: &Layout,
+    format: &IDWriteTextFormat,
+    ascii: bool,
+) {
+    // 参考高度：有预编辑行就用预编辑行高，否则用候选行高。
+    let row = if !layout.preedit.is_null() {
+        layout.preedit
+    } else if let Some(first) = layout.rows.first() {
+        first.rect
+    } else {
+        layout.content
+    };
+    let pad = painter.m.hilite_padding_y.max(2.0);
+    let size = (row.height() - pad * 0.5).max(12.0);
+    let width = size * 1.35;
+    // 位置：紧跟在预编辑文字后面；靠到面板右边界就往回收。
+    let gap = size * 0.35;
+    let right = (row.right + gap + width).min(layout.content.right - pad);
+    let left = (right - width).max(layout.content.left + pad);
+    let top = row.top + (row.height() - size) * 0.5;
+    let rect = Rect::new(left, top, right, top + size);
+    // 底：主题底色压 75% 不透明，保证在任何背景上都看得清；圆角取小框圆角。
+    let back = (0xC0u32 << 24) | (painter.scheme.back_color & 0x00FF_FFFF);
+    painter.highlight_rect(
+        &rect,
+        painter.m.round_corner.min(size * 0.5),
+        painter.m.border,
+        back,
+        0,
+        painter.scheme.border_color,
+        &layout::RoundInfo::default(),
+    );
+    let text = if ascii { "英" } else { "中" };
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    unsafe {
+        if let Ok(text_layout) = painter
+            .write
+            .CreateTextLayout(&wide, format, rect.width(), rect.height())
+        {
+            let _ = text_layout.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            let _ = text_layout.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            let _ = painter.brush.SetColor(&d2d_color(painter.scheme.text_color));
+            painter.target.DrawTextLayout(
+                windows_numerics::Vector2 {
+                    x: rect.left,
+                    y: rect.top,
+                },
+                &text_layout,
+                painter.brush,
+                D2D1_DRAW_TEXT_OPTIONS_CLIP,
+            );
+        }
+    }
+    crate::diagnostics::record(format_args!("模式提示: 组字中徽标 {}", if ascii { "英" } else { "中" }));
+}
+
 /// 模式提示（官方没有这个窗口：它用状态图标；我们按同一套配色画一个小提示）。
 fn draw_mode_indicator(
     painter: &Painter<'_>,
@@ -1518,28 +1788,42 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                 WM_NCHITTEST => return LRESULT(1), // HTCLIENT
                 // 动画定时器：到点**直接画**一帧（不走 invalidate → WM_PAINT，
                 // 那条路要等消息队列空下来，实测就是"滑动一顿一顿"的来源）。
-                0x0113 if wp.0 == ANIM_TIMER_ID => {
-                    let done = match window.anim.borrow().as_ref() {
-                        Some(a) => a.start.elapsed().as_secs_f32() >= ANIM_DURATION,
-                        None => true,
+                // 自排程的一帧：补齐帧间等待 → 画 → 还没到点就再投一帧。
+                ANIM_MSG => {
+                    let (running, wait_ms) = {
+                        let mut slot = window.anim.borrow_mut();
+                        match slot.as_mut() {
+                            Some(a) => {
+                                if a.start.elapsed().as_secs_f32() >= ANIM_DURATION {
+                                    (false, 0u32)
+                                } else {
+                                    let next = a.last
+                                        + std::time::Duration::from_millis(ANIM_FRAME_MS as u64);
+                                    let now = std::time::Instant::now();
+                                    let wait = if next > now {
+                                        ((next - now).as_millis() as u32).min(ANIM_FRAME_MS)
+                                    } else {
+                                        0
+                                    };
+                                    a.last = now;
+                                    a.frames += 1;
+                                    (true, wait)
+                                }
+                            }
+                            None => (false, 0),
+                        }
                     };
-                    if window.anim.borrow().is_none() {
-                        crate::diagnostics::record(format_args!(
-                            "计时器空转：没有动画状态（id={}）", wp.0
-                        ));
+                    if wait_ms > 0 {
+                        Sleep(wait_ms);
                     }
                     let t_now = window.anim.borrow().as_ref().map(|a| {
                         (a.start.elapsed().as_secs_f32() / ANIM_DURATION).clamp(0.0, 1.0)
                     });
-                    if done {
-                        *window.anim.borrow_mut() = None;
-                        let _ = KillTimer(Some(hwnd), ANIM_TIMER_ID);
-                        unsafe {
-                            timeEndPeriod(1);
-                        }
-                    }
                     if let Some(t) = t_now {
-                        crate::diagnostics::record(format_args!("动画帧 t={t:.2}"));
+                        crate::diagnostics::record(format_args!(
+                            "动画帧 t={t:.2}（第 {} 帧）",
+                            window.anim.borrow().as_ref().map(|a| a.frames).unwrap_or(0)
+                        ));
                     }
                     let started = std::time::Instant::now();
                     if let Err(error) = window.paint() {
@@ -1551,11 +1835,51 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                             "动画帧耗时 {cost:.1}ms（超过 8ms，滑动会顿）"
                         ));
                     }
+                    if running {
+                        let over = window
+                            .anim
+                            .borrow()
+                            .as_ref()
+                            .map(|a| a.start.elapsed().as_secs_f32() >= ANIM_DURATION);
+                        match over {
+                            Some(true) => {
+                                let frames =
+                                    window.anim.borrow().as_ref().map(|a| a.frames).unwrap_or(0);
+                                *window.anim.borrow_mut() = None;
+                                timeEndPeriod(1);
+                                crate::diagnostics::record(format_args!(
+                                    "动画结束：共 {frames} 帧"
+                                ));
+                            }
+                            Some(false) => post_anim_frame(hwnd),
+                            None => {}
+                        }
+                    }
+                    return LRESULT(0);
+                }
+                // 设备丢失重试 / 自动恢复 / 自动隐藏的窗口计时器。
+                //
+                // 2026-11-01：这三条原来排在 `0x0113 =>` 兜底分支**后面**，是死代码 ——
+                // 任何 WM_TIMER 都会先被兜底分支吃掉。挪到前面才会真的被执行。
+                0x0113 if wp.0 == RETRY_TIMER => {
+                    let _ = KillTimer(Some(hwnd), RETRY_TIMER);
+                    window.recovery.borrow_mut().waiting = false;
+                    window.invalidate();
+                    return LRESULT(0);
+                }
+                0x0113 if wp.0 == AUTOREV_TIMER => {
+                    let _ = KillTimer(Some(hwnd), AUTOREV_TIMER);
+                    window.invalidate();
+                    return LRESULT(0);
+                }
+                0x0113 if wp.0 == AUTOHIDE_TIMER => {
+                    let _ = KillTimer(Some(hwnd), AUTOHIDE_TIMER);
+                    window.hide();
                     return LRESULT(0);
                 }
                 0x0113 => {
                     crate::diagnostics::record(format_args!(
-                        "WM_TIMER 未知 id={} 线程={:?}（期望 {ANIM_TIMER_ID}）",
+                        "WM_TIMER 未知 id={} 线程={:?}",
                         wp.0,
                         std::thread::current().id()
                     ));
@@ -1582,7 +1906,9 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                     window.invalidate();
                     return LRESULT(0);
                 }
-                // 移动/尺寸变化后重抓背景：候选窗自己动时，模糊背景跟着更新（用户 11:5x）
+                // 移动/尺寸变化后重抓背景（用户 11:5x 要的"跟着走"）。
+                // 窗口**上屏之后也能抓**：`capture_backdrop` 会先把本窗口从画面里排除
+                // （WDA_EXCLUDEFROMCAPTURE），抓到的只有背景 —— 17:4x「只识别背景」。
                 (0x0003 | 0x0047) => { // WM_MOVE | WM_WINDOWPOSCHANGED（绑定里没有这两个常量）
                     if window.glass_self {
                         window.capture_backdrop();
@@ -1598,22 +1924,6 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                         window.fail(e);
                     }
                     window.invalidate();
-                    return LRESULT(0);
-                }
-                WM_TIMER if wp.0 == RETRY_TIMER => {
-                    let _ = KillTimer(Some(hwnd), RETRY_TIMER);
-                    window.recovery.borrow_mut().waiting = false;
-                    window.invalidate();
-                    return LRESULT(0);
-                }
-                WM_TIMER if wp.0 == AUTOREV_TIMER => {
-                    let _ = KillTimer(Some(hwnd), AUTOREV_TIMER);
-                    window.invalidate();
-                    return LRESULT(0);
-                }
-                WM_TIMER if wp.0 == AUTOHIDE_TIMER => {
-                    let _ = KillTimer(Some(hwnd), AUTOHIDE_TIMER);
-                    window.hide();
                     return LRESULT(0);
                 }
                 WM_MOUSEMOVE => {

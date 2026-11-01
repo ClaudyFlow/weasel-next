@@ -20,3 +20,4 @@ Rime-Next/schema/yuhao_pinyin/*.yuhao-folder-variant
 
 # 误放进输入法音效目录的音乐文件（7MB，无任何配置引用；音效目录只放按键音）
 Rime-Next/sound/Smile. DK - Butterfly.mp3
+dist/

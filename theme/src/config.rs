@@ -827,3 +827,18 @@ mod tests {
         assert!(!m.inline_preedit);
     }
 }
+
+/// 构造度量；`plain = true`（纯白/毛玻璃档）时把"给投影留的窗口边"收掉。
+///
+/// 那圈边（[`Metrics::offset`]，≈ shadow_radius×2 + border×2 ≈ 8px）是给投影落脚用的。
+/// plain 档不画投影，却仍然在面板外留一圈**没糊的桌面**：面板里是糊过的、外面那圈是锐的，
+/// 界线上就是一道"黑框"（用户 2026-11-01 17:5x：「为什么还是有黑框」）。
+pub fn metrics(style: &UIStyle, dpi: f32, plain: bool) -> Metrics {
+    let mut metrics = Metrics::new(style, dpi);
+    if plain {
+        metrics.shadow_radius = 0.0;
+        metrics.shadow_offset_x = 0.0;
+        metrics.shadow_offset_y = 0.0;
+    }
+    metrics
+}

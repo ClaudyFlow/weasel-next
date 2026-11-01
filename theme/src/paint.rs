@@ -38,26 +38,59 @@ pub fn material() -> String {
 /// 配色里的 `steam` 是**深底浅字**：面板一换成纯白，编码/候选/注释全变成
 /// "白底白字"，肉眼就是"看不见"（2026-11-01 用户截图：只有高亮项看得见）。
 /// 所以只在 plain 档套这套 HTML 颜色，其它材质仍然用配色表里的值。
-pub fn plain_scheme(base: &ColorScheme) -> ColorScheme {
-    /// 正文 / 编码：HTML 的 `#1b1d22`（用户 16:1x：字体要黑的）。
+pub fn plain_scheme(base: &ColorScheme, backdrop_is_dark: bool) -> ColorScheme {
+    /// 背景与配色"对不上"时的兜底深色字（HTML 的 `#1b1d22`）。
     const INK: u32 = 0xFF_1B_1D_22;
-    /// 注释：HTML 的 `#6b7280`。
+    /// 兜底浅色字。
+    const INK_LIGHT: u32 = 0xFF_F2_F3_F5;
     const MUTED: u32 = 0xFF_6B_72_80;
-    /// 翻页箭头：HTML 的 `#9aa4b2`。
-    const PAGER: u32 = 0xFF_9A_A4_B2;
+    const MUTED_LIGHT: u32 = 0xFF_C9_CE_D6;
+    const PAGER_LIGHT: u32 = 0xFF_9A_A4_B2;
     /// 高亮框底：HTML `.hilite` 的 `#3b4a63`；字用白色。
     const HILITE_BG: u32 = 0xFF_3B_4A_63;
 
+    fn luma(argb: u32) -> f32 {
+        let r = ((argb >> 16) & 0xff) as f32;
+        let g = ((argb >> 8) & 0xff) as f32;
+        let b = (argb & 0xff) as f32;
+        0.299 * r + 0.587 * g + 0.114 * b
+    }
+    // **识别 weasel 的 theme**（用户 18:2x）：文字用主题自己配色里的颜色，
+    // 只有"背景和配色明暗对不上"时才翻 —— 例如 steam（深底浅字）压在白网页上，
+    // 浅字就看不见了，这时才换成深色字。绝不无条件强制白/黑。
+    let scheme_dark = luma(base.back_color) < 128.0;
+    let mismatch = scheme_dark != backdrop_is_dark;
+    let (ink, muted, pager) = if mismatch {
+        if backdrop_is_dark {
+            (INK_LIGHT, MUTED_LIGHT, PAGER_LIGHT)
+        } else {
+            (INK, MUTED, PAGER_LIGHT)
+        }
+    } else {
+        (base.text_color, base.comment_text_color, base.prevpage_color)
+    };
     let mut scheme = base.clone();
     scheme.back_color = 0x80FF_FFFF;
     // HTML 的面板没有描边、没有投影；边框和阴影全透明（透明就不画）。
     scheme.border_color = 0;
     scheme.shadow_color = 0;
-    scheme.text_color = INK;
-    scheme.hilited_text_color = INK; // 组字中的编码也走这里，不能用深底配色的浅色
-    scheme.candidate_text_color = INK;
-    scheme.label_color = INK;
-    scheme.comment_text_color = MUTED;
+    // 各字段一律用**主题自己**的颜色（steam：编码橙、候选白、注释灰…）；
+    // 只有背景与配色明暗对不上时（`mismatch`）才换成反差字色。
+    let pick = |c: u32| -> u32 {
+        if !mismatch {
+            return c;
+        }
+        if luma(c) < 128.0 {
+            INK
+        } else {
+            INK_LIGHT
+        }
+    };
+    scheme.text_color = pick(base.text_color);
+    scheme.hilited_text_color = pick(base.hilited_text_color);
+    scheme.candidate_text_color = pick(base.candidate_text_color);
+    scheme.label_color = pick(base.label_color);
+    scheme.comment_text_color = if mismatch { muted } else { base.comment_text_color };
     scheme.candidate_back_color = 0;
     scheme.candidate_border_color = 0;
     scheme.candidate_shadow_color = 0;
@@ -67,8 +100,8 @@ pub fn plain_scheme(base: &ColorScheme) -> ColorScheme {
     scheme.hilited_comment_text_color = 0xFF_FF_FF_FF;
     scheme.hilited_candidate_border_color = 0;
     scheme.hilited_candidate_shadow_color = 0;
-    scheme.prevpage_color = PAGER;
-    scheme.nextpage_color = PAGER;
+    scheme.prevpage_color = pager;
+    scheme.nextpage_color = pager;
     scheme
 }
 
@@ -111,6 +144,8 @@ pub struct BackdropCache {
     pub width: i32,
     pub height: i32,
     pub bitmap: ID2D1Bitmap,
+    /// 抓到的背景平均亮度（0..255）。面板不再铺白色之后，用它决定文字用深色还是浅色。
+    pub luma: u32,
 }
 
 /// 模式提示图标的文件位置：`<程序文件夹>\Rime-Next\icon\{zh,en}-{dark,light}.ico`。
@@ -504,8 +539,26 @@ impl Painter<'_> {
                 let material = material();
                 let plain = material == "plain";
                 let back_color = match material.as_str() {
-                    // 纯白框：**50% 白**（`0x80` = 128/255），背景透出来一点，但不要玻璃/模糊
-                    "plain" => 0x80FF_FFFF,
+                    // plain：**不要白色**（用户 18:1x「不要白色了，直接透明」）：
+                    // 面板底 = 抓屏 + 高斯模糊那一张，白色 tint 设成全透明。
+                    // 抓不到背景（没抓屏权限/老系统）时才退回 50% 白，否则面板会整个消失。
+                    "plain" => {
+                        // 两档：
+                        //  • 默认（`--features` 不带 acrylic）= **glass**：面板全透明，
+                        //    底下只剩抓屏 + 高斯模糊那一张（用户 18:1x「不要白色了，直接透明」）。
+                        //  • `--features acrylic` = **亚克力**：模糊底上再铺 50% 白。
+                        // 抓不到背景时一律退回 50% 白，否则窗体整个消失。
+                        const TINT: u32 = if cfg!(feature = "acrylic") {
+                            0x80FF_FFFF
+                        } else {
+                            0x0000_0000
+                        };
+                        if self.backdrop.is_some() {
+                            TINT
+                        } else {
+                            0x80FF_FFFF
+                        }
+                    }
                     // 亚克力：乳白半透（不模糊，比玻璃"实"）
                     "acrylic" => {
                         let base = lighten_color(self.scheme.back_color, 0.22);
@@ -526,7 +579,11 @@ impl Painter<'_> {
                 // 玻璃态：面板画满**整个窗口矩形**，而不是内缩 `offset` 的内框。
                 // 否则窗口比面板大一圈，那圈被 DWM 亚克力填满 ⇒ 边框外面多出一层灰（用户 13:4x 报的"还有一层"）。
                 // 代价：投影没有落脚处（`offset` 那圈就是给投影的），玻璃态干脆不要投影。
-                let back_rect = if self.glass && !plain {
+                // plain / 玻璃档：面板画满**整个窗口矩形**。
+                // 以前 plain 用 `layout.content`（比窗口小一圈 offset），那一圈没东西可画
+                // ⇒ 露出**没糊的桌面**，跟面板里糊过的背景在边界上形成一道"黑框"
+                // （用户 17:5x）。`Metrics` 里 plain 已经把投影留边收成 0，这里画满即可。
+                let back_rect = if plain || self.glass {
                     Rect::new(
                         0.0,
                         0.0,
@@ -536,6 +593,12 @@ impl Painter<'_> {
                 } else {
                     layout.content
                 };
+                // plain 档：把**抓屏 + 高斯模糊**的位图铺在面板底下，再叠 50% 白 —— 毛玻璃。
+                // 2026-11-01 17:0x 之前这张位图抓了却从没被画过（`draw_backdrop` 是死代码），
+                // 所以面板底下透出来的是**没糊的桌面**（用户："做高斯模糊"）。
+                if plain {
+                    self.draw_backdrop(&back_rect, self.backdrop);
+                }
                 if self.glass_self && !plain {
                     self.draw_hand_backdrop(&back_rect, style.round_corner_ex);
                 }
