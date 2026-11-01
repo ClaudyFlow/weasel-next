@@ -355,8 +355,19 @@ struct App {
 const ANIM_DURATION: f32 = 0.10;
 /// 动画定时器 id。
 const ANIM_TIMER_ID: usize = 0x5757;
-/// 动画定时器间隔（毫秒）。`WM_TIMER` 的最小粒度约 10ms，100ms 的滑动因此有 ~10 帧。
-const ANIM_TICK_MS: u32 = 10;
+/// 动画定时器间隔（毫秒）。
+///
+/// `WM_TIMER` 的实际粒度取决于系统计时器精度：默认 15.6ms，动画只有 ~6 帧且间隔不匀。
+/// 动画期间用 `timeBeginPeriod(1)` 把精度提到 1ms，并 8ms 一跳 ⇒ 100ms 约 12 帧，
+/// 这是 CSS 在 60Hz 下（6 帧）的两倍，足够顺。
+const ANIM_TICK_MS: u32 = 8;
+
+/// 系统计时器精度（`winmm`）。只在动画期间抬到 1ms，结束立刻还回去。
+#[link(name = "winmm")]
+unsafe extern "system" {
+    fn timeBeginPeriod(period: u32) -> u32;
+    fn timeEndPeriod(period: u32) -> u32;
+}
 
 /// 一段高亮滑动（照 HTML 的 CSS transition 语义）。
 ///
@@ -998,6 +1009,12 @@ impl Window {
         self.recovery.borrow_mut().waiting = false;
         unsafe {
             let _ = KillTimer(Some(self.hwnd.get()), RETRY_TIMER);
+            if self.anim.borrow_mut().take().is_some() {
+                let _ = KillTimer(Some(self.hwnd.get()), ANIM_TIMER_ID);
+                unsafe {
+                    timeEndPeriod(1);
+                }
+            }
             let _ = ShowWindow(self.hwnd.get(), SW_HIDE);
         }
     }
@@ -1073,6 +1090,9 @@ impl Window {
                             target: selected_now,
                             start: std::time::Instant::now(),
                         });
+                        unsafe {
+                            timeBeginPeriod(1);
+                        }
                         let _ = SetTimer(Some(self.hwnd.get()), ANIM_TIMER_ID, ANIM_TICK_MS, None);
                     }
                 }
@@ -1497,9 +1517,18 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                         Some(a) => a.start.elapsed().as_secs_f32() >= ANIM_DURATION,
                         None => true,
                     };
+                    let t_now = window.anim.borrow().as_ref().map(|a| {
+                        (a.start.elapsed().as_secs_f32() / ANIM_DURATION).clamp(0.0, 1.0)
+                    });
                     if done {
                         *window.anim.borrow_mut() = None;
                         let _ = KillTimer(Some(hwnd), ANIM_TIMER_ID);
+                        unsafe {
+                            timeEndPeriod(1);
+                        }
+                    }
+                    if let Some(t) = t_now {
+                        crate::diagnostics::record(format_args!("动画帧 t={t:.2}"));
                     }
                     let started = std::time::Instant::now();
                     if let Err(error) = window.paint() {
