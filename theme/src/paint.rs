@@ -19,6 +19,59 @@ use crate::theme_api::CandidateView;
 use weasel_style::ColorScheme;
 use windows_core::Interface;
 
+/// 材质档位：`%APPDATA%\Rime-Next\theme\material.txt` → `WEASEL_MATERIAL` → 默认 glass。
+///
+/// 设置界面把用户选的档位写进 material.txt；文件不存在时才看环境变量。
+pub fn material() -> String {
+    std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .map(|base| base.join("Rime-Next").join("theme").join("material.txt"))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+        .or_else(|| std::env::var("WEASEL_MATERIAL").ok())
+        .unwrap_or_default()
+}
+
+/// `plain` 档（纯白面板）的浅底配色 —— 逐项照抄 `C:\Code\_shots\cand_preview.html`。
+///
+/// 配色里的 `steam` 是**深底浅字**：面板一换成纯白，编码/候选/注释全变成
+/// "白底白字"，肉眼就是"看不见"（2026-11-01 用户截图：只有高亮项看得见）。
+/// 所以只在 plain 档套这套 HTML 颜色，其它材质仍然用配色表里的值。
+pub fn plain_scheme(base: &ColorScheme) -> ColorScheme {
+    /// 正文 / 编码：HTML 的 `#1b1d22`（用户 16:1x：字体要黑的）。
+    const INK: u32 = 0xFF_1B_1D_22;
+    /// 注释：HTML 的 `#6b7280`。
+    const MUTED: u32 = 0xFF_6B_72_80;
+    /// 翻页箭头：HTML 的 `#9aa4b2`。
+    const PAGER: u32 = 0xFF_9A_A4_B2;
+    /// 高亮框底：HTML `.hilite` 的 `#3b4a63`；字用白色。
+    const HILITE_BG: u32 = 0xFF_3B_4A_63;
+
+    let mut scheme = base.clone();
+    scheme.back_color = 0xFF_FF_FF_FF;
+    // HTML 的面板没有描边、没有投影；边框和阴影全透明（透明就不画）。
+    scheme.border_color = 0;
+    scheme.shadow_color = 0;
+    scheme.text_color = INK;
+    scheme.hilited_text_color = INK; // 组字中的编码也走这里，不能用深底配色的浅色
+    scheme.candidate_text_color = INK;
+    scheme.label_color = INK;
+    scheme.comment_text_color = MUTED;
+    scheme.candidate_back_color = 0;
+    scheme.candidate_border_color = 0;
+    scheme.candidate_shadow_color = 0;
+    scheme.hilited_candidate_back_color = HILITE_BG;
+    scheme.hilited_candidate_text_color = 0xFF_FF_FF_FF;
+    scheme.hilited_label_color = 0xFF_FF_FF_FF;
+    scheme.hilited_comment_text_color = 0xFF_FF_FF_FF;
+    scheme.hilited_candidate_border_color = 0;
+    scheme.hilited_candidate_shadow_color = 0;
+    scheme.prevpage_color = PAGER;
+    scheme.nextpage_color = PAGER;
+    scheme
+}
+
 /// 主题要用的四个 DirectWrite 文本格式（官方 `D2D::pPreeditFormat` / `pTextFormat` /
 /// `pLabelFormat` / `pCommentFormat`）。
 pub struct Formats {
@@ -447,14 +500,7 @@ impl Painter<'_> {
                 // `WEASEL_MATERIAL`（默认 glass，即自绘模糊那一档）。
                 // 材质由设置界面写进 `%APPDATA%\Rime-Next	heme\material.txt`；
                 // 文件不存在时退回环境变量，再退回 glass（用户 21:0x：要在设置里切）。
-                let material = std::env::var_os("APPDATA")
-                    .map(std::path::PathBuf::from)
-                    .map(|base| base.join("Rime-Next").join("theme").join("material.txt"))
-                    .and_then(|path| std::fs::read_to_string(path).ok())
-                    .map(|text| text.trim().to_string())
-                    .filter(|text| !text.is_empty())
-                    .or_else(|| std::env::var("WEASEL_MATERIAL").ok())
-                    .unwrap_or_default();
+                let material = material();
                 let plain = material == "plain";
                 let back_color = match material.as_str() {
                     // 纯白框（重画里程碑 1）：不透明白，无玻璃无材质

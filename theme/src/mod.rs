@@ -1002,6 +1002,15 @@ impl Window {
         };
         let target = presenter.render_target();
         let scheme = &*scheme;
+        // plain 档（纯白面板）要用浅底配色：steam 是深底浅字，白底上编码/候选/注释
+        // 全是白字 ⇒ 看不见（2026-11-01 用户截图）。其它材质保持配色表原样。
+        let plain_palette;
+        let scheme = if paint::material() == "plain" {
+            plain_palette = paint::plain_scheme(scheme);
+            &plain_palette
+        } else {
+            scheme
+        };
         let metrics = &*metrics;
         unsafe {
             let brush = target.CreateSolidColorBrush(&d2d_color(scheme.back_color), None)?;
