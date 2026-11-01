@@ -927,13 +927,14 @@ impl Painter<'_> {
             }
             let a = layout.highlight_rect(self.m, from);
             let b = layout.highlight_rect(self.m, to);
+            // HTML 的 `.hilite` 只过渡 `left`/`top`，宽高**瞬间定死**
+            //（原文注释：只滑位置；宽高瞬间定死 —— 否则动画中"小窗变大小"）。
+            // 这里照抄：位置插值、宽高取目标框。四边一起插值会把框在中途压扁/拉长，
+            // 还会盖到邻居候选的字上（2026-11-01 用户截图里"框卡在 2 和 3 之间"）。
             let lerp = |x: f32, y: f32| x + (y - x) * t;
-            Some(Rect::new(
-                lerp(a.left, b.left),
-                lerp(a.top, b.top),
-                lerp(a.right, b.right),
-                lerp(a.bottom, b.bottom),
-            ))
+            let left = lerp(a.left, b.left);
+            let top = lerp(a.top, b.top);
+            Some(Rect::new(left, top, left + b.width(), top + b.height()))
         });
         if let Some(rect) = anim_rect {
             self.highlight_rect(
