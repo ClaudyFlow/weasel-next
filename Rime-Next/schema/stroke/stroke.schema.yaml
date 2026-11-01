@@ -1,12 +1,11 @@
 # Rime Schema
 # encode: utf-8
 # newline: lf
-
-
+---
 schema:
   id: stroke
-  name: "五筆畫"
-  version: "0.5"
+  name: 五筆畫
+  version: 2026.10.28
   author:
     - 四季的風
     - 雪齋
@@ -14,20 +13,20 @@ schema:
   description: |
     五筆畫
     h,s,p,n,z 代表橫、豎、撇、捺、折
-  dependencies:
-    - luna_pinyin
-
-switches:
+  dependency:
+    - pinyin.luna
+###
+switch:
   - name: ascii_mode
+    state: [ 中文, 西文 ]
     reset: 0
-    states: [ 中文, 西文 ]
   - name: full_shape
-    states: [ 半角, 全角 ]
+    state: [ 半角, 全角 ]
   - name: ascii_punct
-    states: [ 。，, ．， ]
-
+    state: [ 。，, ．， ]
+###
 engine:
-  processors:
+  processor:
     - ascii_composer
     - recognizer
     - key_binder
@@ -36,26 +35,26 @@ engine:
     - selector
     - navigator
     - express_editor
-  segmentors:
+  segmentor:
     - ascii_segmentor
     - matcher
     - abc_segmentor
     - punct_segmentor
     - fallback_segmentor
-  translators:
+  translator:
     - punct_translator
     - reverse_lookup_translator
     - table_translator
-
+###
 speller:
-  alphabet: "abcdefghijklmnopqrstuvwxyz"
+  alphabet: abcdefghijklmnopqrstuvwxyz
   delimiter: " '"
-
-menu:
-  page_size: 9
-
+###
+# 形码（笔画）不做繁简双变体：字根不分简繁，一本词库足够；
+# 也不挂语言模型 `model:` —— octagram 是给拼音串组词用的，喂笔画串没有意义，
+# 跟 wubi86 / cangjie5 一样走动态规划。
 translator:
-  dictionary: stroke
+  dict: stroke
   preedit_format:
 #   - xlit/hspnz/㇐㇑㇒㇏㇠/   # 中日韓筆畫（橫豎撇捺折）
     - xlit/hspnz/⼀⼁⼃⼂⼄/   # 康熙部首（橫豎撇點折）
@@ -63,13 +62,16 @@ translator:
     - xform/~//
 #   - xlit/hspnz/㇐㇑㇒㇏㇠/   # 中日韓筆畫（橫豎撇捺折）
     - xlit/hspnz/⼀⼁⼃⼂⼄/   # 康熙部首（橫豎撇點折）
-
+###
+menu:
+  page_size: 9
+###
 abc_segmentor:
   extra_tags:
     - reverse_lookup
-
+###
 reverse_lookup:
-  dictionary: luna_pinyin
+  schema: pinyin.luna
   prefix: "`"
   suffix: "'"
   tips: 〔拼音〕
@@ -80,10 +82,10 @@ reverse_lookup:
   comment_format:
 #   - xlit/hspnz/㇐㇑㇒㇏㇠/   # 中日韓筆畫（橫豎撇捺折）
     - xlit/hspnz/⼀⼁⼃⼂⼄/   # 康熙部首（橫豎撇點折）
-
+###
 punctuator:
-  import_preset: default
-
+  import_preset: symbols
+###
 key_binder:
   import_preset: default
   bindings:
@@ -108,8 +110,9 @@ key_binder:
     - { when: has_menu, accept: "KP_8", send: Select }
     - { when: has_menu, accept: "KP_9", send: Select }
     - { when: has_menu, accept: "KP_0", send: Select }
-
+###
 recognizer:
   import_preset: default
   patterns:
     reverse_lookup: "`[a-z]*'?$"
+...

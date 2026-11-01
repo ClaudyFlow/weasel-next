@@ -17,14 +17,17 @@
 ## 用户文件夹分类（`%APPDATA%\Rime-Next\`）
 
 ```
-theme/<名字>/<名字>.theme.toml      主题        （TOML，我们自己解析，不转换）
+theme/<名字>/<名字>.theme.yaml      主题        （YAML，我们自己解析，不转换）
 schema/<名字>/<名字>.schema.yaml    方案        （部署时转成 <名字>.schema.yaml 给 librime）
-schema/<名字>/<名字>.dict.yaml      词典        （部署时转成 <名字>.dict.yaml 给 librime）
-dict/<名字>/<名字>.eassy.toml       细胞词库    （按词归并求和 → essay.txt / <名字>.txt）
+dict/<名字>/<名字>.dict.yaml        词典        （2026-10-28 起词库只在 dict/，身份是头里的 id:）
+eassy/<名字>/<名字>.eassy.yaml      细胞词库    （按词归并求和 → essay.txt / <名字>.txt）
 model/<名字>.gram                   语言模型    （直接放好，librime 原生）
 ```
 
-- 四个文件夹（`theme` / `schema` / `dict` / `model`）必须存在，程序启动时自动创建。
+- 五个文件夹（`theme` / `schema` / `dict` / `eassy` / `model`）必须存在，程序启动时自动创建。
+- `dict/` 只放词库（`*.dict.yaml`）、`schema/` 只放方案（`*.schema.yaml`）；身份一律用文件头里的
+  `id:`（`name:` 是显示名，允许中文，**不能**拿来拼文件名）。词库的目录只要求是 `dict/` +
+  id 分段的任意前缀（`dict/cangjie/5/` 合格），不必为片段再建子文件夹；方案仍严格「目录 = id 全部分段」。
 - librime **只吃 YAML/txt/gram**，所以 TOML 必须在**部署时转换**；`*.schema.yaml` / `*.dict.yaml` 本身**不能改成 TOML**。
 - essay 只影响**打分/调序**（`Grammar::Evaluate`），**不产生候选**；`vocabulary` 默认名就是 `essay`。
 - 支持通过 **plum（東風破）** 下载：包 = git 仓库 + `recipe.yaml`，安装动作把文件复制到上面这些子目录。
@@ -74,9 +77,18 @@ model/<名字>.gram                   语言模型    （直接放好，librime 
   ⚠️ **共享模式由「先打开的一方」决定**：写侧给 `0` 时，读侧请求 `FILE_SHARE_READ|WRITE` 也一样
   拿 `ERROR_SHARING_VIOLATION`（22:0x 的检查点写过反向结论，已实测推翻）。
   `FILE_SHARE_READ` 同时满足两件事：读得开、`DeleteFile` 仍然失败（删要 `FILE_SHARE_DELETE`）。
-* 格式 v2（小端）：头 16B `"WNST"|version=2|天数|字数`；天 28B `date|keys|chars|active_ms`；
-  字 12B `codepoint|count`（全量前 200 个字）。v1（20B、无时长/字表）仍能读，落盘自动升级。
-* 旧 `stats\YYYY-MM-DD.toml`（**复数**目录）只作**只读兜底**：二进制里没有的日期才用，
+* 格式 v3（小端，2026-10-26）：头 16B `"WNST"|version=3|天数|字数`；
+  天 36B `date|keys|chars|active_ms|effective_keys|commits`；字 12B `codepoint|count`（全量前 200 个字）；
+  尾部 1156B = 256 个虚拟键计数 + 33 档码长直方图（**累计**，不按天分）。
+  * `effective_keys`（Σ编辑量 = Σ按键 − 2×退格，负值收 0）与 `commits`（当天上屏轮数）是 v3 新增的
+    **当日**数据，专供「今日键准」「今日平均词长」两张卡；灰色历史值仍由尾部直方图算（累计）。
+  * 读侧认 **1/2/3**：v2（28B 天记录）读出来 `effective_keys` 按"全有效"补齐、`commits` = 0；
+    v1（20B、无时长/字表）照样读。落盘一律写 v3。
+  * ⚠️ 写侧遇到**不认识的版本（>3）就拒绝落盘**（计数留在内存下次重试），绝不按空文件覆盖：
+    旧版 TIP 把未知版本当空文件，会把 v3 记录直接清空。
+  * ⚠️ 换 TIP 后**旧进程里的旧实例还在**（它们只会写 v2，且同一文件只能被"先拿到句柄"的进程写）。
+    所以部署完 TIP 尽快重启一次（重启最干净），别让旧实例在 v3 文件上落盘。
+* 旧 `stats\YYYY-MM-DD.yaml`（**复数**目录）只作**只读兜底**：二进制里没有的日期才用，
   不迁移、不删除用户文件。
 * 为什么不直接读统计插件的库：插件的数据在 librime 进程里（LevelDB / `input_stat_*.lua`），
   目前也还没有数据；`/stat` 是界面侧的"个人生涯"，先用 TIP 这条**绝不阻塞按键**的链路喂。
@@ -95,7 +107,7 @@ model/<名字>.gram                   语言模型    （直接放好，librime 
 ```
 asset\                     仓库里（出厂默认与程序资源）
   Rime-Next\               ← 出厂默认配置（编译时整个搬到程序文件夹）
-      default.eassy.toml   ← 原 essay.txt（细胞词库/语言模型词表，TOML 格式）
+      default.eassy.yaml   ← 原 essay.txt（细胞词库/语言模型词表，YAML 格式）
       …（schema / dict / theme / model 的默认内容）
   icon\                    ← 程序图标（11 个 .ico，各组件共用 weasel.ico）
   sound\                   ← 键声/上屏声（typewriter-key.wav / typewriter-bell.wav）
@@ -108,7 +120,7 @@ asset\                     仓库里（出厂默认与程序资源）
 - 于是不必再考虑"多个配置文件夹"的问题。
 
 文件格式：
-- 细胞词库统一叫 `*.eassy.toml`（注意拼写是 **eassy**），出厂默认那份叫 **`default.eassy.toml`**；
+- 细胞词库统一叫 `*.eassy.yaml`（注意拼写是 **eassy**），出厂默认那份叫 **`default.eassy.yaml`**；
 - 多份 eassy 由部署流程按词归并（频次求和）后生成 librime 需要的 `essay.txt`（或 `<名字>.txt` + `vocabulary:`）。
 
 安装路径（首字母大写）：`C:\Program Files\Weasel-Next\`；代码目录 `C:\code\Weasel-Next\`。
@@ -118,7 +130,7 @@ asset\                         仓库里（出厂默认 + 程序资源）
   Rime-Next\                   ← ★ 出厂默认的整棵配置树（编译时整个搬到程序文件夹）
       sound\                   ← 键声 / 上屏声（typewriter-key.wav / typewriter-bell.wav）
       model\                   ← 语言模型（*.gram，如 zh-hans-t-essay-bgw.gram）
-      default.eassy.toml       ← 原 essay.txt（细胞词库词表，TOML 格式）
+      default.eassy.yaml       ← 原 essay.txt（细胞词库词表，YAML 格式）
       （历史设计，已废弃：见上）
       …（schema / dict / theme 的默认内容，均为 TOML）
   icon\                        ← 程序图标（11 个 .ico，各组件共用 weasel.ico；构建脚本要用，留在 asset 根）
@@ -130,7 +142,7 @@ asset\                         仓库里（出厂默认 + 程序资源）
 C:\Program Files\Weasel-Next\
   Weasel-Next-Server.exe · Weasel-Next-Engine.exe · Weasel-Next-Renderer.exe · Weasel-Next-Setting.exe
   weasel_tip.dll · rime.dll · libc++.dll · libglog.dll · libopencc.dll · libunwind.dll · WebView2Loader.dll
-  themes\                      ← 主题 DLL
+  theme\                       ← 主题 DLL
   Rime-Next\                   ← ★ 唯一的配置文件夹（= Rime-Next 整棵搬过来）
   7z\                          ← 以后放 7z.exe（解压）      【不急】
   aria2-next\                  ← 以后放 aria2-next.exe（下载）【不急】
@@ -178,13 +190,13 @@ C:\Program Files\Weasel-Next\
 2. 因此"插件接口 plugin.dll"只能是我们**自己的宿主**：由 Weasel-Next-Engine 加载 plugin.dll（Rust cdylib，
    导出 C ABI），plugin.dll 再去加载/托管各插件。librime 那条链上的插件不受它影响。
 3. "用户文件夹放 Rust 源码"要能**被程序编译**，需要用户机上有 Rust 工具链（重，不可行）→ 实际做法二选一：
-   (a) 用户文件夹放**编译好的插件 DLL**（plugin\<名字>\<名字>.dll + plugin.toml 元数据）；
+   (a) 用户文件夹放**编译好的插件 DLL**（plugin\<名字>\<名字>.dll + plugin.yaml 元数据）；
    (b) 放源码仅供开发/查看，真正加载的是 DLL。
    两者都需要先有 (2) 的宿主 plugin.dll。
 
 任务拆分（待做）：
   T1 在 plugin\ 下新增 core 的稳定 C ABI 面（版本号、注册表、生命周期回调）。
-  T2 新增宿主 crate（输出 plugin.dll 到程序文件夹），实现：扫描 用户目录\plugin\*\plugin.toml、
+  T2 新增宿主 crate（输出 plugin.dll 到程序文件夹），实现：扫描 用户目录\plugin\*\plugin.yaml、
      加载其中的 DLL、按 ABI 调用、做版本校验与隔离（崩溃不影响宿主）。
   T3 Weasel-Next-Engine 启动时加载 plugin.dll（可选，缺失则静默跳过）。
   T4 统计插件保持静态编进 rime.dll（librime 链约束），只在文档里说明它为何不是独立 DLL。
@@ -228,7 +240,7 @@ rime.dll  (静态, C++)  ← librime 强制要求静态的薄适配层
 - 三条可行路径（宿主按扩展名分派）：
   * `.lua`  → 宿主内嵌 Lua（~200 KB，C ABI 极简）；原版统计插件就是 Lua，用户文件夹放 init.lua 即可直接跑。
      —— 这就是"不编译直接运行"的答案。
-  * `.wasm` → 复用本仓库已有的 wasm 运行时（themes\wasm）；仍需一次编译成 wasm，但跨语言且沙箱安全。
+  * `.wasm` → 复用本仓库已有的 wasm 运行时（theme\wasm）；仍需一次编译成 wasm，但跨语言且沙箱安全。
   * `.dll`  → 原生插件（C++/Rust），最快，但要编译。
 
 - 目录约定：
@@ -236,7 +248,7 @@ rime.dll  (静态, C++)  ← librime 强制要求静态的薄适配层
   用户文件夹\plugin\<名字>\init.lua    Lua 插件（免编译）
   用户文件夹\plugin\<名字>\mod.wasm    wasm 插件
   用户文件夹\plugin\<名字>\mod.dll     原生插件
-  用户文件夹\plugin\<名字>\plugin.toml 元数据（名字/版本/入口/权限）
+  用户文件夹\plugin\<名字>\plugin.yaml 元数据（名字/版本/入口/权限）
 
 - 边界：解释运行的脚本不能直接进 librime 的翻译器链（librime 只认编进去的 C++），
   因此宿主通过 API 表把 Rime 能力（查询/候选/上屏事件等）暴露给脚本；
@@ -303,10 +315,21 @@ rime.dll  (静态, C++)  ← librime 强制要求静态的薄适配层
   -x/-s 多线程（curl 没有），仅缺少上传/任意动词（本用途不需要）。
 - 因此程序文件夹放 aria2-next\（aria2c 改名 aria2-next），不再放 curl。
 
-Lua 插件的落位（按官方约定 ✓）：
+Lua 插件的落位（2026-10-20 用户改口径：入口也进 plugin\，**根部禁止放**）：
   用户目录\plugin\input_staticstic\statistics.lua   ← 插件脚本（用户指定目录名 input_staticstic）
-  用户目录\rime.lua                                 ← 入口：把 plugin\input_staticstic 加入 package.path 再 require
+  用户目录\plugin\rime.lua                          ← 入口：把 plugin\input_staticstic 加入 package.path 再 require
   方案里：lua_translator@statistics（或 lua_processor@…，视插件类型）
+
+  * 能这么放是因为 librime 的 `plugins/lua/src/modules.cc` 有 **Weasel-Next 补丁**，
+    搜索顺序：**用户根 → 用户 plugin → 共享根 → 共享 plugin**。
+    2026-10-20 实测：把 rime.lua 从根部搬进 `plugin\` 后重启引擎，
+    `plugin\_boot.log` 照样出现「=== rime.lua 开始加载 ===」+「虎整句已注册」。
+  * **检查点里「放 plugin\ 无效、只能在根部」这条已被推翻**（那是补丁加之前的结论）。
+  * 仓库里的出厂副本也在 `Rime-Next\plugin\rime.lua`；`deploy-install.ps1` 只在
+    「用户目录 plugin\ 里没有」时才复制，**绝不覆盖用户/插件包改过的那份**，
+    并且会把根部的历史遗留搬进 plugin\ 再删掉根部那份。
+  * 虎整句的注册块（14 行）属于**插件包**（虎整句 zip 里有 `rime.lua.sample`），
+    不该写进出厂 `Rime-Next\plugin\rime.lua`；用户机器上那份已恢复。
 
 ## 决策：所有图形界面统一使用 Direct2D（已定）
 
@@ -314,12 +337,15 @@ Lua 插件的落位（按官方约定 ✓）：
   统一由 Rust + Direct2D 实现，不引入 WebView、不使用 XAML、不再新建 Slint 界面。
 - 原因：只有 Direct2D 这条路能做到真·液态玻璃（透明 + DWM 背景模糊 + 圆角高光 + 折射位移 + 厚度色散）。
   Slint 与 Tauri/WebView2 都拿不到窗口背后的像素，也没有 D2D 效果链，做不出折射。
-- 现状：候选窗已是 D2D（themes\ten ✓）；设置界面目前是 Slint（Weasel-Next-Setting）→ 计划改为 D2D 自绘。
+- 现状：候选窗已是 D2D（theme\ten ✓）；设置界面目前是 Slint（Weasel-Next-Setting）→ 计划改为 D2D 自绘。
 - 设置界面改造要复用现有非 UI 核心：settings 库里的字段模型、校验、会话读写与框架无关，
   可直接被 D2D 前端调用；只需替换 UI 层。
 - 迁移顺序：先做主题化外壳（窗口/圆角/玻璃）→ 再逐页迁移（常规/外观/按键/词典/关于）→ 最后删除 Slint 依赖。
 - 性能约定：设置界面同样采用 D2D1_ALPHA_MODE_PREMULTIPLIED + DwmEnableBlurBehindWindow，
-  与候选窗共用一份 D2D 绑定（themes\support\build_d2d.rs 生成的绑定）。
+  与候选窗共用一份 D2D 绑定（theme\support\build_d2d.rs 生成的绑定）。
+- **2026-10-29：外壳 v1 已落地**（`Weasel-Next-Setting-D2D.exe`，见 `PROGRESS.md` 六·十三）：
+  Win32 无边框 + DComp 交换链 + D2D/DWrite 自绘 + DWM 亚克力（`#991B1F27`）+ Win11 圆角；
+  左侧五页签 + 占位卡片，可点、可拖、可缩放。**默认设置入口仍是 Slint 版**，进包与切换都还没做。
 ## 安装期两件独立任务（已定：并行、互不牵制）
 
 1. **部署**：`Weasel-Next-Engine.exe --deploy --silent`（由 broker 的 post-install 发起）。
@@ -328,22 +354,22 @@ Lua 插件的落位（按官方约定 ✓）：
 约定：
 - 这两件**互相独立**，可同时进行，不依赖用户配置、不依赖方案、不依赖对方先完成。
 - 部署本身会在 librime 初始化前由 `server\librime\mod.rs` 的 `generate_essay_txt()` 从
-  `eassy\**\*.eassy.toml` 归并生成 `eassy\essay.txt`，因此不需要预先准备 txt。
+  `eassy\**\*.eassy.yaml` 归并生成 `eassy\essay.txt`，因此不需要预先准备 txt。
 - 若解压尚未完成，部署会照常进行（模型缺失只影响语言模型打分，不阻断方案编译）。
 
 ## eassy 的位置（已定）
 
-- **代码目录与程序文件夹**各有 `Rime-Next\eassy\<名字>\<名字>.eassy.toml`（出厂源）。
+- **代码目录与程序文件夹**各有 `Rime-Next\eassy\<名字>\<名字>.eassy.yaml`（出厂源）。
 - **用户目录不建 `eassy\`**；`essay.txt` 是**程序文件夹里的部署产物**
   （`<程序>\Rime-Next\eassy\essay.txt`），由部署/初始化时从 TOML 归并生成。
-- 用户若想扩展，可自行在 `<用户目录>\eassy\` 放 `*.eassy.toml`，会被一并归并（可选）。
+- 用户若想扩展，可自行在 `<用户目录>\eassy\` 放 `*.eassy.yaml`，会被一并归并（可选）。
 - librime 的 `*.txt` 资源规则指向 `<root>/eassy/`。
 ## 以后可下载"用户词库"（已记录，不急）
 
 设想：
 - 将来支持从网络**下载用户词库/细胞词库**，下载后**同样按 eassy 的分类**放好：
-  `eassy\<名字>\<名字>.eassy.toml`（与出厂词库同一套格式与目录约定）。
-- 因为归并器已经把 `eassy\**\*.eassy.toml` 全部按词求和并生成 `essay.txt`，
+  `eassy\<名字>\<名字>.eassy.yaml`（与出厂词库同一套格式与目录约定）。
+- 因为归并器已经把 `eassy\**\*.eassy.yaml` 全部按词求和并生成 `essay.txt`，
   **下载来的词库不需要额外接入**：放进 eassy\ 即被并入，重新部署/初始化即生效。
 - 下载器用程序文件夹里的 `aria2-next\aria2-next.exe`；压缩包用 `7z\7z.exe` 解压
   （与安装期解压模型同一套工具）。
@@ -431,13 +457,60 @@ Lua 插件的落位（按官方约定 ✓）：
   **2026-10-18 补**：`C:\Code\click.ps1` 的 PostMessage 点击对 Slint 设置窗口**无效**（连点两次页签都没切）；
   必须用真鼠标事件：`ClientToScreen` 拿客户区原点 → `SetCursorPos` → `mouse_event(LBUTTONDOWN/UP)`。
 
+## 形码整句 / 顶功（2026-10-18 调研记录）
+
+### 三码整句（参照 Litles/rime-xingma-sentence，MIT）
+用户认定「整句要配上这些黑科技才完备」：<https://github.com/Litles/rime-xingma-sentence>
+它的四个特性（README 原文）：① 畅打十万字（常用字 2–3 码，生僻字无缝补第 4 码）；
+② **整句句中单字选重**——重码字不用移光标，补辅助码 `_`（空格）选重，可选任意重；
+③ **整句句中词选重**——词重码用 `/` 选重；④ **恢复防变**——`/` 把已定内容固定，后续延长句子不再改动。
+实现形态：**Python 生成器**（`func_lib.py` + 每个形码一个 `schema_*_fluid.py`）把码表/拆分表 + 字词频
+（知频 28 MB 词频表等）+ 字符集（通规 8105 / GB18030 / Big5）烤成 Rime 方案。
+关键点：空格版里 **`_`（空格）和 `/` 是合法编码字符**，要动 `speller/alphabet`/`delimiter` 和按键处理链，
+Rime 原生 `punctuator`/`key_binder` 做不到"句中选择性补码"，**必须自定义 processor/filter（Lua）**。
+我们的条件：librime 已内嵌 Lua（`lua_processor/filter/segmentor/translator` 都在）；但仓颉/笔画是 1–5 码
+不定长，要做"三码整句"得先按目标码表生成三码码表（可用 `shuangpin_schema` 同类的生成器 + `encoder` 公式）。
+落地顺序建议：① 三码化码表 → ② 开整句 + `_`/`/` 进 speller + 最小 processor（先单字选重）→
+③ 灌知频字词频 → ④ 词选重 + 恢复防变。
+
+### 大小集合顶功（用户 2026-10-18 提出，**未实现**）
+定义（按用户要求记）：只有当当前编码的候选**全部落在「小集合」**（常用字集，如通规 3500 / 8105）时，
+才**自动顶屏上屏**（顶功）；一旦可能命中「大集合」（全字集 / 生僻字）就保守等空格，避免误上屏。
+现状：**Rime 原生只有「定长顶字上屏」**——`speller/max_code_length`（`cangjie5.schema.yaml` 里还留着一行注释
+`#max_code_length: 5  # 五碼頂字上屏`），**没有"集合"概念**。
+所以要做得自己加一层：`lua_filter`/`lua_processor` 判断「当前码的全部候选 ⊆ 小集合」→ 自动 commit；
+否则不顶。前提是小集合字表（通规 8105 / 常用 3500，仓库与 rime-xingma-sentence 里都有现成的）。
+结论：**可做，中等工作量**；建议先开原生的定长顶屏（几乎零成本）验证手感，再加"小集合判定"的 Lua 层。
+
+### 顶功的现成实现（读过 `sbsrf.zip` 里的 lua，2026-10-18）
+素材：用户给的 `C:\Users\CloudyFlow\Downloads\sbsrf.zip`（73 MB；`lua/sbxlm/*.lua` + 几十个 `*.dict.yaml`；
+本棒解压到 `C:\Code\_tmp_sbsrf`，可删）。
+* **顶功核心 = `lua/sbxlm/popping.lua`（245 行）**：挂在 speller 前面的 processor。每次按键用
+  「当前输入串 + 本键」匹配 `speller/popping` 规则，命中就 `confirm_current_selection()` + `commit()`
+  把首选顶上屏，再把多余的码 `push_input` 回去继续打 —— 这就是"下一键顶上一段"。
+* 规则字段：`when`（选项名）/ `match`（当前输入正则）/ `accept`（本键正则）/ `prefix`（截断位数，
+  `>0` 保留前 N 位、`==0` 找最后一个声母位置）/ `strategy`。
+* 策略：`append` 不顶（继续加码）、`conditional` 条件顶（先试着加一键，能出候选就不顶）、
+  默认直接顶、`ignore` 顶完直接接受。
+* 硬编码特例：`;` 两段式上屏、数字键 `2/3/7/8/9` → 笔画 `a/e/u/i/o`、`mm` 方案 3/4 码拆分、
+  `delayed_pop`（元音不顶、辅音顶）、Rime "句号后隐藏 `.`" 的 bug 补丁；**大写键顶完转小写**
+  （所以大写也能当顶功键）。
+* ⚠️ **它没有"大小集合"概念**：顶不顶只看输入形态 + 下一键，**不查候选属于哪个字集**。
+  所谓"小集合顶功"在这些方案里是用规则形态近似的（只在 2/3 码顶、只在 `mixed`/`pro_word` 选项下顶）。
+  要做真·小集合顶功，挂点就是 `popping.lua` 里 `if context:has_menu() then` 那一行：加一层
+  「候选列表 ⊆ 小集合」判断，小集合字表由通规 3500 / 8105 生成 Lua set。
+* 依赖：`lua/lib.lua`（Rime Lua 封装，24 KB）+ `sbxlm/core.lua`（`core.fm/ft/mm/jp/py` 方案判断）；
+  同包还有 `auto_length.lua`(41 KB)、`postpone.lua`（延迟上屏）、`editor.lua`/`sp_editor.lua`
+  （顶功模式下的编辑行为）、`selector.lua`、`hint.lua` —— **顶功是一整套，不止 popping**。
+* 许可：zip 里没看到 LICENSE 文件（对照：`rime-xingma-sentence` 是 MIT）⇒ 抄之前先确认来源许可。
+
 ## 简词 / 语言模型 / 自定义双拼（2026-10-18 核过一遍，记结论）
 
 ### 词库没词也能出词 —— 不需要额外实现
 * `luna_pinyin.dict.yaml`（70,771 行）里既有词、也有**单字条目**。实测「没做」**不在词典**，但「没」「做」在；
   输入 `mei zuo` 照样上屏「没做」——这是 `script_translator` 的**跨字组合**（整串查不到词就切段用单字组合）。
   ⇒ 用户问的"识别不同字的组合"是 Rime 的既有行为，不用写代码。
-* `eassy`（细胞词库）只影响**排序**：`Rime-Next\eassy\default\default.eassy.toml`（`"〇" = 981` 这种 词→频次）
+* `eassy`（细胞词库）只影响**排序**：`Rime-Next\eassy\default\default.eassy.yaml`（`"〇": 981` 这种 词→频次）
   部署时归并成 `eassy\essay.txt`（2026-10-18 实测 5,093,882 字节），作为 `vocabulary` 参与 Grammar 打分，**不产生候选**。
 
 ### 简词 = 简拼（用户 2026-10-18 明确要的就是这个）
@@ -460,25 +533,29 @@ Lua 插件的落位（按官方约定 ✓）：
   简体方案（`luna_pinyin_simp`）应指向 `hans`（现在从 `luna_pinyin` 继承的是 `hant`）。
 
 ### 自定义双拼是怎么做的（已实现，2026-10-18 复核）
-* **唯一手改源**：`Rime-Next\schema\shuangpin\<名字>.toml`（现有 `xiaohe.toml` 小鹤、`ziranma.toml` 自然码）。
-  结构：`[schema]`（`id` / `name` / `version` / `author` / `dict` / `prism` / `simp_option` / `base`）
-  + `[initials]`（只有 `zh` `ch` `sh` 这类两字母声母要写）+ `[finals]`（韵母→键位，**顺序随便写**）。
+* **唯一手改源**：`Rime-Next\parser\shuangpin\<名字>.parser.yaml`（现有 `xiaohe.parser.yaml` 小鹤、
+  `ziranma.parser.yaml` 自然码；2026-10-27 从 `schema\shuangpin\*.toml` 迁到 parser 目录 + `.parser.yaml` 后缀）。
+  结构：顶层 `schema:`（`id` / `name` / `version` / `author` / `dict` / `prism` / `simp_option` / `base`）
+  + `initials:`（只有 `zh` `ch` `sh` 这类两字母声母要写）+ `finals:`（韵母→键位，**顺序随便写**）。
+  音节表在 `parser\pinyin\syllables.parser.yaml`（424 条），注音键位在 `parser\zhuyin\zhuyin.parser.yaml`。
 * **生成器**：`style/src/bin/shuangpin_schema.rs` → `shuangpin-schema.exe`（随安装包分发）。
-  它把 TOML 的键位填进**固定的 algebra 模板**：规则顺序 = 官方 `rime-double-pinyin` 的顺序，**长韵母必须先于短韵母**
+  它把 parser YAML 的键位填进**固定的 algebra 模板**：规则顺序 = 官方 `rime-double-pinyin` 的顺序，**长韵母必须先于短韵母**
   （否则 `liang` 会被 `ang` 规则先命中，变成 `lih`）。产物是 `<用户目录>\Rime-Next\schema\<id>\<id>.schema.yaml`。
-  * 找 TOML 的搜索顺序：用户目录 `schema\shuangpin\` → 用户目录 `shuangpin\`（旧位置）→
-    程序文件夹 `Rime-Next\schema\shuangpin\` → 程序文件夹旧位置 → 仓库（开发时兜底）。
+  * 找键位表的搜索顺序（2026-10-27 起 **程序文件夹优先**，parser 是出厂数据随安装包分发）：
+    程序文件夹 `Rime-Next\parser\shuangpin\` → 用户目录 `parser\shuangpin\`（兼容兜底）→
+    用户目录旧位置 `schema\shuangpin\`、`shuangpin\`（兼容）→ 仓库（开发时兜底）。
   * 生成的 schema 用 `__include: <base>.schema:/` **深合并**继承 `luna_pinyin_simp` 骨架，
     只覆盖 `algebra` / `translator` / `simplifier`。
     ⚠️ 里面**不能**写 `patch:` —— 那是 `.custom.yaml` 专用语法，写进 `.schema.yaml` 会 `invalid schema definition` 导致部署失败。
 * **生效路径**：`script\deploy-install.ps1` 一开头就跑生成器（必须早于部署/编译），
-  然后把 `Rime-Next\schema\double_pinyin*` 目录和 `schema\shuangpin\*.toml` 拷到**用户目录**
-  （TOML 只在目标不存在时拷，避免覆盖用户改过的键位），再跑一次生成器写到用户目录。
+  然后把 `Rime-Next\schema\double_pinyin*` 目录和 `parser\shuangpin\*.parser.yaml` 拷到**用户目录**
+  （parser 数据只在目标不存在时拷，避免覆盖用户改过的键位），再跑一次生成器写到用户目录。
   librime 只认 `.schema.yaml`；同名时**用户目录那份优先**。
-* **改键位的正确姿势**：改 `%APPDATA%\Rime-Next\schema\shuangpin\<名字>.toml` → 设置界面「保存并部署」
-  （或手动跑 `shuangpin-schema.exe`）→ 新键位生效。程序文件夹里那份只是出厂备份。
-* `script\gen-shuangpin.py` 是同一套逻辑的 Python 版，但里面写的是**旧路径** `Rime-Next\shuangpin`（没有 `schema\` 这一层），
-  以 Rust 版为准；两份别同时维护。
+* **改键位的正确姿势**（2026-10-27 起）：改**程序文件夹** `%ProgramFiles%\Weasel-Next\Rime-Next\parser\shuangpin\<名字>.parser.yaml`
+  → 设置界面「保存并部署」（或手动跑 `shuangpin-schema.exe`）→ 新键位生效。
+  （parser 已从用户目录挪到程序文件夹：出厂数据随包分发、整包升级时一并更新；用户目录不再部署。）
+* 原 `script\gen-shuangpin.py`（Python 版生成器）已于 2026-10-27 删除，路径已指向不存在的旧目录；
+  生成器以 Rust 版 `shuangpin-schema`（weasel-style bin）为准，数据在 `Rime-Next\parser\shuangpin\*.parser.yaml`。
 
 ## 输入法链路的两条硬约定（2026-10-18 实测定下来）
 
@@ -487,5 +564,180 @@ Lua 插件的落位（按官方约定 ✓）：
   现在 TIP 按「窄组合范围 → 整个组合范围 → 当前选区 → 视图矩形」逐级兜底，必须一直保留这条退让链。
 * **TIP 的 DLL 是加载进每个宿主进程的**：换了 `Weasel-Next.dll` 后，**打字的那个程序必须关掉重开**才用上新代码
   （explorer / QQ / 浏览器 / 聊天客户端都算）。
-* **设置界面写的是用户补丁**（`%APPDATA%\Rime-Next\weasel.custom.toml`），引擎读配置时必须**叠加**它，
+* **设置界面写的是用户补丁**（2026-10-21 起 `%APPDATA%\Rime-Next\weasel.yaml`，真 YAML，就在用户目录根；
+  旧名 `weasel.custom.toml` 已迁走），引擎读配置时必须**叠加**它，
   否则界面上关掉的东西不生效（2026-10-18 的「启用声音」就是这么假的：引擎只读程序文件夹的 `weasel.toml`）。
+* **路径只有一处定义**：`common/src/settings.rs` 的 `user_config_path()` / `legacy_user_config_path()`，
+  各组件都调它，别再手写 `join("weasel.yaml")`；迁移函数也在这里，服务端启动和设置界面加载都会先跑。
+
+## 上游 PR #1232：`rewriter` 滤镜（2026-10-28 用户指定记录，**待实现**）
+
+> https://github.com/rime/librime/pull/1232 —— amzxyz 的 fork，**未合并（open）**；
+> 3 个 commit（`c4cdc74` 主体 / `6e31439` 前缀递进 / `8530499` 长句性能），13 files，+5235 行。
+> 本次只记录设计与落地要点，代码一行没搬。
+
+**是什么**：原生「KV 匹配」候选加工滤镜，替掉大量本来要写 Lua 的场景。
+`engine/filters` 里写 `rewriter@s2t`，对应配置顶层节点 `s2t:`；只写 `rewriter` 就用 `rewriter:` 节点。
+部署期把用户维护的 TXT 编译成**所有方案共用的一个** `build/rewriter.rwp`，
+运行期按需只 mmap 用到的 Stage，直接查 darts Trie（不读源 TXT）。
+
+**典型用途**：简繁/地区字形整句转换（替代 `simplifier`）、原候选+派生候选、emoji/翻译/拆字注释、
+简码与自定义短语（替代 `custom_phrase` translator）、九键等编码投影（部署期转写 key）。
+
+**配置参数**
+
+| 参数 | 取值 | 默认 | 说明 |
+|---|---|---|---|
+| `option` | `true`/`false`/字符串/列表 | 未启用 | `true` 常开；字符串=受该 Context option 控制；列表=OR |
+| `tags` | 字符串/列表 | TagMatching 默认 | 限定在哪些 segment 生效 |
+| `mode` | `derive`/`replace`/`comment`/`abbrev` | `derive` | 见下 |
+| `enable_sentence` | bool | `false` | 对整条候选从左到右做**最长匹配**（不是分词） |
+| `comment_source` | `none`/`text`/`inherit` | `none` | 派生注释来源（仅 derive/replace） |
+| `comment_template` | 字符串 | `〔%s〕` | 只替换第一个 `%s`；无 `%s` 用原文 |
+| `candidate_type` | `preserve`/任意串 | `preserve` | 派生候选 type；`abbrev` 未指定时是 `abbrev` |
+| `excluded_types` | 字符串/列表 | 空 | 跳过这些 type 的上游候选（abbrev 不查） |
+| `insert_position` / `insert_count` | 正整数 | `1`/`1` | abbrev 插入位置/最多插几个 |
+| `promote_on_types` | 字符串/列表 | 空 | 首候选 type 命中时，简码全部提前 |
+| `fallback_on_empty` | bool | `true` | 上游无候选时释放全部简码兜底 |
+| `key_xlit` | `"from>to"` | 空 | **部署期**字符转写 key，原 key 存成 preedit |
+| `preset` / `files` | 二选一（必须且只能一个） | — | preset 引用共享 `<共享>/opencc/presets.yaml` |
+
+**四种 mode**
+
+* `derive`：保留原候选，再追加改写结果（`零`→`〇`，`二零二六年` → 第二条 `二〇二六年`）。
+* `replace`：用改写结果替换原候选；无结果时保留原候选。
+* `comment`：候选正文不动，只把 comment 换成改写结果（经 `comment_template`）。
+* `abbrev`：不加工上游候选，直接拿**当前输入编码**查表注入（`jys`→`静夜思`）；不用 `enable_sentence`。
+
+**数据格式**：一行一个 `key<TAB>value`；同 key 多值=重复 key（按行序），同 key 同 value 去重保首现；
+多个 `files` 按「文件配置顺序 + 文件内行顺序」合并成一个 Trie。
+
+**产物 / 部署语义**（这是最费工的部分）
+
+* 文件：`build/rewriter.rwp`，magic `RIMERWP1`、format version 1。
+* 结构：两段 superblock（A/B，generation 大者胜，用于原子提交）→ 若干 Stage object
+  （header 带 payload hash + StageId）→ 末尾 Index（`StageIndex`: StageId→offset/size；
+  `SchemaIndex`: schema→section→有序 StageId）。
+* StageId = 格式/编译版本 + 该 Stage 源文件顺序与内容 + `key_xlit`；`mode`/`option` 等运行期参数**不参与**。
+  ⇒ 同 Stage 跨方案/跨 preset 自动复用。
+* 增量：先算 StageId，store 里已有就复用，没有才编译；所有方案处理完后一次生成紧凑 store
+  （未变的 Stage 流式复制，写新 Index 后**原子替换**旧文件）。
+* 紧凑化阈值：死 Stage ≥16 个，或垃圾 ≥4 MB 且 ≥当前文件 1/4。
+* 失败回滚：workspace 提交前旧 Index 始终有效；失败就截断新增尾部，没旧文件就删掉本次创建的空文件。
+* 运行期：option 关闭时**不映射**；第一次启用才读 Index、只 mmap 对应 Stage 范围
+  （Windows `MapViewOfFile` 要按 `dwAllocationGranularity` 对齐），Stage 映射后关闭 option 也不卸载。
+
+**C++ 实现文件**（PR 里能确认的 4 个，共 3235 行）：
+`src/rime/dict/rewrite_internal.h`(197)、`src/rime/dict/rewrite_pack.h`(144)、
+`src/rime/dict/rewrite_pack.cc`(1490)、`src/rime/dict/rewrite_store.cc`(1404)。
+其余 9 个文件是滤镜装配 / 部署任务 / CMake / 测试（PR 共 13 files）。
+
+**LRN（Rust）落地要点**
+
+1. `engine/gear/` 加 `rewriter` 滤镜组件，按 `engine/filters` 的 `rewriter@section` 装配；section 名=配置顶层节点。
+2. 部署任务：TXT → Stage（Trie + value pool + char directory），写共享 `build/rewriter.rwp`；
+   需要 workspace 事务、双 superblock 原子提交、StageId 复用、失败截断回滚。
+3. 运行期：store 索引解析 + 单 Stage range mmap；Trie 要用 darts double-array（LRN 现在只有 `marisa`，
+   要对齐 `.rwp` 格式就得自己实现/移植 Darts，否则只能自定义格式、互不兼容）。
+4. 语义：四种 mode、`tags`/`candidate_type`/`excluded_types`、最长匹配、insert/promote/fallback、`key_xlit`。
+5. 落地后先在「s2t/s2hk/s2tw、emoji、简码」三处替换现有 `simplifier`/`custom_phrase`/Lua，再决定旧组件去留；
+   完成后在 `librime-next/doc/PARITY.md` 的 filter 清单加一行（现在 6 项）。
+
+**风险 / 注意**
+
+* **PR 未合并**，配置键和 `.rwp` 二进制都可能变；先按文档实现语义，**别把格式当稳定契约**（除非要和 C++ 补丁版互读）。
+* `preset` 依赖 `<共享>/opencc/presets.yaml` + 相关 TXT；作者明说该数据的获取/安装/打包「另行提交」，
+  在那之前 preset 缺文件就不可用。
+* 部署的原子性要求高（双 superblock、payload hash、临时文件 rename）；LRN 现在是直接写 `build/`，
+  照搬要先做 staging/事务层。
+
+---
+
+## ARM64（Windows on ARM）安装包 —— 用户 2026-10-28 定下的矩阵
+
+**口径**：两种包都出，**架构写进文件名**（`…-x64-setup.exe` / `…-arm64-setup.exe`）。
+
+| 包 | 64 位 TIP | 32 位 TIP | 覆盖的宿主 |
+|---|---|---|---|
+| x64 | `Weasel-Next.dll`（AMD64） | `Weasel-Next-32.dll`（i386） | 64 位宿主 + 32 位宿主（WPS 等） |
+| arm64 | `Weasel-Next.dll`（**arm64**） | `Weasel-Next-32.dll`（i386，与 x64 包是同一个文件） | ARM64 原生宿主 + 32 位仿真宿主 |
+
+* 引擎：x64 包同时放 C++ `rime.dll` 与 `rime-next.dll`；**arm64 包只放 arm64 的 `rime-next.dll`**
+  （`Engine` 优先加载这个名字，`rime.dll` 槽位空着即可）。arm64 产物只额外依赖一个非系统 DLL：`libunwind.dll`。
+* 版本：**0.18.5**（安装器版本号取自 `Tip\Cargo.toml`，10 个 crate 一起升）。
+  产物：`artifact\installer\Weasel-Next-0.18.5-x64-setup.exe`（47,519,492 B）与
+  `Weasel-Next-0.18.5-arm64-setup.exe`（34,416,255 B）。
+* 一条命令出 arm64 包：`script\build-installer-arm64.ps1`（`-SkipBuild` 跳过重编、`-SkipX64` 跳过顺带打 x64 包）。
+* **仍未解**：**有没有骁龙真机可测**（2026-10-26 13:0x 起一直挂着）。所以 ARM64 只验到「打包层面」——
+  包内每个 PE 的机器类型、版本信息、数据齐全都核过；**安装 + 部署 + 打字没在 ARM 上跑过**。
+  详见 `PROGRESS.md` 六·十一。
+
+---
+
+## PlumNext：東風破 /plum/ 的 Rust 重写（2026-10-29 新建 `plum-next/`）
+
+> 上游：`https://github.com/rime/plum`（bash 实现，LGPLv3）。
+> 动机：原版在 Windows 上要么依赖 Git for Windows（没装就退化成 ZIP 下载、且**没有增量更新**），
+> 要么直连 `https://github.com`（国内经常拉不动，**没有退路**）。
+> PlumNext 用 libgit2 拉包 + 镜像自动嗅探/切换，两头都解决。
+
+### 与原版脚本的对应关系（逐句对照 `scripts/*.sh`）
+
+| 原版 | PlumNext |
+|---|---|
+| `scripts/resolver.sh` | `src/target.rs`：`<user>/<repo>@<branch>:<recipe>:k=v`；`package_list=(...)` 清单解析；`*-packages.conf` URL 展开 |
+| `scripts/fetch-package.sh` | `src/fetch.rs`（git2）：`clone --depth 1` / 已存在则 fetch + 硬重置；**每次都把 origin 地址校正成当前镜像**（切镜像不需要重 clone） |
+| `scripts/recipe.sh` | `src/recipe.rs`：正经 YAML 解析（`Rx` 声明校验 / `download_files` / `install_files` / `patch_files`），替掉原版用 `sed` 抠区块 + eval |
+| `scripts/install-packages.sh` | `src/install.rs`：数据文件挑选（`*.yaml` 排除 `*.custom.*`/`*.recipe.*`/`recipe.yaml`、`*.txt`、`*.gram`、`opencc/*.json|ocd|ocd2|txt`）+ **内容相同则跳过**（原版 `diff -q`） |
+| 无（原版写死 github） | `src/mirror.rs`：内置 7 个镜像 + 并发嗅探 + 失败自动切换 + 状态记忆 |
+
+### 镜像表（`src/mirror.rs::builtin()`）
+
+`github`（基准直连）、`ghproxy`、`gh-proxy`、`mirror-ghproxy`、`ghfast`、`gitclone`、`gitmirror`。
+
+* **嗅探**：并发 TCP 建连（443，默认超时 1500 ms），按"可达优先 + 延迟升序"排序。
+  只测建连不发包 —— 排序要快，真正的可用性由后续 clone/下载决定（失败就切换）。
+* **切换**：`Picker::attempt()` 按排序依次尝试，失败即前进到下一个；全部失败时错误里带 `[镜像id]`，便于定位。
+* **记忆**：上次成功的镜像 id 写进 `<plum_dir>/mirror.txt`，下次提到队首（快路径），它挂了再重新嗅探。
+* `--mirror <id>` 可强制指定（跳过嗅探），`--sniff` 只打印排序，`--list-mirrors` 列内置表。
+
+### 实测（2026-10-29 00:5x，本机）
+
+```
+--sniff:      gh-proxy 96ms < gitclone 133ms < github 254ms < ghfast 283ms
+              ghproxy / mirror-ghproxy / gitmirror 不可达
+prelude:      下载 配方包 rime/rime-prelude [gh-proxy.com] → 装出 4 个 yaml
+ipa 二次运行: 走"更新"路径 → 没有文件更新（幂等）→ mirror.txt = gh-proxy
+--mirror ghproxy（坏）: 失败 [ghproxy] clone 失败…（错误带镜像 id）
+```
+
+### 待办 / 已知边界
+
+1. `--select` 交互式选包、**子模块**（原版 `--recurse-submodules`）未做。
+2. `patch_files` 只实现了"写进 `__patch:` 段 + 同 Rx 幂等替换"，没实现原版 `eval` 选项变量（`key=value`）那套。
+3. `:preset` 清单优先读本地 `<plum_dir>/preset-packages.conf`，取不到才联网拉 `rime/plum/master/…`，
+   再不行用 `FALLBACK_PRESET`（README 里的 22 个包）兜底。
+4. 还没接进设置界面（将来可在"获取更多输入方案"处直接调 `plum-next` 二进制）。
+
+### 与设置界面的接线（同一天补上）
+
+* 设置界面「**获取更多输入方案...**」按钮（`Setting/src/switcher_dialog.rs` 的 `IDC_GET_SCHEMATA = 1211`）
+  原先**只定义了常量、点了没反应**。现在接到 PlumNext：拉起同目录的 `plum-next.exe --select :preset`
+  （控制台程序，`--select` 要读 stdin，所以**不能**隐藏窗口）。
+* 安装要带 `plum-next.exe`：已加进 `script/build-installer.ps1` 的 `$requiredFiles`、
+  `script/build-installer-arm64.ps1` 的复制清单、`installer/weasel-next.nsi` 的 `ManagedFile` 与卸载段。
+  （x64/arm64 安装脚本都是 `cargo build --release --workspace`，所以产物会自动存在。）
+* 装完新方案**不会自动部署** —— 提示用户回对话框点「确定」，由 broker 走正常部署流程。
+
+### 补记（同一天晚些）
+
+* **快路径**：`<plum_dir>/mirror.txt` 里记着上次成功的镜像，下次**跳过嗅探**直接用
+  （实测：第二次运行不再打印那 7 行探测）。它挂了照样往下切 ——
+  实测把 `mirror.txt` 改成不可达的 `ghproxy` 再跑，自动落到 `gh-proxy.com` 完成克隆。
+* **配方语义补了两处**（用上游 `rime-emoji:customize` 真跑出来的差异）：
+  1. `install_files:` **段存在但内容为注释**（上游就这样写）⇒ 等价于"什么都不装"，
+     **不能**回退成"装包里所有数据文件"。用 `has_install_files` 区分"段不存在"与"段为空"。
+  2. `patch_files:` 的键/值要做**变量替换**：`${name}` 与 `${name:-默认值}`，
+     变量来自配方 `recipe.args:` 的默认值 + 命令行 `:recipe:k=v`（后者优先）。
+     实测 `emoji:customize` 生成 `luna_pinyin.custom.yaml`，内容带 `__patch:` 与 `# Rx: … {}` 块，与上游一致。
+  3. `patch_files` 的值可能是**序列**（`- patch/+:`），不能只收字符串；现在会序列化回 YAML 文本再写入。

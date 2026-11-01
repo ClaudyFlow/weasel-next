@@ -1,0 +1,39 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20261101125702
+Username: DESKTOP-2P7TD88\CloudyFlow
+RunAs User: DESKTOP-2P7TD88\CloudyFlow
+Configuration Name: 
+Machine: DESKTOP-2P7TD88 (Microsoft Windows NT 10.0.26200.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Code\Weasel-Next\script\deploy-theme.ps1
+Process ID: 45480
+PSVersion: 5.1.26100.9711
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9711
+BuildVersion: 10.0.26100.9711
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+源: C:\Code\Weasel-Next\target\release\weasel_theme_official.dll (5500416 bytes, 11/01/2026 12:50:41)
+目标: C:\Program Files\Rime-Next\Weasel-Next-0.18.5\weasel_theme_official.dll (5481472 bytes, 10/31/2026 13:53:46)
+停止进程 Weasel-Next-Engine (pid=47468)
+停止进程 Weasel-Next-Renderer (pid=47232)
+停止进程 Weasel-Next-Server (pid=47744)
+停止进程 WeaselServer (pid=3164)
+已备份原文件 -> C:\Program Files\Rime-Next\Weasel-Next-0.18.5\weasel_theme_official.dll.bak-20261101-125704
+OK 已覆盖: C:\Program Files\Rime-Next\Weasel-Next-0.18.5\weasel_theme_official.dll
+校验通过（哈希一致）
+重启输入法服务...
+  已启动: Weasel-Next-Engine (pid=47308)
+  已启动: Weasel-Next-Renderer (pid=43656)
+  已启动: Weasel-Next-Server (pid=48940)
+
+部署完成。
+PS>$global:?
+True
+**********************
+Windows PowerShell transcript end
+End time: 20261101125707
+**********************

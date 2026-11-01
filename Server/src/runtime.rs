@@ -33,6 +33,15 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
     let logger = ComponentLogger::for_paths(&paths, "broker")?;
     service_supervisor::initialize(logger.clone())?;
 
+    // 用户补丁 2026-10-21 起是用户目录根下的 `weasel.yaml`。这里只把 2026-10-21 的
+    // 中途落点 `weasel\weasel.yaml`（本来就是 YAML）搬回根部，**不做格式迁移**：
+    // 旧的 `weasel.custom.toml` 一概不读，由用户自己改成 YAML。
+    match weasel_common::settings::migrate_interim_user_config(&paths.user_data) {
+        Ok(true) => service_supervisor::diagnostic("已把用户补丁迁到 weasel.yaml（用户目录根）"),
+        Ok(false) => {}
+        Err(error) => service_supervisor::diagnostic(&format!("迁移 weasel.yaml 失败: {error}")),
+    }
+
     let mut settings_warnings = Vec::new();
     let settings = crate::settings::load(&paths, |warning| {
         service_supervisor::diagnostic(&warning);

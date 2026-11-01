@@ -6,21 +6,88 @@
 //! <根>/
 //!   schema/<方案>/<方案>.schema.yaml    方案
 //!   schema/<方案>/<方案>.dict.yaml      词典
-//!   eassy/<名字>/<名字>.eassy.toml      细胞词库（TOML 源）
-//!   eassy/essay.txt                     部署产物（由 TOML 归并生成）
+//!   eassy/<名字>/<名字>.eassy.yaml      细胞词库（YAML 源）
+//!   eassy/essay.txt                     部署产物（由 YAML 归并生成）
 //!   model/<名字>.gram                   语言模型
-//!   theme/<名字>/<名字>.theme.toml      主题
+//!   theme/<名字>/<名字>.theme.yaml      主题
 //!   （其余扁平文件如 default.yaml / punctuation.yaml 属于全局配置，保持扁平）
 //! ```
 //!
 //! 本模块提供两件事：
-//! - [`normalize`]：把散落在根目录的 `*.schema.yaml` / `*.dict.yaml` / `*.eassy.toml` / `*.gram`
+//! - [`normalize`]：把散落在根目录的 `*.schema.yaml` / `*.dict.yaml` / `*.eassy.yaml` / `*.gram`
 //!   **搬进**上面的嵌套位置（只移动，不删除内容），并返回每一步动作供日志使用。
 //! - [`validate`]：校验 `schema_list` 中每个方案的源文件是否就位，缺什么就报什么。
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+/// **程序文件夹布局**（2026-10-28 定）：
+///
+/// ```text
+/// PROGRAM_DIR/Rime-Next/            ← 程序文件夹（安装目录，exe 在这层）
+///     Weasel-Next-Server.exe …      ← 可执行文件
+///     data/                         ← 内置数据目录 = librime 的 shared_data_dir
+///         default.yaml  schema/  opencc/  parser/  eassy/  theme/ ...
+/// ```
+///
+/// - `PROGRAM_DIR`：安装根（`Program Files`）。
+/// - `Rime-Next`：产品目录 —— **程序文件夹就到这一层**，安装路径 + 产品名即可。
+/// - `data`：数据目录 —— 本模块里就叫 [`DATA_FOLDER`]，由 [`data_dir`] 解析。
+///
+/// ★ **版本不进目录层级**。`Weasel-Next-<版本>` 是**安装包名 / 可执行文件名**
+/// （`Weasel-Next-0.18.4-Setup.exe`、`Weasel-Next-Engine.exe`），不是目录名；
+/// 多版本并存之类的排布属于**外壳（Weasel）安装器**的决定，Rime 不参与。
+///
+/// ★ **分层职责**：拼路径是 Weasel 的事，Rime 侧只有四个**被注入**的目录
+/// （`shared_data_dir` / `user_data_dir` / `prebuilt_data_dir` / `staging_dir`），
+/// 它们拿到的是这里的**绝对路径**，不知道也不需要知道 `Program Files`、
+/// `Rime-Next`、`data` 这些名字是怎么来的。
+///
+/// 用户文件夹（`%APPDATA%\Rime-Next`）**不受影响**，见 [`USER_DATA_FOLDER`]。
+
+/// 安装根 `PROGRAM_DIR` 的环境变量（`Program Files`）。
+pub const PROGRAM_DIR_ENV: &str = "ProgramFiles";
+
+/// 产品目录名：`PROGRAM_DIR` 下的 `Rime-Next`。
+pub const PRODUCT_FOLDER: &str = "Rime-Next";
+
+/// 版本号（编译期取自 crate 版本，全仓统一）。
+///
+/// 只用于**安装包/可执行文件名**（`Weasel-Next-<版本>`），不参与目录拼装。
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// **数据目录名**（2026-10-28 由 `shared` 改名而来）：程序文件夹里的 `data`。
+pub const DATA_FOLDER: &str = "data";
+
+/// 改名前的共享数据目录名（`Rime-Next`），**仅用于旧装机回退兼容**。
+pub const LEGACY_DATA_FOLDER: &str = "Rime-Next";
+
+/// 用户数据目录名（`%APPDATA%\Rime-Next`）。
+///
+/// 2026-10-28 定：用户文件夹布局**不动**，只改程序文件夹。
+pub const USER_DATA_FOLDER: &str = "Rime-Next";
+
+/// 程序文件夹：`PROGRAM_DIR/Rime-Next`（安装路径 + 产品名，到此为止）。
+///
+/// 拿不到 `ProgramFiles` 时返回 `None`（此时调用方应改用 exe 所在目录，见 [`data_dir`]）。
+pub fn program_dir() -> Option<PathBuf> {
+    std::env::var_os(PROGRAM_DIR_ENV).map(|base| PathBuf::from(base).join(PRODUCT_FOLDER))
+}
+
+/// **数据目录**：`<程序文件夹>/data`（旧装机回退 `<程序文件夹>/Rime-Next`）。
+///
+/// 入参是程序文件夹（正常运行时就是 exe 所在目录）。过渡期两套布局都能跑；
+/// 新安装器铺成 `…/Rime-Next/data` 后回退自然失效。
+///
+/// 返回值即交给 librime 的 `shared_data_dir` —— Rime 只认这一个绝对路径。
+pub fn data_dir(install_dir: &Path) -> PathBuf {
+    let modern = install_dir.join(DATA_FOLDER);
+    if modern.is_dir() {
+        return modern;
+    }
+    install_dir.join(LEGACY_DATA_FOLDER)
+}
 
 /// 一次文件搬迁（供日志/汇报）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +116,7 @@ pub enum Level {
     Error,
 }
 
-/// 把 `<name>.schema.yaml` / `<name>.dict.yaml` / `<name>.eassy.toml` / `<name>.gram`
+/// 把 `<name>.schema.yaml` / `<name>.dict.yaml` / `<name>.eassy.yaml` / `<name>.gram`
 /// 从根目录搬进嵌套位置。返回已执行的搬迁清单。
 ///
 /// 只做移动：目标已存在时不覆盖（视为已整理），源为符号链接/目录时跳过。
@@ -66,15 +133,26 @@ pub fn normalize(root: &Path) -> io::Result<Vec<Move>> {
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
             continue;
         };
-        let (dir, stem) = if let Some(stem) = name.strip_suffix(".schema.yaml") {
+          // 用户 2026-10-19：**根部的 .dict.yaml 不再归类进 schema\<id>\** ——
+          // librime 的 dictionary / import_tables 只在用户目录根部解析，
+          // 挪进子目录会让「日月/宇浩」这类外部方案报 source file does not exist。
+          // 用户 2026-10-19：根部的 **rime.lua** 不许搬走 ——
+          // librime-lua 只在数据目录根部找引导文件，搬进 plugin\ 等于没装。
+          if name == "rime.lua" {
+              continue;
+          }
+          if name.ends_with(".dict.yaml") {
+              continue;
+          }
+          let (dir, stem) = if let Some(stem) = name.strip_suffix(".schema.yaml") {
             ("schema", stem.to_string())
         } else if let Some(stem) = name.strip_suffix(".dict.yaml") {
             ("schema", stem.to_string())
-        } else if let Some(stem) = name.strip_suffix(".eassy.toml") {
+        } else if let Some(stem) = name.strip_suffix(".eassy.yaml") {
             ("eassy", stem.to_string())
         } else if let Some(stem) = name.strip_suffix(".gram") {
             ("model", stem.to_string())
-        } else if let Some(stem) = name.strip_suffix(".theme.toml") {
+        } else if let Some(stem) = name.strip_suffix(".theme.yaml") {
             ("theme", stem.to_string())
         } else if let Some(stem) = name.strip_suffix(".lua") {
             ("plugin", stem.to_string())
@@ -164,10 +242,16 @@ pub fn cleanup_flat_sources(root: &Path) -> io::Result<Vec<PathBuf>> {
             }
             _ => continue,
         };
-        if classified.is_file() {
-            fs::remove_file(&path)?;
-            removed.push(path);
-        }
+          // 用户 2026-10-19：用 import_tables 的方案（日月/宇浩系列）**必须**保留根部扁平 dict ——
+          // librime 只在用户目录根部解析 dictionary / import_tables，删掉它们就编不出词典。
+          // 用户 2026-10-19：**不删根部 .dict.yaml** —— 日月/宇浩等外部方案
+          // 的词典只能从用户目录根部解析（librime 的 dictionary / import_tables），
+          // 删了它们就编不出词典；我们自己的方案本来就没有根部 dict，不受影响。
+          let removable = !name.ends_with(".dict.yaml");
+          if classified.is_file() && removable {
+              fs::remove_file(&path)?;
+              removed.push(path);
+          }
     }
     Ok(removed)
 }
@@ -188,15 +272,15 @@ mod tests {
         let root = temp("normalize");
         fs::write(root.join("sancang.schema.yaml"), "schema_version: 1\n").unwrap();
         fs::write(root.join("sancang.dict.yaml"), "name: sancang\n").unwrap();
-        fs::write(root.join("default.eassy.toml"), "[words]\n\"甲\" = 1\n").unwrap();
+        fs::write(root.join("default.eassy.yaml"), "words://n  \"甲\": 1\n").unwrap();
         fs::write(root.join("zh-hans.gram"), b"x").unwrap();
         fs::write(root.join("default.yaml"), "config_version: 1\n").unwrap();
 
         let moves = normalize(&root).unwrap();
-        assert_eq!(moves.len(), 4, "四个分类文件应被搬走");
+        assert_eq!(moves.len(), 3, "schema/eassy/model 三个搬走；根部 *.dict.yaml 保留");
         assert!(root.join("schema/sancang/sancang.schema.yaml").exists());
-        assert!(root.join("schema/sancang/sancang.dict.yaml").exists());
-        assert!(root.join("eassy/default/default.eassy.toml").exists());
+        assert!(root.join("sancang.dict.yaml").exists(), "★ 根部 dict 不许搬（日月/宇浩靠它）");
+        assert!(root.join("eassy/default/default.eassy.yaml").exists());
         assert!(root.join("model/zh-hans/zh-hans.gram").exists());
         // 全局配置保持扁平
         assert!(root.join("default.yaml").exists());
@@ -230,8 +314,8 @@ mod tests {
         fs::write(root.join("default.yaml"), b"global").unwrap();
 
         let moves = classify_staging(&root).unwrap();
-        assert_eq!(moves.len(), 3, "schema.toml 摊平 + prism/table 归目录");
-        assert!(root.join("luna_pinyin.schema.yaml").exists(), "配置是唯一扁平的那个");
+        assert_eq!(moves.len(), 2, "prism/table 归目录；配置留在子目录（build 布局自 2026-10-20 起如此）");
+        assert!(root.join("luna_pinyin").join("luna_pinyin.schema.yaml").exists(), "配置留在方案目录");
         assert!(
             root.join("luna_pinyin_simp").join("luna_pinyin_simp.prism.bin").exists(),
             "prism 必须分目录"
@@ -294,8 +378,8 @@ pub fn classify_staging(staging: &Path) -> io::Result<Vec<Move>> {
         return Ok(moves);
     }
 
-    // 只给这三类产物分目录；其余（尤其 `default.yaml`、`<方案>.schema.yaml`）必须留在根下。
-    // `default.yaml` 是 rime 的基础配置，搬走就等于把整个 workspace 弄丢 ✗
+    // 只给三类**产物**分目录；`default.yaml` 与 `<方案>.schema.yaml` 必须留在根下 ——
+    // rime 报过错：配置层是扁平查找，搬进子目录就 "nonexistent config file"，方案会消失。
     let wanted_dir = |name: &str| -> Option<String> {
         let is_artifact = name.ends_with(".prism.bin")
             || name.ends_with(".table.bin")
@@ -310,35 +394,9 @@ pub fn classify_staging(staging: &Path) -> io::Result<Vec<Move>> {
         Some(stem.to_string())
     };
 
-    // ① 子目录里位置不对的（配置）摊回根下
-    for entry in fs::read_dir(staging)? {
-        let path = entry?.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let folder = path
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_default();
-        for nested in fs::read_dir(&path)? {
-            let nested = nested?.path();
-            if !nested.is_file() {
-                continue;
-            }
-            let Some(name) = nested.file_name().map(|name| name.to_string_lossy().to_string()) else {
-                continue;
-            };
-            if wanted_dir(&name).is_some_and(|dir| dir == folder) {
-                continue;  // 位置正确
-            }
-            let target = staging.join(&name);
-            replace_if_newer(&nested, &target)?;
-            moves.push(Move { from: nested, to: target });
-        }
-        if fs::read_dir(&path)?.next().is_none() {
-            let _ = fs::remove_dir(&path);
-        }
-    }
+    // ① 兼容旧布局：把子目录里放错的**产物**摊回根下。
+    //    ★ 2026-10-20 起 build\<方案>\<方案>.schema.yaml 是**正确**布局（改了 librime 的
+    //      resource.cc），因此这里不再搬运 .schema.yaml / .dict.yaml，只处理 .bin。
 
     // ② 根下该分目录的产物归位
     for entry in fs::read_dir(staging)? {
@@ -382,3 +440,15 @@ fn replace_if_newer(source: &Path, target: &Path) -> io::Result<()> {
     }
 }
 
+
+/// 该方案是否用 `import_tables`（日月/宇浩系列那样把词库拆成共享表）。
+///
+/// 这类方案的词典必须留在用户目录根部：librime 的 `dictionary` / `import_tables`
+/// 只按「用户目录根 / 相对路径」解析，挪进 `schema/<id>/` 反而编不出来。
+fn scheme_uses_import_tables(root: &Path, stem: &str) -> bool {
+    // 注意：`import_tables` 写在**词库**（dict.yaml）里，不是 schema 里
+    let dict = root.join(format!("{stem}.dict.yaml"));
+    fs::read_to_string(dict)
+        .map(|text| text.contains("import_tables"))
+        .unwrap_or(false)
+}

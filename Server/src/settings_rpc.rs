@@ -93,16 +93,23 @@ impl SettingsService {
         let worker = thread::Builder::new().name("broker-settings".into()).spawn(move || {
             runtime.block_on(async move {
                 let mut clients = JoinSet::new();
+                // 连续 accept 失败次数，用于退避；成功接受一个连接后清零。
+                let mut failures: u32 = 0;
                 loop {
                     tokio::select! {
                         _ = &mut stopping => break,
                         accepted = server.accept(), if clients.len() < 32 => {
                             match accepted {
                                 Ok(connection) => {
-                                    // 空闲唤醒:任何 broker 管道活动(宿主 Ping /
-                                    // 设置查询)都视为"有人要用了",按需拉起
-                                    // 引擎与渲染器(五分钟空闲自退设计的另一半)。
-                                    crate::service_supervisor::wake_from_idle();
+                                    failures = 0;
+                                    // 空闲唤醒:外部 broker 管道活动(宿主 Ping /
+                                    // 设置查询)都视为"有人要用了",按需拉起引擎与渲染器
+                                    // (五分钟空闲自退设计的另一半)。
+                                    // 引擎/渲染器自己的连接要排除 —— 它们启动查配置、
+                                    // 关闭报通知都会连一下,把这种连接算作活动会让空闲
+                                    // 自退在几十毫秒内被自己人撤销(实测每 5 分钟重启一轮)。
+                                    let client = connection.client_executable().map(str::to_owned);
+                                    crate::service_supervisor::wake_from_idle(client.as_deref());
                                     let settings = settings.clone();
                                     let notifications = notifications.clone();
                                     let paths = paths.clone();
@@ -113,8 +120,26 @@ impl SettingsService {
                                     });
                                 }
                                 Err(error) => {
-                                    eprintln!("Weasel-Next-Server: settings listener failed: {error}");
-                                    break;
+                                    // ⚠️ **不能 break**。一次瞬时 accept 失败（客户端在
+                                    // 连接前就断开 → ERROR_NO_DATA）就让监听线程永久退出，
+                                    // 结果 broker 管道从命名空间消失、TIP 再也连不上，
+                                    // 语言栏显示「无法连接到 Rime」，而且只能重启进程才恢复。
+                                    // （2026-10-29 用户实测事故。）
+                                    //
+                                    // 这里改为退避重试：`RpcServer::accept` 已在连接失败时
+                                    // 丢弃坏实例，所以下一次会重建管道实例继续监听。
+                                    failures = failures.saturating_add(1);
+                                    let backoff = std::time::Duration::from_millis(
+                                        (50u64 << failures.min(4)).min(1000),
+                                    );
+                                    // 老代码用 eprintln!，但 Server 是 windows 子系统，
+                                    // 这几个字从来没进过日志；改走 broker 日志才看得见。
+                                    crate::service_supervisor::diagnostic_warn(&format!(
+                                        "settings listener accept failed: {error}; \
+                                         retrying in {} ms (consecutive failures {failures})",
+                                        backoff.as_millis()
+                                    ));
+                                    tokio::time::sleep(backoff).await;
                                 }
                             }
                         }

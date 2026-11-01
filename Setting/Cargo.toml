@@ -1,6 +1,6 @@
 [package]
 name = "Weasel-Next-Setting"
-version = "0.18.0"
+version = "0.18.5"
 edition = "2024"
 # 原创源码继续采用 BSD；链接 Slint 后的组合产物遵循 GPLv3，见 README。
 license.workspace = true
@@ -17,6 +17,12 @@ name = "Weasel-Next-Setting"
 path = "src/main.rs"
 required-features = ["gui"]
 
+# Direct2D 设置界面外壳（实验 v1）：独立 exe，Win32 + DirectComposition + D2D 自绘 + DWM 亚克力。
+# 不进安装包、不接管默认设置入口（无参数仍是 Slint 版）；单独启动用于对照与后续逐页迁移。
+[[bin]]
+name = "Weasel-Next-Setting-D2D"
+path = "src/d2d_shell/main.rs"
+
 [features]
 # `gui` = Slint 界面所需的全部依赖（含 bin 专用的 windows-* 绑定）。
 # 渲染后端默认 femtovg：纯 Rust + 系统 OpenGL，构建期不需要联网。
@@ -25,8 +31,6 @@ required-features = ["gui"]
 default = ["gui", "renderer-femtovg"]
 gui = [
     "dep:slint",
-    "dep:windows-core",
-    "dep:windows-strings",
     "dep:windows-version",
     "dep:raw-window-handle",
 ]
@@ -35,7 +39,6 @@ renderer-skia = ["slint/renderer-skia"]
 renderer-software = ["slint/renderer-software"]
 
 [dependencies]
-toml = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
@@ -44,10 +47,16 @@ libloading = "0.8"
 weasel-common = { path = "../common", features = ["wasm-metadata"] }
 weasel-style = { path = "../style" }
 slint = { version = "=1.17.1", optional = true, default-features = false, features = ["std", "backend-winit", "unstable-winit-030", "compat-1-2", "accessibility"] }
-windows-core = { version = "0.100", optional = true }
-windows-strings = { version = "0.100", optional = true }
+# 非可选：Direct2D 外壳（`Weasel-Next-Setting-D2D`）和 Slint bin 都要用；不打开 `gui` 时也编得动。
+windows-core = { version = "0.100" }
+windows-strings = { version = "0.100" }
 windows-version = { version = "0.100", optional = true }
 raw-window-handle = { version = "0.6", optional = true }
+# 下载页：GitHub 组织仓库列表 + 拉取搬运（复用 plum-next 的 relocate / org 模块）
+plum-next = { path = "../plum-next" }
+# 复用候选窗那套已核对的 D2D/DWrite/D3D11/DComp 绑定（含 Win32 窗口函数），
+# 避免在外壳里重新生成一份 windows-bindgen 绑定。
+weasel-theme-support = { path = "../theme/support" }
 
 [build-dependencies]
 # 构建脚本始终编译这些依赖（保持 build.rs 无条件可编译），但只有 `gui` 打开时才真正

@@ -182,6 +182,50 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// 「获取更多输入方案...」的实际动作：拉起 PlumNext。
+///
+/// `plum-next.exe` 与设置程序同目录（安装时一起带上）；它是控制台程序，
+/// `--select` 需要读 stdin，所以**不能**隐藏窗口 —— 就让控制台弹出来给用户选。
+fn launch_plum_next(hwnd: HWND) {
+    let rime_dir = with_state(|s| s.user.clone()).unwrap_or_default();
+    let plum = std::env::current_exe()
+        .ok()
+        .as_ref()
+        .and_then(|exe| exe.parent())
+        .map(|dir| dir.join("plum-next.exe"));
+
+    let notify = |text: String, warn: bool| {
+        let body = wide(&text);
+        let caption = wide("获取更多输入方案");
+        unsafe {
+            MessageBoxW(
+                Some(hwnd),
+                PCWSTR(body.as_ptr()),
+                PCWSTR(caption.as_ptr()),
+                if warn { MB_ICONWARNING_ } else { MB_ICONINFORMATION_ },
+            );
+        }
+    };
+
+    let Some(plum) = plum.filter(|p| p.exists()) else {
+        notify("没有找到 plum-next.exe（应与设置程序在同一目录）。".to_string(), true);
+        return;
+    };
+
+    let mut command = std::process::Command::new(plum);
+    command.arg("--select").arg(":preset");
+    if !rime_dir.as_os_str().is_empty() {
+        command.args(["--rime-dir", &rime_dir.to_string_lossy()]);
+    }
+    match command.spawn() {
+        Ok(_) => notify(
+            "已打开 PlumNext 配方管理器，选好并安装后请回到这里点「确定」以重新部署。".to_string(),
+            false,
+        ),
+        Err(e) => notify(format!("启动 PlumNext 失败：{e}"), true),
+    }
+}
+
 /// 打开「方案选单设定」。
 pub fn show(shared: &Path, user: &Path) -> Result<(), String> {
     let rows = switcher::list_schemas(shared, &user.to_path_buf())
@@ -645,6 +689,13 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                 id,
                 (wparam.0 >> 16) & 0xffff
             ));
+            if id == IDC_GET_SCHEMATA {
+                // 「获取更多输入方案...」：交给我们自己的配方管理器 PlumNext
+                // （`plum-next.exe --select :preset`，装在设置程序同目录）。
+                // 官方这个按钮是打开浏览器到 plum 页面；这里直接拉包，装完仍需重新部署。
+                launch_plum_next(hwnd);
+                return 1;
+            }
             if id == IDOK {
                 let list = unsafe { GetDlgItem(Some(hwnd), IDC_SCHEMA_LIST) };
                 // 照官方 SwitcherSettingsDialog::OnOK 的写法：按**控件的行数**循环，
@@ -704,7 +755,10 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                         let slice = unsafe { std::slice::from_raw_parts(raw, len) };
                         selected.push(String::from_utf16_lossy(slice));
                     }
-                    let path = state.user.join("schema").join("schema.toml");
+                    let path = state
+                        .user
+                        .join("schema")
+                        .join(weasel_style::switcher::SCHEMA_TABLE_FILE);
                     // 诊断：勾选行数 / 成功取回 id 的行数 / 最终要写的清单。
                     // 这三者不一致就说明"取 id"这一步还在失败（例如又用回了
                     // 报表模式下无效的 LVM_GETITEMDATA），别只看文件有没有变。
@@ -713,7 +767,7 @@ fn handle(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
                         checked.iter().filter(|on| **on).count(),
                         selected.len()
                     ));
-                    switcher::write_schema_toml(&path, &selected)
+                    switcher::write_schema_ids(&path, &selected)
                 });
                 match outcome {
                     Some(Ok(())) => {
@@ -795,4 +849,6 @@ fn read_hotkeys(shared: &Path) -> Option<String> {
 const LVIS_SELECTED_STATE: u32 = 0x0002;
 /// `MB_ICONWARNING`（与 dialogs.rs 里的常量同值）。
 const MB_ICONWARNING_: u32 = 0x0030;
+/// `MB_ICONINFORMATION`（Win32 user.h 的固定值）。
+const MB_ICONINFORMATION_: u32 = 0x0040;
 

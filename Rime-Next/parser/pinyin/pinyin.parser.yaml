@@ -1,0 +1,95 @@
+# 全拼 · 拼写运算**数据**
+#
+# ★ 本文件是**数据，不是正则**。正则由 `pinyin-schema` 从这里**计算**出来，再内联
+#   写进 `schema\pinyin\pinyin.schema.yaml` 的 `>>> generated <<<` 标记块。
+#
+#   重新生成：cargo run -p weasel-style --bin pinyin-schema
+#   改拼写行为（加模糊音、改简拼、改预编辑显示）请改这里，别手改方案里那段。
+#
+# 2026-10-28：以前这里直接存成品正则、方案用 `import_preset: pinyin.parser` 抄走。
+#   那样 parser 既是数据又是规则，双拼（键位表 → 代码算正则）和全拼两套路子。
+#   现在统一：parser 只放数据，正则一律由代码算、内联进方案。
+
+schema:
+  id: pinyin
+  parse: 全拼
+  name: "全拼"
+
+# ── 声母 ────────────────────────────────────────────────
+# 只用于**算**「双字母声母简拼」那一条：长度 ≥ 2 的声母会被合并成一条字符类
+# 规则（zh/ch/sh → `abbrev/^([zcs]h).+$/$1/`）。单字母声母不用写也行。
+initials:
+  - b
+  - p
+  - m
+  - f
+  - d
+  - t
+  - n
+  - l
+  - g
+  - k
+  - h
+  - j
+  - q
+  - x
+  - zh
+  - ch
+  - sh
+  - r
+  - z
+  - c
+  - s
+  - y
+  - w
+
+# ── 简拼（abbrev）────────────────────────────────────────
+# 按顺序生成。首字母那条是数据；双字母声母那条由上面的 `initials` 算出，
+# 追加在这批**之后**（顺序与历史行为一致）。
+abbrev:
+  - pattern: "^([a-z]).+$"
+    replacement: "$1"
+    comment: "简拼（首字母）"
+
+# ── 拼写变体 / 容错（derive）──────────────────────────────
+derive:
+  - pattern: "^([nl])ve$"
+    replacement: "$1ue"
+    comment: "nve = nue, lve = lue"
+  - pattern: "^([jqxy])u"
+    replacement: "$1v"
+    comment: "ju = jv"
+  - pattern: "un$"
+    replacement: "uen"
+    comment: "gun = guen"
+  - pattern: "ui$"
+    replacement: "uei"
+    comment: "gui = guei"
+  - pattern: "iu$"
+    replacement: "iou"
+    comment: "jiu = jiou"
+  - pattern: "([aeiou])ng$"
+    replacement: "$1gn"
+    comment: "dagn => dang"
+  - pattern: "([dtngkhrzcs])o(u|ng)$"
+    replacement: "$1o"
+    comment: "zho => zhong|zhou"
+  - pattern: "ong$"
+    replacement: "on"
+    comment: "zhonguo => zhong guo"
+  - pattern: "ao$"
+    replacement: "oa"
+    comment: "hoa => hao"
+  - pattern: "([iu])a(o|ng?)$"
+    replacement: "a$1$2"
+    comment: "tain => tian"
+
+# ── 预编辑显示转写（preedit_format）───────────────────────
+# 按数组顺序逐条 `xform` 应用到预编辑串。
+preedit:
+  - pattern: "([nl])v"
+    replacement: "$1ü"
+  - pattern: "([nl])ue"
+    replacement: "$1üe"
+  - pattern: "([jqxy])v"
+    replacement: "$1u"

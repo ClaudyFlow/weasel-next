@@ -151,6 +151,17 @@
             "description": "上屏音 wav（相对数据文件夹）",
             "type": "string",
             "title": "上屏音"
+          },
+          "mode": {
+            "description": "音乐模式：只放歌，不放打字机键音与上屏铃；音效模式：传统打字机音效",
+            "type": "string",
+            "enum": [ "effect", "music" ],
+            "title": "声音模式"
+          },
+          "music": {
+            "description": "音乐模式下要播放的音频（相对数据文件夹；也可放 用户文件夹 sound 下）",
+            "type": "string",
+            "title": "音乐文件"
           }
         }
       }
@@ -189,6 +200,22 @@
       },
       "/allow_rime_in_secure_fields": {
         "order": 25
+      },
+      "/sound/enabled": {
+        "order": 10
+      },
+      "/sound/mode": {
+        "order": 20,
+        "choices": [ "音效模式（打字机）", "音乐模式（放歌）" ]
+      },
+      "/sound/key": {
+        "order": 30
+      },
+      "/sound/commit": {
+        "order": 40
+      },
+      "/sound/music": {
+        "order": 50
       },
       "/app_options": {
         "order": 50

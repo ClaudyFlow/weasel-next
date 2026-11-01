@@ -843,7 +843,7 @@ mod tests {
             let rendered = CStr::from_ptr(text).to_str().unwrap().to_owned();
             rime_input_stat_string_free(text);
             assert_eq!(save, 0, "报表不落盘");
-            assert!(rendered.contains("上屏 2 次，输入 6 字"), "{rendered}");
+            assert!(rendered.contains("上屏 2 次 输入 6 字"), "{rendered}");
             assert!(rendered.contains("──────"), "{rendered}");
             assert!(rendered.contains("💻・luna_pinyin"), "{rendered}");
             assert!(!rendered.contains("名言一句"), "短款不显示名言");

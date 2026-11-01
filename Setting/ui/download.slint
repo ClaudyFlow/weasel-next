@@ -1,0 +1,341 @@
+// 下载页：浏览 github.com/Rime-Next 组织下的仓库，一键拉取并搬运到用户目录。
+
+import { Button, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+export struct RepoRow {
+    name: string,
+    description: string,
+    clone-url: string,
+    default-branch: string,
+    stargazers: int,
+    language: string,
+    category: string,
+    initial: string,
+    // 「已安装」/「可更新」/ 空（见 weasel_settings::download::badge_for）
+    badge: string,
+    // 远端最后一次 push 的时间，安装成功后记进清单，供下次比对
+    pushed-at: string,
+}
+
+component RepoCard inherits Rectangle {
+    in property <RepoRow> repo;
+    in property <bool> is-installing;
+    in property <bool> is-installed;
+    in property <bool> is-busy;
+    in property <float> download-frac;
+    callback install(string);
+
+    height: 60px;
+    background: transparent;
+
+    // ── 一行卡片；**安装中整条就是进度条**（用户 2026-10-30 三次确认的形态）─────
+    // 演变（别再来回改）：
+    // ① 最初整条填色 + 百分比写成 `{round(...)}`：Slint 插值必须写 `\{…}`，少了反斜杠
+    //    界面把**源码**印出来 ⇒「真难看，不是从左开始，中间突然多一块」；
+    // ② 我误改成"文字下面一条细轨道" ⇒「我不是要整个条作为进度条吗」；
+    // ③ 行内元素默认**顶对齐**（头像 30px 贴着行顶、按钮却被拉高到 44px）⇒
+    //    「安装按钮没有垂直居中」。Slint 的横向布局没有"交叉轴对齐"属性，
+    //    所以固定高度的东西（头像 / 按钮 / 百分比胶囊）都套一层
+    //    `VerticalLayout { alignment: center; vertical-stretch: 1; }`，文字用
+    //    `vertical-stretch: 1` + `vertical-alignment: center` 自然居中。
+    if root.is-installing : Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: #EDF1F7;
+        border-radius: 8px;
+        clip: true;
+
+        // 整条填充：x 永远 0，宽度按比例 —— 永远从最左边开始长
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            height: parent.height;
+            width: max(parent.width * root.download-frac, 0px);
+            background: #BFD6F0;
+        }
+
+        // ⚠️ 这一层必须**显式**吃满行高（26-10-30 22:5x 实测）：本分支里有两个孩子
+        // （整条填充 + 内容），Slint「唯一 layout 子元素自动填满父级」的规则在这里不生效，
+        // 内容于是保持自然高度 46px 贴顶 ⇒ 头像/百分比比行中心高 9px（用户：「都靠上」）。
+        HorizontalBox {
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                vertical-stretch: 1;
+                Rectangle {
+                    width: 30px;
+                    height: 30px;
+                    border-radius: 15px;
+                    background: #378ADD;
+                    Text {
+                        text: root.repo.initial;
+                        color: #ffffff;
+                        font-size: 15px;
+                        font-weight: 500;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            // 名称同样套居中容器：Text 自己的 vertical-alignment 在横向布局里不可靠（实测仍贴顶）
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                Text {
+                    text: root.repo.name;
+                    font-size: 14px;
+                    font-weight: 500;
+                    color: #17202b;
+                    overflow: elide;
+                }
+            }
+            // 百分比：占「安装」按钮那一格（同尺寸），压在整条进度上
+            VerticalLayout {
+                alignment: center;
+                vertical-stretch: 1;
+                Rectangle {
+                    width: 76px;
+                    height: 30px;
+                    border-radius: 6px;
+                    background: #ffffff99;
+                    Text {
+                        // ⚠️ 插值必须带反斜杠：`\{…}`
+                        text: "\{round(root.download-frac * 100)}%";
+                        color: #0d4a86;
+                        font-size: 13px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+
+    if !root.is-installing : HorizontalBox {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            vertical-stretch: 1;
+            Rectangle {
+                width: 30px;
+                height: 30px;
+                border-radius: 15px;
+                background: #378ADD;
+                Text {
+                    text: root.repo.initial;
+                    color: #ffffff;
+                    font-size: 15px;
+                    font-weight: 500;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            Text {
+                text: root.repo.name;
+                font-size: 14px;
+                font-weight: 500;
+                color: #17202b;
+                vertical-stretch: 0;
+                overflow: elide;
+            }
+            // 说明为空时**不要**占位：否则「名字 + 空说明行」这个文字块整体居中，
+            // 会把名字顶高约 7 逻辑 px（用户：「这不是都靠上」，26-10-30 22:5x 实测）
+            if root.repo.description != "" : Text {
+                text: root.repo.description;
+                font-size: 12px;
+                color: #888780;
+                vertical-stretch: 0;
+                wrap: word-wrap;
+            }
+        }
+        if root.repo.badge != "" : VerticalLayout {
+            alignment: center;
+            vertical-stretch: 1;
+            Text {
+                text: root.repo.badge;
+                font-size: 12px;
+                font-weight: 500;
+                color: root.repo.badge == "可更新" ? #C26A00 : #28A050;
+            }
+        }
+        // 按钮套一层"垂直居中"的容器：横向布局没有交叉轴对齐属性（见上）。
+        // 自绘，不再用 std-widgets 的 Button：fluent 的 hover 只是把底色从 #FFFFFFB3
+        // 换成 #F9F9F980（叠在白卡片上实测只差 3/255，等于没有）—— 用户 2026-10-30
+        // 「安装按钮的 hover 效果呢」。配色跟顶栏「保存并部署 / 关闭」同一套。
+        VerticalLayout {
+            alignment: center;
+            vertical-stretch: 1;
+            Rectangle {
+                width: 48px;
+                height: 30px;
+                border-radius: 6px;
+                background: root.is-busy ? #f7f9fb
+                    : (install-ta.pressed ? #d7dfe9 : (install-ta.has-hover ? #f1f5f9 : white));
+                border-width: 1px;
+                border-color: root.is-busy ? #e2e8ef : (install-ta.pressed ? #8fa0b4 : #c9d2de);
+                Text {
+                    // 已装过且远端更新过 ⇒ 按钮变成「更新」（2026-10-30 用户要「更新拉取」）
+                    text: root.repo.badge == "可更新" ? "更新" : "安装";
+                    font-size: 13px;
+                    color: root.is-busy ? #c0c4cc : #334155;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                install-ta := TouchArea {
+                    enabled: !root.is-busy;
+                    mouse-cursor: root.is-busy ? default : pointer;
+                    clicked => { root.install(root.repo.name); }
+                }
+            }
+        }
+    }
+
+}
+
+export component DownloadPage inherits VerticalBox {
+    in property <[RepoRow]> repos;
+    in property <[string]> categories;
+    in-out property <string> active-tab: "全部";
+    in property <string> installing-name: "";
+    in property <string> installed-name: "";
+    in property <string> net-error: "";
+    in property <float> download-frac: 0.0;
+    in property <string> list-status: "";
+
+    callback tab-selected(string);
+    callback install(string);
+    callback dismiss-net();
+
+    padding: 12px;
+    spacing: 10px;
+    // 这里**不能**写 alignment: start：写了之后布局就不再把多余高度分给
+    // `vertical-stretch: 1` 的列表区（实测列表停在 min-height 240px、下面一大片空白，
+    // 2026-10-30）。去掉 alignment 让「列表吃掉剩余高度」成立，其余行显式 vertical-stretch: 0。
+
+    HorizontalBox {
+        vertical-stretch: 0;
+        spacing: 8px;
+        Text {
+            text: "下载";
+            font-size: 18px;
+            font-weight: 700;
+            color: #17202b;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.list-status;
+            font-size: 12px;
+            color: #4b5563;
+            vertical-alignment: center;
+        }
+    }
+
+    if root.net-error != "" : Rectangle {
+        vertical-stretch: 0;
+        border-radius: 8px;
+        background: #FAECDA;
+        border-width: 1px;
+        border-color: #FAC775;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        padding-left: 8px;
+        padding-right: 8px;
+        HorizontalBox {
+            spacing: 8px;
+            Text {
+                text: "⚠ 网络问题";
+                font-size: 13px;
+                font-weight: 500;
+                color: #854F0B;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.net-error;
+                font-size: 13px;
+                color: #854F0B;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Button {
+                text: "✕";
+                clicked => { root.dismiss-net(); }
+            }
+        }
+    }
+
+    // 分类页签：以前用 HorizontalBox + 裸 Rectangle，两个页签各吃掉一半宽度 ——
+    // 「全部」变成一条 760px 的蓝色长条、「方案」孤零零飘在右半边（2026-10-30 截图）。
+    // 改成外层 HorizontalLayout + alignment: start，每个页签自己按文字撑开，
+    // 内边距交给里面那层布局。
+    HorizontalLayout {
+        vertical-stretch: 0;
+        alignment: start;
+        spacing: 6px;
+        for cat in root.categories : Rectangle {
+            border-radius: 6px;
+            // 悬停反馈：跟别的页的页签一致（main.slint / color-schemes.slint 都用 has-hover）
+            background: root.active-tab == cat ? #185FA5
+                : (cat-touch.has-hover ? #eef2f6 : transparent);
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 4px;
+                padding-bottom: 4px;
+                Text {
+                    text: cat;
+                    color: root.active-tab == cat ? #ffffff : #1a1a1a;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+            cat-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.tab-selected(cat); }
+            }
+        }
+    }
+
+    // 列表区：以前写死 380px，只有一个仓库时下面空出一大片白（2026-10-30 截图）。
+    // 改成吃掉剩余高度；min-height 兜底，窗口矮到放不下时仍可滚。
+    Rectangle {
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: #c9d2de;
+        background: #ffffff;
+        vertical-stretch: 1;
+        min-height: 240px;
+        ScrollView {
+            VerticalBox {
+                for repo in root.repos : RepoCard {
+                    repo: repo;
+                    is-installing: root.installing-name == repo.name;
+                    is-installed: root.installed-name == repo.name;
+                    is-busy: root.installing-name != "";
+                    download-frac: root.download-frac;
+                    install(name) => { root.install(name); }
+                }
+            }
+        }
+    }
+}

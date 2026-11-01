@@ -746,20 +746,26 @@ mod tests {
         assert_eq!(ReportKind::Yearly.empty_message(), "※ 本年没有任何记录。");
     }
 
+
+
     #[test]
     fn short_report_layout_is_exact() {
         let bucket = bucket_with(9, 20);
         let text = format_report(&input(ReportKind::Daily, &bucket, Style::Short));
         let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 11, "短款共 11 行");
         assert_eq!(lines[0], "上屏 9 次 输入 20 字");
-        assert_eq!(lines[1], "极速 90.0 击键5.0 码长3.0");
-        assert_eq!(lines[2], "均速 76.4 击键3.3 码长2.6");
-        assert_eq!(lines[3], "误触按键 12 次 误触率 12%");
-        assert_eq!(lines[4], "──────────────");
-        assert_eq!(lines[5], "单字40%; 2字60%", "短款单行拼接 ; 分隔");
-        assert_eq!(lines[6], "4码71%; 3码29%");
-        assert_eq!(lines[7], "──────────────");
-        assert_eq!(lines[8], "💻・luna_pinyin");
+        assert_eq!(lines[1], "实际极速 90.0 击键 5.0 码长 3.0");
+        assert_eq!(lines[2], "实际均速 76.4 击键 3.3 码长 2.6");
+        // 理论值 = 实际值 × 键准（88%）：击键 5.0×0.88=4.4、码长 3.0×0.88=2.6
+        assert_eq!(lines[3], "理论极速 90.0 击键 4.4 码长 2.6");
+        assert_eq!(lines[4], "理论均速 76.4 击键 2.9 码长 2.3");
+        assert_eq!(lines[5], "误触 12 次 误触率 12% 键准 88%");
+        assert_eq!(lines[6], "──────────────");
+        assert_eq!(lines[7], "单字40%; 2字60%", "短款单行拼接 ; 分隔");
+        assert_eq!(lines[8], "4码71%; 3码29%");
+        assert_eq!(lines[9], "──────────────");
+        assert_eq!(lines[10], "💻・luna_pinyin");
         assert!(!text.contains('━'), "短款不出现进度条");
         assert!(!text.contains("脚本："), "短款不显示脚本行");
     }
@@ -772,28 +778,31 @@ mod tests {
         report.quote = Some("名言一句");
         let text = format_report(&report);
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 21, "长款共 21 行（空槽位在拼装时被折叠）");
+        assert_eq!(lines.len(), 24, "长款共 24 行（空槽位在拼装时被折叠）");
         assert_eq!(lines[0], "───🚩 周统计 🚩────", "标题居中到 14 列");
-        assert_eq!(lines[1], "2026/10/02 13:05:00UTC+08:00");
+        assert_eq!(lines[1], "2026/10/02 13:05:00 UTC+08:00");
         assert_eq!(lines[2], "📈─────────────");
         assert_eq!(lines[3], "上屏 9 次 输入 20 字");
-        assert_eq!(lines[4], "极速 90.0 击键5.0 码长3.0");
-        assert_eq!(lines[5], "均速 76.4 击键3.3 码长2.6");
-        assert_eq!(lines[6], "误触按键 12 次 误触率 12%");
-        assert_eq!(lines[7], "（说明）", "长款追加 avgCodeLenDesc");
-        assert_eq!(lines[8], "📊─────────────");
-        assert_eq!(lines[9], "★★★★☆☆☆☆☆☆单字 40%", "字词进度条用皮肤 21");
-        assert_eq!(lines[10], "★★★★★★☆☆☆☆ 2字 60%");
-        assert_eq!(lines[11], "📊─────────────");
-        assert_eq!(lines[12], "★★★★★★★☆☆☆ 4码 71%");
-        assert_eq!(lines[13], "★★★☆☆☆☆☆☆☆ 3码 29%");
-        assert_eq!(lines[14], "──────────────");
-        assert_eq!(lines[15], "◉ 方案：luna_pinyin");
-        assert_eq!(lines[16], "◉ 平台：💻Weasel 1.0");
-        assert_eq!(lines[17], "──────────────");
-        assert_eq!(lines[18], format!("脚本：🐐🪶❄️{}", SCRIPT_VERSION));
+        assert_eq!(lines[4], "实际极速 90.0 击键 5.0 码长 3.0");
+        assert_eq!(lines[5], "实际均速 76.4 击键 3.3 码长 2.6");
+        assert_eq!(lines[6], "理论极速 90.0 击键 4.4 码长 2.6");
+        assert_eq!(lines[7], "理论均速 76.4 击键 2.9 码长 2.3");
+        assert_eq!(lines[8], "误触 12 次 误触率 12% 键准 88%");
+        assert_eq!(lines[9], "（说明）", "长款追加 avgCodeLenDesc");
+        assert_eq!(lines[10], "📊─────────────");
+        assert_eq!(lines[11], "★★★★☆☆☆☆☆☆单字 40%", "字词进度条用皮肤 21");
+        assert_eq!(lines[12], "★★★★★★☆☆☆☆ 2字 60%");
+        assert_eq!(lines[13], "📊─────────────");
+        assert_eq!(lines[14], "★★★★★★★☆☆☆ 4码 71%");
+        assert_eq!(lines[15], "★★★☆☆☆☆☆☆☆ 3码 29%");
+        assert_eq!(lines[16], "──────────────");
+        assert_eq!(lines[17], "◉ 方案：luna_pinyin");
+        assert_eq!(lines[18], "◉ 平台：💻Weasel 1.0");
         assert_eq!(lines[19], "──────────────");
-        assert_eq!(lines[20], "名言一句");
+        assert_eq!(lines[20], format!("脚本：🐐🪶❄️{}", SCRIPT_VERSION));
+        assert_eq!(lines[21], "──────────────");
+        assert_eq!(lines[22], "知识从我而来，问题到我为止。", "名言前固定一行");
+        assert_eq!(lines[23], "名言一句");
     }
 
     #[test]

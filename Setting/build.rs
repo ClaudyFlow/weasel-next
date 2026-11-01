@@ -22,6 +22,8 @@ fn main() {
             "Windows.Win32.DwmExtendFrameIntoClientArea",
             "Windows.Win32.DWMWA_SYSTEMBACKDROP_TYPE",
             "Windows.Win32.DWMSBT_MAINWINDOW",
+            "Windows.Win32.DWMSBT_TRANSIENTWINDOW",
+            "Windows.Win32.DWMWA_USE_IMMERSIVE_DARK_MODE",
             "Windows.Win32.MARGINS",
             "Windows.Win32.GetWindowLongW",
             "Windows.Win32.GWL_STYLE",

@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 
 const DOWNSCALE: i32 = 2;
-const BLUR_RADIUS: usize = 6;
+const BLUR_RADIUS: usize = 6; // 之前的模糊效果：半径 6，三趟，降采样 2（σ≈6.5）
 
 /// 抓 `(x, y, w, h)` 那块屏幕，降采样后模糊，返回 BGRA（自顶向下）。
 pub unsafe fn capture_blurred(x: i32, y: i32, w: i32, h: i32) -> Option<(Vec<u8>, u32, u32)> {

@@ -17,6 +17,8 @@ use ash::{khr, vk, Entry};
 
 const WM_DESTROY: u32 = 0x0002;
 const WM_KEYDOWN: u32 = 0x0100;
+const WM_NCHITTEST: u32 = 0x0084;
+const HTCAPTION: isize = 2;
 const VK_ESCAPE: usize = 0x1B;
 
 pub(crate) unsafe extern "system" fn wnd_proc(
@@ -32,6 +34,8 @@ pub(crate) unsafe extern "system" fn wnd_proc(
                 windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);
                 windows::Win32::Foundation::LRESULT(0)
             }
+            // 整个窗口可拖动：命中测试返回"标题栏"，系统接管鼠标移动（用户要看半透明效果）
+            WM_NCHITTEST => windows::Win32::Foundation::LRESULT(HTCAPTION),
             WM_KEYDOWN if wp.0 == VK_ESCAPE => {
                 windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);
                 windows::Win32::Foundation::LRESULT(0)

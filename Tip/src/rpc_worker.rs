@@ -33,19 +33,36 @@ const COMMAND_TIMEOUT: Duration = Duration::from_millis(80);
 /// 80ms 的常规预算几乎必然超时 → 该键按英文回退直接交给应用，用户看到的就是
 /// "前几个字没进入输入法"。首键给更宽的预算：它已被输入法吞下，不会漏给应用，
 /// 只是可能晚几十毫秒出现在输入框里。
-const CONNECT_KEY_TIMEOUT: Duration = Duration::from_millis(500);
+///
+/// 2026-10-29 实测：引擎空闲自退后，broker 被唤醒到 `librime initialized` 要
+/// **1010 ms**（`broker.log` 12:03:59.516 → server.log 12:04:00.529），原来 500ms
+/// 的预算必然先超时 ⇒ 停一会儿再打字时第一个字母丢失/变英文。这里放宽到 1200ms，
+/// 正好盖住冷启动；配合空闲自退从 5 分钟放宽到 30 分钟，这种停顿会很少遇到。
+const CONNECT_KEY_TIMEOUT: Duration = Duration::from_millis(1200);
+/// 唤醒后端后等待它就绪的重试参数（总预算 ≈ 次数 × 间隔 ≈ 960 ms）。
+///
+/// broker 被唤醒到引擎 `librime initialized` 实测要 ~1010 ms（见
+/// [`CONNECT_KEY_TIMEOUT`] 的实测记录）。旧实现唤醒后**一次都不等**就宣告连接
+/// 失败，于是空闲自退之后的头好几键全部落到"英文直通"，用户看到的就是
+/// "打不出字 / 切方案后卡很久"。这里改成：先唤醒，再等后端起来重试，
+/// 全都连不上才宣告失败。
+const WAKE_RETRY_INTERVAL: Duration = Duration::from_millis(120);
+/// 唤醒后的重试次数；与 `WAKE_RETRY_INTERVAL` 相乘即等待总预算。
+const WAKE_RETRIES: usize = 8;
+/// 两次唤醒之间的冷却；后端确实起不来时不至于每个按键都去戳一次 broker。
+const WAKE_COOLDOWN: Duration = Duration::from_millis(1500);
 /// 后端**可能正在忙**时的按键预算（引擎刚重启、刚切上下文/页面、刚切中英）。
 ///
 /// 这些时刻 RPC 连接还在，走不到上面的 `CONNECT_KEY_TIMEOUT` 分支；但后端要重建会话
 /// 或等一次布局往返，80ms 常常不够 → 前几个字母被英文直通给应用。按键已经被输入法
 /// 吞下，多等一会儿只是晚几十毫秒出现，不会漏给应用，所以这里统一放宽。
-const BUSY_KEY_TIMEOUT: Duration = Duration::from_millis(600);
+const BUSY_KEY_TIMEOUT: Duration = Duration::from_millis(1000);
 /// 一条命令**轮到被派发时**至少还要有的预算。
 ///
-/// 用得着它的场景是"排队被拖过期"：首键在跑连接握手（最长 500ms），后面几个键
+/// 用得着它的场景是"排队被拖过期"：首键在跑连接握手（最长 1200ms），后面几个键
 /// 的 deadline 是入队时按 80ms 定的，轮到它们时早已过期。那些键已经被输入法吞下，
 /// 直接丢会让开头几个字母凭空消失；给一个下限让它们仍然被送出去。
-const MIN_DISPATCH_BUDGET: Duration = Duration::from_millis(120);
+const MIN_DISPATCH_BUDGET: Duration = Duration::from_millis(300);
 /// 宿主线程等待按键结果时比预算多留的余量，避免在边界上误判超时。
 const HOST_WAIT_MARGIN: Duration = Duration::from_millis(60);
 /// 停止工作线程时等待原生线程退出的最长毫秒数。
@@ -477,6 +494,8 @@ struct WorkerState {
     client: Option<Connection>,
     /// 与宿主线程共享的通知队列及 epoch 状态。
     push: Arc<PushTarget>,
+    /// 上一次为唤醒后端而戳 broker 的时间；用于冷却，避免每个按键都去戳一次。
+    last_wake: Instant,
 }
 
 impl WorkerState {
@@ -558,14 +577,31 @@ impl WorkerState {
     /// 管道活动后就地拉起引擎与渲染器——下一次 ensure_connected 就能连上。
     /// 本键穿透(字母直接上屏)是空闲唤醒的预期代价。
     async fn ensure_connected(&mut self) {
-        if self.client.is_none() {
-            self.client = connect_client(&self.pipe_name, &self.push).await;
-            if self.client.is_none() {
-                self.push.connection_failed.store(true, Ordering::Release);
-                self.push.notify();
-                wake_broker().await;
+        if self.client.is_some() {
+            return;
+        }
+        if let Some(client) = connect_client(&self.pipe_name, &self.push).await {
+            self.client = Some(client);
+            return;
+        }
+        // 连不上多半是"五分钟不打字 → 引擎空闲自退"。顺序很关键：
+        // 旧代码先置 connection_failed 再唤醒，宿主当帧就把这一键按英文穿透了，
+        // 而且唤醒后不等引擎起来，后面连着几键同样落空。改成先唤醒再等它就绪，
+        // 全都失败才宣告不可用。
+        let now = Instant::now();
+        if now.duration_since(self.last_wake) >= WAKE_COOLDOWN {
+            self.last_wake = now;
+            wake_broker().await;
+            for _ in 0..WAKE_RETRIES {
+                tokio::time::sleep(WAKE_RETRY_INTERVAL).await;
+                if let Some(client) = connect_client(&self.pipe_name, &self.push).await {
+                    self.client = Some(client);
+                    return;
+                }
             }
         }
+        self.push.connection_failed.store(true, Ordering::Release);
+        self.push.notify();
     }
 
     /// 先使共享 epoch 失效，再取出当前会话供调用方关闭。
@@ -819,6 +855,7 @@ impl RpcWorker {
             pipe_name,
             client: None,
             push: self.push.clone(),
+            last_wake: Instant::now(),
         };
         let module = crate::module::ModuleLease::new();
         let thread = thread::Builder::new()
@@ -866,6 +903,8 @@ impl RpcWorker {
         } else {
             COMMAND_TIMEOUT
         };
+        // 乙-1 插桩：量的是**宿主线程被这一键堵住多久**（= 用户感觉到的卡顿）。
+        let latency = crate::key_latency::scoped(budget);
         if commands
             .try_send(RpcCommand::KeyEvent {
                 event,
@@ -875,6 +914,7 @@ impl RpcWorker {
             .inspect_err(|error| report("key-queue", None, error))
             .is_err()
         {
+            latency.finish(crate::key_latency::Outcome::Disconnect, false);
             return None;
         }
 
@@ -882,6 +922,7 @@ impl RpcWorker {
             Ok(Some(value)) => {
                 // 这一次往返是通的 → 后端恢复正常，后续按键回到常规预算
                 self.push.slow.store(false, Ordering::Release);
+                latency.finish(crate::key_latency::Outcome::Ok, value.eaten);
                 Some(value)
             }
             result => {
@@ -891,6 +932,7 @@ impl RpcWorker {
                 // The runtime can be descheduled past its 80ms timer. The host
                 // must invalidate synchronously before passing the key through.
                 self.push.invalidate();
+                latency.finish(crate::key_latency::Outcome::Timeout, false);
                 None
             }
         }
@@ -1035,6 +1077,8 @@ impl RpcWorker {
     pub fn stop(&mut self) {
         self.push.window.store(0, Ordering::Release);
         self.commands.take();
+        // 乙-1：进程/上下文即将收摊，把还没落盘的按键延迟采样刷出去。
+        crate::key_latency::flush_pending();
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
@@ -1419,6 +1463,7 @@ mod tests {
             pipe_name: String::new(),
             client: None,
             push: push.clone(),
+            last_wake: Instant::now(),
         };
         let (sender, commands) = tokio::sync::mpsc::channel(1);
         let (_stop, stop_receiver) = tokio::sync::oneshot::channel();
@@ -1450,6 +1495,7 @@ mod tests {
             pipe_name: name,
             client: None,
             push: Arc::default(),
+            last_wake: Instant::now(),
         };
         tokio::time::timeout(Duration::from_secs(1), async {
             for action in [ContextAction::Blur] {
@@ -1510,6 +1556,7 @@ mod tests {
                 pipe_name: name,
                 client: None,
                 push: push.clone(),
+                last_wake: Instant::now(),
             };
             tokio::time::timeout(Duration::from_secs(2), async {
                 state
@@ -1549,6 +1596,7 @@ mod tests {
             pipe_name: name,
             client: None,
             push: push.clone(),
+            last_wake: Instant::now(),
         };
         let (sender, commands) = tokio::sync::mpsc::channel(1);
         let (_stop, stopped) = tokio::sync::oneshot::channel();
@@ -1560,9 +1608,13 @@ mod tests {
             }))
             .unwrap();
         drop(sender);
-        tokio::time::timeout(Duration::from_secs(1), state.run(commands, stopped))
-            .await
-            .unwrap();
+        // 后端忙时按键预算是 BUSY_KEY_TIMEOUT，等它跑完才能断言"放弃并回退"。
+        tokio::time::timeout(
+            BUSY_KEY_TIMEOUT + HOST_WAIT_MARGIN + Duration::from_millis(300),
+            state.run(commands, stopped),
+        )
+        .await
+        .unwrap();
         assert!(push.connection_failed.load(Ordering::Acquire));
         assert_eq!(push.current_epoch(), 0);
         assert!(push.updates.lock().unwrap().is_empty());
@@ -1595,8 +1647,9 @@ mod tests {
                     _ => panic!("expected key"),
                 };
                 assert!(token.as_ref().unwrap().connection_epoch > 0);
-                // 首键宽限已放宽到 500ms：这里必须睡更久，才能继续验证"超时→英文回退"。
-                tokio::time::sleep(Duration::from_millis(700)).await;
+                // 首键宽限是 CONNECT_KEY_TIMEOUT + HOST_WAIT_MARGIN：这里必须睡更久，
+                // 才能继续验证"超时→英文回退"。写成算式，免得以后改超时又忘了同步。
+                tokio::time::sleep(CONNECT_KEY_TIMEOUT + HOST_WAIT_MARGIN + Duration::from_millis(150)).await;
                 let _ = connection
                     .send_key_event_response(
                         key.request_id,
@@ -1775,7 +1828,8 @@ mod tests {
         assert!(worker.process_key_event(translated_key()).is_none());
         received.recv_timeout(Duration::from_secs(2)).unwrap();
         worker.stop();
-        assert!(started.elapsed() < Duration::from_secs(1));
+        // 上界就是首键预算（握手停滞时最多等到这么久），加一点调度余量。
+        assert!(started.elapsed() < CONNECT_KEY_TIMEOUT + HOST_WAIT_MARGIN + Duration::from_millis(400));
         let _ = finish.send(());
         server.join().unwrap();
     }

@@ -5,12 +5,17 @@
 #
 # 用法：pwsh -File script\capture-window.ps1 -Title "Weasel-Next 皮肤预览" -Out shot.png
 param(
-    [Parameter(Mandatory = $true)][string]$Title,
+    [string]$Title = '',
     [Parameter(Mandatory = $true)][string]$Out,
     [int]$DelayMs = 1200,
     [int]$Padding = 0,
     [string]$Class = '',
-    [int]$ProcessId = 0
+    [int]$ProcessId = 0,
+    # 抓屏前把窗口提到最前（DComp/亚克力窗口被别的窗口挡住时，CopyFromScreen 会抓到别人）。
+    [switch]$BringToFront,
+    # 直接给 HWND：标题含全角冒号等字符时，命令行传参容易被编码吃掉（2026-10-28 踩到）。
+    # 注意别叫 $Hwnd —— PowerShell 变量名不分大小写，会被下面的 `$hwnd` 局部变量覆盖。
+    [long]$Handle = 0
 )
 
 Add-Type -TypeDefinition @'
@@ -27,6 +32,8 @@ public static class Win {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 }
 '@
@@ -37,7 +44,8 @@ Start-Sleep -Milliseconds $DelayMs
 # 定位窗口：优先按「类名 + 进程号」，其次按标题。
 # （主题窗口的标题在跨进程读取时可能是空的，所以类名更可靠。）
 $hwnd = [IntPtr]::Zero
-if ($Class -ne '') {
+if ($Handle -ne 0) { $hwnd = [IntPtr]$Handle }
+if ($hwnd -eq [IntPtr]::Zero -and $Class -ne '') {
     $candidates = New-Object System.Collections.ArrayList
     $cb = [Win+EnumProc]{
         param($h, $l)
@@ -54,8 +62,15 @@ if ($Class -ne '') {
     if ($candidates.Count -gt 0) { $hwnd = $candidates[0] }
 }
 if ($hwnd -eq [IntPtr]::Zero) { $hwnd = [Win]::FindWindowW($null, $Title) }
-if ($hwnd -eq [IntPtr]::Zero) { Write-Error "找不到窗口: title=$Title class=$Class pid=$ProcessId"; exit 1 }
+if ($hwnd -eq [IntPtr]::Zero) { Write-Error "找不到窗口: title=$Title class=$Class pid=$ProcessId hwnd=$Handle"; exit 1 }
 if (-not [Win]::IsWindowVisible($hwnd)) { Write-Error "窗口不可见: $Title"; exit 2 }
+
+if ($BringToFront) {
+    # HWND_TOPMOST(-1) + SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW
+    [void][Win]::SetWindowPos($hwnd, [IntPtr](-1), 0, 0, 0, 0, 0x0001 -bor 0x0002 -bor 0x0040)
+    [void][Win]::SetForegroundWindow($hwnd)
+    Start-Sleep -Milliseconds 500
+}
 
 $rect = New-Object Win+RECT
 [void][Win]::GetWindowRect($hwnd, [ref]$rect)

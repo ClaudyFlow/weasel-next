@@ -1,0 +1,134 @@
+# Rime Schema
+# encode: utf-8
+# newline: lf
+---
+schema:
+  id: pinyin.luna
+  name: 明月拼音
+  version: 2026.10.28
+  author:
+    - 佛振 <chen-sst@gmail.com>
+  description: |
+    Rime-Next 的无调全拼方案。
+  dependency:
+    - stroke
+###
+switch:
+  - name: ascii_mode
+    state: [ 中文, 西文 ]
+    reset: 0
+  - name: full_shape
+    state: [ 半角, 全角 ]
+    reset: 0
+  - name: zh_hant
+    state: [ 簡體, 繁體 ]
+    reset: 0
+  - name: ascii_punct
+    state: [ 。，, ．， ]
+###
+engine:
+  processor:
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentor:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translator:
+    - punct_translator
+    - table_translator@custom_phrase
+    - reverse_lookup_translator
+  filter:
+    - { name: simplifier@zh_hans, when: "!zh_hant" }
+    - { name: simplifier@zh_hant, when: "zh_hant" }
+    - uniquifier
+###
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcba
+  initial: zyxwvutsrqponmlkjihgfedcba
+  delimiter: "'"
+  # >>> generated: pinyin-schema from Rime-Next\parser\pinyin\pinyin.parser.yaml — 不要手改 <<<
+  algebra:
+    - abbrev/^([a-z]).+$/$1/  # 简拼（首字母）
+    - abbrev/^([zcs]h).+$/$1/  # 简拼（zh, ch, sh）
+    - derive/^([nl])ve$/$1ue/  # nve = nue, lve = lue
+    - derive/^([jqxy])u/$1v/  # ju = jv
+    - derive/un$/uen/  # gun = guen
+    - derive/ui$/uei/  # gui = guei
+    - derive/iu$/iou/  # jiu = jiou
+    - derive/([aeiou])ng$/$1gn/  # dagn => dang
+    - derive/([dtngkhrzcs])o(u|ng)$/$1o/  # zho => zhong|zhou
+    - derive/ong$/on/  # zhonguo => zhong guo
+    - derive/ao$/oa/  # hoa => hao
+    - derive/([iu])a(o|ng?)$/a$1$2/  # tain => tian
+  # >>> end generated <<<
+###
+translator:
+  # >>> generated: pinyin-schema from Rime-Next\parser\pinyin\pinyin.parser.yaml — 不要手改 <<<
+  preedit_format:
+    - xform/([nl])v/$1ü/
+    - xform/([nl])ue/$1üe/
+    - xform/([jqxy])v/$1u/
+  # >>> end generated <<<
+  # dict/prism 是两个变体共用的（纯简体词库 pinyin.luna），提到这一层共享；
+  # 引擎把本层配置深合并进各变体，变体只写各自不同的 model（见下）。
+  # 字形差异交给 filter 的 opencc（见 zh_hans / zh_hant）。
+  dict: pinyin.luna
+  # 棱镜名 = 方案 id（用户 2026-10-28 20:0x 定的规矩）：棱镜是本方案的拼写产物，
+  # 部署时按这个名字输出 `build/pinyin/luna/pinyin.luna.prism.bin`；别的方案**不能共用**
+  # 这个名字（同名 = 后编译的覆盖前者，实测会把对方的拼写表冲掉）。
+  prism: pinyin.luna
+  # 繁简双变体：simp/trad 嵌在 translator 下，引擎按 `zh_hant` 开关切换
+  # （switch 里声明，引擎自动绑定）；字形由 filter 的两个 simplifier 切（t2s/s2t）。
+  simp:
+    model: zh-han.simp
+  trad:
+    model: zh-han.trad
+###
+custom_phrase:
+  dictionary: ""
+  user_dict: custom_phrase
+  db_class: stabledb
+  enable_completion: false
+  enable_sentence: false
+  initial_quality: 1
+# 变体开关名不再单独声明：引擎从 `switch:` 里的 `zh_hant` 直接推断
+# （translator 的 @simp/@trad 与 filter 的 simplifier 都绑这个开关）。
+zh_hans:
+  # 简体保底：zh_hant 关时由 filter 的 when="!zh_hant" 套用 t2s。
+  opencc_config: t2s.json
+zh_hant:
+  # 繁体输出：zh_hant 开时由 filter 的 when="zh_hant" 套用 s2t（台湾习惯改 s2twp.json）。
+  opencc_config: s2t.json
+###
+reverse_lookup:
+  schema: stroke
+  enable_completion: true
+  prefix: "`"
+  suffix: "'"
+  tips: 〔筆畫〕
+  preedit_format:
+    - xlit/hspnz/一丨丿丶乙/
+  comment_format:
+    - xform/([nl])v/$1ü/
+###
+punctuator:
+  import_preset: symbols
+###
+key_binder:
+  import_preset: default
+###
+recognizer:
+  import_preset: default
+  patterns:
+    punct: '^/([0-9]0?|[A-Za-z]+)$'
+    reverse_lookup: "`[a-z]*'?$"
+...

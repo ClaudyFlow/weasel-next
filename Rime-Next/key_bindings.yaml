@@ -31,8 +31,9 @@ paging_with_minus_equal:
 
 paging_with_comma_period:
   __append:
-    - { when: paging, accept: comma, send: Page_Up }
-    - { when: has_menu, accept: period, send: Page_Down }
+    # 用户 2026-10-31 15:1x：逗号/句号 = **前后选择候选**（等于上下键），不是翻页。
+    - { when: has_menu, accept: comma, send: Up }
+    - { when: has_menu, accept: period, send: Down }
 
 paging_with_brackets:
   __append:
@@ -44,12 +45,13 @@ numbered_mode_switch:
     - { when: always, accept: Control+Shift+1, select: .next }
     - { when: always, accept: Control+Shift+2, toggle: ascii_mode }
     - { when: always, accept: Control+Shift+3, toggle: full_shape }
-    - { when: always, accept: Control+Shift+4, toggle: simplification }
+    - { when: always, accept: Control+Shift+4, toggle: zh_hant }
+    - { when: always, accept: Control+Shift+F, toggle: zh_hant }
     - { when: always, accept: Control+Shift+5, toggle: extended_charset }
     - { when: always, accept: Control+Shift+exclam, select: .next }
     - { when: always, accept: Control+Shift+at, toggle: ascii_mode }
     - { when: always, accept: Control+Shift+numbersign, toggle: full_shape }
-    - { when: always, accept: Control+Shift+dollar, toggle: simplification }
+    - { when: always, accept: Control+Shift+dollar, toggle: zh_hant }
     - { when: always, accept: Control+Shift+percent, toggle: extended_charset }
 
 windows_compatible_mode_switch:

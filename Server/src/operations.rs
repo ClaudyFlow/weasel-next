@@ -191,7 +191,7 @@ fn deploy(services: &mut OperationServices) -> OperationOutcome {
             use std::io::Write as _;
             let manifest_path =
                 weasel_common::deploy_manifest::state_path(&services.paths.user_data);
-            let shared = services.paths.executable_directory.join("Rime-Next");
+            let shared = weasel_common::rime_layout::data_dir(&services.paths.executable_directory);
             if let Ok(current) =
                 weasel_common::deploy_manifest::collect(&shared, &services.paths.user_data)
             {
@@ -270,7 +270,7 @@ fn deploy(services: &mut OperationServices) -> OperationOutcome {
 
     // 部署**成功**才记录（失败一律不动）：下次这些文件夹内容未变即可整段跳过。
     if result.is_ok() {
-        let shared = services.paths.executable_directory.join("Rime-Next");
+        let shared = weasel_common::rime_layout::data_dir(&services.paths.executable_directory);
         if let Ok(current) =
             weasel_common::deploy_manifest::collect(&shared, &services.paths.user_data)
         {

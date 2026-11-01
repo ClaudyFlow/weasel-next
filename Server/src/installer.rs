@@ -25,10 +25,26 @@ fn startup_command(directory: &std::path::Path) -> String {
     format!("\"{}\"", directory.join("Weasel-Next-Server.exe").display())
 }
 
-/// 执行安装后部署，并在当前用户 Run 项尚未设置时登记 broker 自启动。
+/// 判断自启动命令是不是「本产品自己的 broker」。
 ///
-/// 部署失败会中止并返回错误。若已有同名注册表值则保留原值，不覆盖用户配置；
-/// 注册表访问或写入失败同样会返回错误。
+/// 用于区分用户手改的值与**旧版本目录**里的值：版本化安装后，从旧版本升级时
+/// Run 键仍指着 `...\Weasel-Next-<旧版本>\Weasel-Next-Server.exe`，必须改指新版本，
+/// 否则重启后又把旧版本拉起来（2026-10-28 用户报的“重复安装”问题之一）。
+fn is_own_broker_command(command: &str) -> bool {
+    let command = command.trim();
+    let path = command
+        .strip_prefix('"')
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or(command);
+    std::path::Path::new(path)
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("Weasel-Next-Server.exe"))
+}
+
+/// 执行安装后部署，并登记/更新 broker 自启动项。
+///
+/// 部署失败会中止并返回错误。自启动项不存在时写入；已指向**其他版本目录**的
+/// Weasel-Next-Server.exe 时更新到当前版本；用户手改的其他命令保持不动。
 pub(crate) fn post_install() -> Result<(), Box<dyn std::error::Error>> {
     let directory = executable_directory()?;
     let status = Command::new(directory.join("Weasel-Next-Engine.exe"))
@@ -41,9 +57,17 @@ pub(crate) fn post_install() -> Result<(), Box<dyn std::error::Error>> {
 
     let run = CURRENT_USER.create(RUN_KEY)?;
     let expected = startup_command(&directory);
-    // 如果自启动项已经存在就保留，避免覆盖用户手动修改的启动命令
-    if run.get_string(RUN_VALUE).is_err() {
-        run.set_string(RUN_VALUE, expected)?;
+    match run.get_string(RUN_VALUE) {
+        Ok(existing) if existing == expected => {}
+        Ok(existing) if is_own_broker_command(&existing) => {
+            // 旧版本目录（或旧的非版本化目录）→ 切到当前版本。
+            run.set_string(RUN_VALUE, expected)?;
+        }
+        // 用户自定义的启动命令：保留，不覆盖。
+        Ok(_) => {}
+        Err(_) => {
+            run.set_string(RUN_VALUE, expected)?;
+        }
     }
     Ok(())
 }

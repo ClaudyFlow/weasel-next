@@ -1,0 +1,32 @@
+# Rime Dictionary
+# encode: utf-8
+# newline: lf
+---
+id: cangjie.5
+name: cangjie.5
+version: 2026.10.28
+sort: by_weight
+use_preset_vocabulary: false
+max_phrase_length: 7
+min_phrase_weight: 100
+column:
+  - text
+  - code
+  - stem
+import_tables:
+  - cangjie.5.base
+  - cangjie.5.stem
+  - cangjie.5.extended
+encoder:
+  exclude_patterns:
+    - '^x.*$'
+    - '^z.*$'
+  rules:
+    - length_equal: 2
+      formula: "AaAzBaBbBz"
+    - length_equal: 3
+      formula: "AaAzBaBzCz"
+    - length_in_range: [4, 10]
+      formula: "AaBzCaYzZz"
+  tail_anchor: "'"
+...

@@ -6,6 +6,84 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::sync::Arc;
 
+/// 用户配置（设置界面写的补丁）的路径：`<用户目录>/weasel.yaml`。
+///
+/// 2026-10-21 用户要求：**去掉 `custom` 后缀、改名 `weasel.yaml`、直接放在用户目录根**
+/// （`.weasel.lock` 也留根目录），内容也真的换成 YAML —— `style::parse_file` 本来就只认 YAML，
+/// 旧的 TOML 版补丁在皮肤页其实一直解析失败、静默降级成 `None`。
+pub fn user_config_path(user_data: &std::path::Path) -> std::path::PathBuf {
+    user_data.join("weasel.yaml")
+}
+
+/// 2026-10-21 的**中途落点**（迁移用）：`<用户目录>/weasel/weasel.yaml`。
+///
+/// 用户当天先要求「收进 `weasel\` 子目录」，随后改成「放在用户目录根」；这一份就是那段中间态，
+/// 迁移时要能认出来并搬回根部，否则用户会发现设置全丢了。
+pub fn interim_user_config_path(user_data: &std::path::Path) -> std::path::PathBuf {
+    user_data.join("weasel").join("weasel.yaml")
+}
+
+/// 一次性搬家：`<用户目录>\weasel\weasel.yaml`（2026-10-21 的中途落点，**本来就是 YAML**）
+/// → `<用户目录>\weasel.yaml`，搬完把空掉的 `weasel\` 子目录删掉。
+///
+/// 只在「新文件不存在」时做；返回 `Ok(true)` 表示这次真的搬了，调用方可以据此打日志。
+///
+/// ⚠️ 这不是 TOML→YAML 的格式迁移：**TOML 配置一概不读**（`weasel.custom.toml`
+/// 这类旧补丁由用户自己改成 YAML）。这里只搬同一份 YAML 文件的位置。
+pub fn migrate_interim_user_config(user_data: &std::path::Path) -> Result<bool, String> {
+    let new_path = user_config_path(user_data);
+    if new_path.exists() {
+        return Ok(false);
+    }
+    let interim = interim_user_config_path(user_data);
+    if !interim.is_file() {
+        return Ok(false);
+    }
+    let text = std::fs::read_to_string(&interim)
+        .map_err(|error| format!("{}: {error}", interim.display()))?;
+    std::fs::write(&new_path, text).map_err(|error| format!("{}: {error}", new_path.display()))?;
+    if let Some(dir) = interim.parent() {
+        let _ = std::fs::remove_file(&interim);
+        // 子目录空了才删；里面还有别的东西就留着，别替用户决定。
+        if std::fs::read_dir(dir).is_ok_and(|mut rest| rest.next().is_none()) {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+    Ok(true)
+}
+
+/// 程序文件夹里宿主配置的**唯一文件名**（2026-10-23 起唯一格式）：`<程序文件夹>/weasel.yaml`。
+///
+/// # 为什么强制 YAML
+///
+/// 1. `weasel_style::parse_file`（`style/src/lib.rs`，皮肤/配色读取的唯一入口）**只认 YAML**；
+///    它接手的是官方小狼毫那份 `weasel.yaml` 形状的数据，根本不解析 TOML。
+/// 2. 配置树与写盘序列化统一在 [`crate::yaml`]（`serde_json::Value` ⇄ YAML 文本）：设置界面
+///    早就在往用户目录写 `weasel.yaml`。程序文件夹那份若还是 TOML，同一个配置就有两种格式、
+///    两套解析分支，"读到哪份取决于扩展名"的坑会一直存在。
+/// 3. 读与写必须同一种格式，否则"改文件即生效"永远说不清该改哪份。
+///
+/// 因此 TOML/JSON **既不被读也不被写**，也没有 TOML→YAML 的迁移层：旧文件里没有
+/// `weasel.yaml` 时读不到配置，宿主就用手上的内嵌出厂默认值（不报错、不崩）。
+pub const PROGRAM_CONFIG_FILE: &str = "weasel.yaml";
+
+/// 程序文件夹宿主配置的正式路径：`<程序文件夹>/weasel.yaml`。
+pub fn program_config_path(executable_directory: &std::path::Path) -> std::path::PathBuf {
+    executable_directory.join(PROGRAM_CONFIG_FILE)
+}
+
+/// 解析一份宿主配置文本（**只有 YAML**），并要求根是对象。
+///
+/// 两处读取点（`Server/src/settings.rs`、`Setting/src/config.rs`）共用它，
+/// 保证"什么算合法宿主配置"只有一个定义。
+pub fn parse_config_text(text: &str) -> Result<Value, String> {
+    let value: Value = crate::yaml::to_value(text)?;
+    if !value.is_object() {
+        return Err("配置必须是对象".into());
+    }
+    Ok(value)
+}
+
 /// 可廉价克隆的不可变配置快照。
 ///
 /// 内部 JSON 通过引用计数共享；查询不会修改配置。调用
@@ -71,7 +149,7 @@ impl ConfigSnapshot {
     /// 只查 `app_options.<应用>` 里的布尔选项，不看全局值。
     ///
     /// 给"全局值来自主题文件"的选项用（例如 `inline_preedit` —— 它是
-    /// `theme.toml` 的 `style/inline_preedit`，不是宿主配置的全局键）。
+    /// `theme.yaml` 的 `style/inline_preedit`，不是宿主配置的全局键）。
     pub fn app_option_bool(&self, executable: &str, option: &str) -> Result<Option<bool>, String> {
         let Some(value) = self.application_value(executable, option)? else {
             return Ok(None);
@@ -84,7 +162,7 @@ impl ConfigSnapshot {
 
     /// 判断是否有任何应用需要外置 preedit 能力。
     ///
-    /// `theme_inline_preedit` 是主题文件（`theme.toml` 的 `style/inline_preedit`）的值：
+    /// `theme_inline_preedit` 是主题文件（`theme.yaml` 的 `style/inline_preedit`）的值：
     /// 它为 false 时组字串要画进候选窗，必须提前协商外置预编辑能力；此外只要任一应用
     /// 通过 `app_options.<应用>.inline_preedit` 显式关闭，也同样需要协商。
     pub fn needs_external_preedit(&self, theme_inline_preedit: bool) -> Result<bool, String> {
@@ -255,7 +333,7 @@ pub fn query<'a>(root: &'a Value, path: &str) -> Result<Option<&'a Value>, Strin
 mod tests {
     #[test]
     fn application_preedit_overrides_theme_default_and_enables_early_negotiation() {
-        // 全局值来自主题（theme.toml 的 style/inline_preedit），json 里只留逐应用覆盖
+        // 全局值来自主题（theme.yaml 的 style/inline_preedit），json 里只留逐应用覆盖
         let config = super::ConfigSnapshot::new(serde_json::json!({
             "app_options": {
                 "cmd.exe": {"inline_preedit": false},
@@ -383,4 +461,55 @@ mod tests {
         assert!(query(&root, ".missing | anything").is_err());
         assert_eq!(query(&root, ".").unwrap(), Some(&root));
     }
+
+    /// 手工临时目录（common 没有 tempfile dev-dependency）。
+    fn temporary_directory(name: &str) -> std::path::PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "weasel-common-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    /// ① YAML 能读：`weasel.yaml` 里的值必须原样变成配置对象。
+    #[test]
+    fn yaml_program_config_is_read() {
+        let directory = temporary_directory("yaml-read");
+        let text = r#"theme: ten
+sound:
+  enabled: false
+app_options:
+  cmd.exe:
+    ascii_mode: true
+"#;
+        let path = program_config_path(&directory);
+        std::fs::write(&path, text).unwrap();
+        let value = parse_config_text(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["theme"], "ten");
+        assert_eq!(value["sound"]["enabled"], false);
+        assert_eq!(value["app_options"]["cmd.exe"]["ascii_mode"], true);
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    /// ② 只有 TOML/JSON 时**读不到配置**：读取点只查 `weasel.yaml`，
+    /// 旧文件既不解析也不迁移，调用方拿到"没有文件"后走内嵌默认值（不报错、不崩）。
+    #[test]
+    fn legacy_toml_only_program_config_is_not_read() {
+        let directory = temporary_directory("toml-ignored");
+        std::fs::write(directory.join("weasel.toml"), b"theme = \"ten\"\n").unwrap();
+        std::fs::write(directory.join("weasel.json"), br#"{"theme":"seven"}"#).unwrap();
+        // 唯一的读取路径没文件 —— 这就是"读不到"，不是错误。
+        assert!(!program_config_path(&directory).exists());
+        assert!(
+            std::fs::read_to_string(program_config_path(&directory)).is_err(),
+            "weasel.toml 不许被当成 weasel.yaml 读"
+        );
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
 }
+

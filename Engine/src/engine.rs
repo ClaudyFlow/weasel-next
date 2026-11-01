@@ -30,14 +30,30 @@ use weasel_common::{
 /// 引擎工作队列的有界容量，用于限制待处理事件占用的内存。
 pub(crate) const QUEUE_CAPACITY: usize = 128;
 
+/// 一条输入连接多久没打字就回收它的**原生会话**（不是连接、更不是进程）。
+///
+/// 这是"连接池"的回收侧：省掉的是会话占的词库句柄与组合状态，进程常驻、
+/// 连接不断，所以再打字时只需重建会话（毫秒级），不必重新初始化 librime
+/// （实测 1010 ms，正是"停一会儿再打第一个字丢失"的根因）。
+pub(crate) const SESSION_IDLE_RECLAIM: Duration = Duration::from_secs(300);
+
 /// 等待 TIP 返回模式提示插入点的最长时间。
 ///
 /// 该期限只防止迟到的布局结果重新唤起旧提示；实际显示时长由 Renderer
 /// 根据用户配置从收到新提示时开始计算。
 const MODE_INDICATOR_LAYOUT_TIMEOUT: Duration = Duration::from_millis(800);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 逐键诊断日志是否开启（`WEASEL_ENGINE_VERBOSE=1`）。
+///
+/// 默认关闭：`诊断:` 那几行每键 3~4 条，`tracing-appender` 是同步无缓冲写盘，
+/// 实测每键 1~2ms —— 是"打字卡"里白付的钱。排查"按键没反应/候选不显示"时再打开。
+pub(crate) fn verbose_diagnostics() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("WEASEL_ENGINE_VERBOSE").is_some())
+}
+
 /// 全局配置决定哪些模式变化需要显示短暂提示。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InputModeIndicatorPolicy {
     /// 获得可编辑焦点及用户主动切换时显示。
     FocusAndSwitch,
@@ -116,6 +132,12 @@ pub(crate) enum Work {
     },
     /// 渲染器发来的候选项或其他界面操作。
     Renderer(RendererEvent),
+    /// 空闲巡检：回收长时间没打字的**原生会话**（[`Engine::reclaim_idle_sessions`]）。
+    ///
+    /// 只回收会话，进程、管道连接与 Rime 实例都留着 —— 连接是池，会话是池里按需
+    /// 取用的资源。这样既不占着词库句柄，也不会有"冷启动要重新初始化 librime"的
+    /// 代价（实测 1010 ms，正是"停顿一会儿再打字第一个字丢失"的根因）。
+    ReclaimIdle,
 }
 
 /// 某条输入连接在引擎中的原生会话及其路由、渲染快照。
@@ -128,8 +150,10 @@ struct ClientSession {
     connection: Arc<ClientConnection>,
     /// 连接存活标记；关闭后会话在引擎空闲处理时回收。
     alive: Arc<AtomicBool>,
-    /// 仅在引擎工作线程上调用的 Rime 会话。
-    session: librime::RimeSession,
+    /// 仅在引擎工作线程上调用的 Rime 会话；空闲回收后为 `None`，下次按键重建。
+    session: Option<librime::RimeSession>,
+    /// 最近一次真正处理打字的时间；空闲回收的判据。
+    last_typing: Instant,
     /// 会话状态版本；状态变化时递增，用于拒绝过期渲染操作。
     revision: u64,
     /// 绑定输入上下文令牌并跟踪焦点状态的路由。
@@ -144,6 +168,20 @@ struct ClientSession {
     pending_mode_indicator: Option<PendingModeIndicator>,
     /// 用于增量更新及连接能力切换的最近一次输入状态响应。
     last_response: KeyEventResponse,
+}
+
+impl ClientSession {
+    /// 取可变原生会话；`None` 表示会话已被空闲回收且此刻无法重建。
+    ///
+    /// 调用点必须先经过 [`Engine::ensure_session`]，因此这里返回 `None` 时
+    /// 放弃本次操作即可，绝不 `unwrap`。
+    fn session_mut(&mut self) -> Option<&mut librime::RimeSession> {
+        self.session.as_mut()
+    }
+    /// 记一次真实的打字活动，推迟本会话被空闲回收的时间。
+    fn touch(&mut self) {
+        self.last_typing = Instant::now();
+    }
 }
 
 /// 运行 Rime 输入会话并协调客户端、宿主布局与渲染器。
@@ -167,7 +205,7 @@ pub(crate) struct Engine {
     schema_path: std::path::PathBuf,
     /// 可选配置快照；缺省时使用每应用默认行为。
     settings: Option<weasel_common::settings::ConfigSnapshot>,
-    /// 主题决定的"编码画在哪"（`theme.toml` 的 `style/inline_preedit`）：
+    /// 主题决定的"编码画在哪"（`theme.yaml` 的 `style/inline_preedit`）：
     /// false = 组字串画进候选窗（官方出厂默认），true = 画在宿主应用里。
     /// `app_options.<应用>.inline_preedit` 可以逐应用覆盖它。
     theme_inline_preedit: bool,
@@ -233,15 +271,13 @@ fn host_response(mut response: KeyEventResponse) -> KeyEventResponse {
 /// 新组合开始且 Rime 状态确实改变时，使旧光标锚点失效。
 ///
 /// 返回 `true` 表示调用方必须等待本次组合对应的布局，避免用旧位置展示新候选项。
+/// 新组合不再清零锚点：沿用上一次的有效锚点，使首键候选窗立即出现（不再等布局），
+/// 随后由布局更新把窗口重定位到正确插入点。返回 `false` 表示未触发"等布局"等待。
 fn reset_anchor_for_new_composition(
-    previous: &KeyEventResponse,
-    next: &KeyEventResponse,
-    anchor: &mut RenderRect,
+    _previous: &KeyEventResponse,
+    _next: &KeyEventResponse,
+    _anchor: &mut RenderRect,
 ) -> bool {
-    if !previous.composing && next.composing && next.state_updated {
-        *anchor = RenderRect::default();
-        return true;
-    }
     false
 }
 
@@ -266,7 +302,7 @@ mod preedit_tests {
     use super::*;
 
     #[test]
-    fn new_composition_waits_for_its_own_layout() {
+    fn composition_keeps_last_anchor_and_shows_immediately() {
         let old = KeyEventResponse::default();
         let next = KeyEventResponse {
             composing: true,
@@ -275,6 +311,8 @@ mod preedit_tests {
             composition: "nihao".into(),
             ..Default::default()
         };
+        // 新组合沿用上一次的有效锚点：首键候选窗立即出现（不再等布局到达），
+        // 随后由布局更新把窗口重定位到正确插入点。锚点因此不被清零。
         let mut anchor = RenderRect {
             left: 10,
             right: 11,
@@ -282,13 +320,11 @@ mod preedit_tests {
             bottom: 40,
             valid: true,
         };
-        assert!(reset_anchor_for_new_composition(&old, &next, &mut anchor));
-        assert!(!anchor.valid);
-        assert!(!render_snapshot(1, 1, &next, &anchor).visible);
-        anchor.valid = true;
-        assert!(!reset_anchor_for_new_composition(&next, &next, &mut anchor));
-        assert!(anchor.valid);
+        assert!(!reset_anchor_for_new_composition(&old, &next, &mut anchor));
+        assert!(anchor.valid, "保留上次锚点，避免首键在 (0,0) 闪现");
         assert!(render_snapshot(1, 1, &next, &anchor).visible);
+        // 尚无有效锚点时（首键前的极早期），可见性仅由候选/组字状态决定。
+        assert!(render_snapshot(1, 1, &next, &RenderRect::default()).visible);
     }
 
     #[test]
@@ -376,15 +412,19 @@ fn trace_commit_reply(response: &KeyEventResponse) {
 /// 而服务端能看到全部按键与提交，一处即可覆盖所有应用。播放用
 /// `PlaySoundW(SND_ASYNC)` **异步**执行，绝不阻塞输入线程。
 ///
-/// 配置直接读运行目录下的 `weasel.toml`（不经设置界面，改完即生效）：
+/// 配置直接读运行目录下的 `weasel.yaml`（不经设置界面，改完即生效）：
 ///
-/// ```toml
-/// asset = "Rime-Next"
-/// [sound]
-/// enabled = true
-/// key = "sound/typewriter-key.wav"
-/// commit = "sound/typewriter-bell.wav"
+/// ```yaml
+/// asset: Rime-Next
+/// sound:
+///   enabled: true
+///   key: sound/typewriter-key.wav
+///   commit: sound/typewriter-bell.wav
 /// ```
+///
+/// 宿主配置的格式只有 YAML 一种（2026-10-23 起）：`style::parse_file` 只认 YAML，
+/// 配置树与序列化也统一在 `weasel_common::yaml`。旧 `weasel.toml` **一概不读**，
+/// 也没有迁移层 —— 读不到就当作没有这份配置。
 ///
 /// 默认关闭；文件缺失或播放失败一律静默。
 pub(crate) mod sound {
@@ -417,6 +457,12 @@ pub(crate) mod sound {
         enabled: bool,
         key: Option<PathBuf>,
         commit: Option<PathBuf>,
+        /// weasel.yaml 的 [sound] mode == "music"：只放歌，不放键音/上屏铃
+        music_mode: bool,
+        /// 音乐模式要播的文件
+        music: Option<PathBuf>,
+        /// 用户 weasel.yaml 里显式写了 key 就优先用它，不被 sound\ 的 wav 样本池盖掉
+        key_explicit: bool,
     }
 
     impl Config {
@@ -424,12 +470,15 @@ pub(crate) mod sound {
             Self {
                 enabled: self.enabled,
                 key: self.key.clone(),
+                key_explicit: self.key_explicit,
+                music_mode: self.music_mode,
+                music: self.music.clone(),
                 commit: self.commit.clone(),
             }
         }
     }
 
-    /// 运行目录：`weasel.toml` 与数据文件夹所在处。
+    /// 运行目录：`weasel.yaml` 与数据文件夹所在处。
     fn runtime_dir() -> Option<PathBuf> {
         let exe = std::env::current_exe().ok()?;
         exe.parent().map(PathBuf::from)
@@ -477,9 +526,9 @@ pub(crate) mod sound {
         (config.enabled, config.key.clone(), config.commit.clone())
     }
 
-    /// 把**程序文件夹**的 `weasel.toml` 与**用户目录**的 `weasel.custom.toml` 叠起来。
+    /// 把**程序文件夹**的 `weasel.yaml` 与**用户目录**的 `weasel.yaml` 叠起来。
     ///
-    /// 设置界面的「启用声音」开关写的是用户目录那份（`[sound] enabled = false`），
+    /// 设置界面的「启用声音」开关写的是用户目录那份（`sound: enabled: false`），
     /// 而以前这里只读程序文件夹的 `weasel.toml` ⇒ 用户在界面上关了，声音照响
     /// （2026-10-18 用户实测报"禁用呢"）。现在按字段叠加：用户那份优先，缺的字段
     /// 沿用程序那份，和 `Server/src/settings.rs` 的叠加顺序一致。
@@ -499,6 +548,10 @@ pub(crate) mod sound {
             key: Option<String>,
             #[serde(default)]
             commit: Option<String>,
+            #[serde(default)]
+            mode: Option<String>,
+            #[serde(default)]
+            music: Option<String>,
         }
 
         /// `asset` 指定资源根目录：相对路径从 exe 目录起逐级向上找同名目录
@@ -543,7 +596,9 @@ pub(crate) mod sound {
             if text.trim().is_empty() {
                 return None;
             }
-            toml::from_str::<Host>(text).ok()
+            // 只认 YAML：程序文件夹与用户目录的宿主配置都是 `weasel.yaml`。
+            // 旧 TOML 一概不读（没有迁移层），读不到就当作没有这份配置。
+            weasel_common::yaml::from_str::<Host>(text).ok()
         }
 
         let host = load(host_text);
@@ -571,15 +626,59 @@ pub(crate) mod sound {
             if source.commit.is_some() {
                 sound.commit = source.commit.clone();
             }
+            if source.mode.is_some() {
+                sound.mode = source.mode.clone();
+            }
+            if source.music.is_some() {
+                sound.music = source.music.clone();
+            }
         }
         Config {
             enabled: sound.enabled.unwrap_or(false),
-            key: resolve_path(sound.key.as_ref(), &base),
-            commit: resolve_path(sound.commit.as_ref(), &base),
+            key: prefer_existing(resolve_path(sound.key.as_ref(), &base)),
+            commit: prefer_existing(resolve_path(sound.commit.as_ref(), &base)),
+            music_mode: sound
+                .mode
+                .as_deref()
+                .map(|mode| mode.eq_ignore_ascii_case("music"))
+                .unwrap_or(false),
+            music: prefer_existing(resolve_path(sound.music.as_ref(), &base)),
+            key_explicit: user
+                .as_ref()
+                .and_then(|user| user.sound.as_ref())
+                .and_then(|sound| sound.key.as_ref())
+                .is_some(),
         }
     }
 
-    /// 读配置；程序 `weasel.toml` 或用户 `weasel.custom.toml` 变化时重建（按 mtime 判断）。
+    /// 用户目录的 `sound\`：程序文件夹里找不到同名音频时，用它补位。
+    ///
+    /// 用户 2026-10-19 要求「加用户文件夹识别」——以前只认 `asset` 指向的
+    /// 程序文件夹（`C:\Program Files\Weasel-Next\Rime-Next\sound\`），
+    /// 用户把自己的 mp3 放进 `%APPDATA%\Rime-Next\sound\` 会被忽略。
+    fn user_sound_dir() -> Option<PathBuf> {
+        weasel_common::process::RuntimePaths::discover()
+            .ok()
+            .map(|paths| paths.user_data.join("sound"))
+    }
+
+    /// 把「相对某种基准解析出来的路径」落到磁盘：存在就用它，
+    /// 不存在再看用户 `sound\` 里有没有同名文件，最后原样返回（让上层报缺失）。
+    fn prefer_existing(path: Option<PathBuf>) -> Option<PathBuf> {
+        let candidate = path?;
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        if let (Some(dir), Some(name)) = (user_sound_dir(), candidate.file_name()) {
+            let alternative = dir.join(name);
+            if alternative.exists() {
+                return Some(alternative);
+            }
+        }
+        Some(candidate)
+    }
+
+    /// 读配置；程序 `weasel.yaml` 或用户 `weasel.yaml` 变化时重建（按 mtime 判断）。
     fn config() -> Config {
         static CACHE: OnceLock<Mutex<(Option<(Option<SystemTime>, Option<SystemTime>)>, Config)>> =
             OnceLock::new();
@@ -587,35 +686,30 @@ pub(crate) mod sound {
         let Some(dir) = runtime_dir() else {
             return Config::default();
         };
-        // 主文件名是 weasel.toml；旧的 weasel.json 仍然读（升级兼容）
-        let path = {
-            let toml_path = dir.join("weasel.toml");
-            if toml_path.is_file() {
-                toml_path
-            } else {
-                dir.join("weasel.json")
-            }
-        };
-        // 用户在设置界面里改的是**用户目录**那份补丁（`[sound] enabled = false`）。
+        // 宿主配置只有一份：`<程序文件夹>\weasel.yaml`。旧 `weasel.toml` 没有兼容读，
+        // 也没有迁移层：没有这份 YAML 就是没有配置，直接用内置默认值。
+        let path = Some(weasel_common::settings::program_config_path(&dir))
+            .filter(|candidate| candidate.is_file());
+        // 用户在设置界面里改的是**用户目录**那份补丁（`weasel.yaml`，2026-10-21 起）。
         let user_path = weasel_common::process::RuntimePaths::discover()
             .ok()
-            .map(|paths| paths.user_data.join("weasel.custom.toml"));
+            .map(|paths| weasel_common::settings::user_config_path(&paths.user_data));
         let mtime = |candidate: &Option<PathBuf>| {
             candidate
                 .as_ref()
                 .and_then(|path| std::fs::metadata(path).and_then(|meta| meta.modified()).ok())
         };
-        let stamp = (
-            std::fs::metadata(&path).and_then(|meta| meta.modified()).ok(),
-            mtime(&user_path),
-        );
+        let stamp = (mtime(&path), mtime(&user_path));
         let Ok(mut cache) = cell.lock() else {
             return Config::default();
         };
         if cache.0 == Some(stamp) {
             return cache.1.snapshot();
         }
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let text = path
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .unwrap_or_default();
         let user_text = user_path
             .as_ref()
             .and_then(|path| std::fs::read_to_string(path).ok())
@@ -971,6 +1065,200 @@ pub(crate) mod sound {
         };
     }
 
+    /// 背景循环播放一首长音频 —— 用户 2026-10-19：「要能连续播放音乐」。
+    ///
+    /// 与 `play_mci` 的分工：`play_mci` 是「一次播放」（击键音那种几十毫秒的短音），
+    /// 这里是自己持有 alias、自己轮询 `status <alias> mode` 的后台线程：放完立刻从头再来，
+    /// 直到进程退出或用户在设置里关掉声音。
+    ///
+    /// 只在 `weasel.yaml` 显式配了 `key` 且是 mp3 时启用，避免影响原有的 wav 键音。
+    fn play_song_loop(path: &PathBuf) {
+        static STARTED: OnceLock<()> = OnceLock::new();
+        /// 空闲超时后要求下一片回到开头（用户 2026-10-19：1 分钟没打字就重头播）
+        static REWIND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let path = path.clone();
+        STARTED.get_or_init(|| {
+            std::thread::spawn(move || {
+                #[link(name = "winmm")]
+                unsafe extern "system" {
+                    fn mciSendStringW(
+                        command: *const u16,
+                        buffer: *mut u16,
+                        buffer_len: u32,
+                        callback: *mut c_void,
+                    ) -> u32;
+                }
+                let send = |command: &str| {
+                    let wide: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
+                    let _ = unsafe {
+                        mciSendStringW(wide.as_ptr(), std::ptr::null_mut(), 0, std::ptr::null_mut())
+                    };
+                };
+                let query = |command: &str| -> String {
+                    let wide: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
+                    let mut buffer = [0u16; 128];
+                    let _ = unsafe {
+                        mciSendStringW(
+                            wide.as_ptr(),
+                            buffer.as_mut_ptr(),
+                            buffer.len() as u32,
+                            std::ptr::null_mut(),
+                        )
+                    };
+                    let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+                    String::from_utf16_lossy(&buffer[..len])
+                };
+                let file = path.to_string_lossy().to_string();
+                let alias = "weaselsong";
+                send(&format!("open \"{file}\" type mpegvideo alias {alias}"));
+                send(&format!("set {alias} time format milliseconds"));
+                loop {
+                    // 用户在设置里把声音关掉、或把 key 换成别的文件 → 停止循环
+                    let current = config();
+                    if !current.enabled || current.key.as_ref() != Some(&path) {
+                        return;
+                    }
+                    send(&format!("play {alias}"));
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                        if !query(&format!("status {alias} mode"))
+                            .trim()
+                            .eq_ignore_ascii_case("playing")
+                        {
+                            break;
+                        }
+                    }
+                }
+            });
+        });
+    }
+
+    /// 用 Windows Media Player 的 COM 控件播放歌曲并循环（用户 2026-10-19）。
+    ///
+    /// 为什么不用 MCI：本机实测 `mciSendString("open ... type mpegvideo")` 返回 **277
+    /// （MCIERR_CANNOT_LOAD_DRIVER）** —— DirectShow 的 MCI 驱动装不上，mp3 根本打不开。
+    /// WMP 的 `WMPlayer.OCX` 在本机可用，且 `settings.setMode("loop", true)` 原生支持循环。
+    ///
+    /// 实现方式：起一个隐藏的 PowerShell 子进程持有播放器（只起一次），
+    /// 引擎退出/用户关声音时把它杀掉。这样不用在 Rust 里手写 IDispatch 晚绑定。
+    fn play_song(path: &PathBuf) {
+        use std::sync::Mutex;
+        static CHILD: OnceLock<Mutex<Option<std::process::Child>>> = OnceLock::new();
+        let slot = CHILD.get_or_init(|| Mutex::new(None));
+        let mut guard = match slot.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        // 子进程还活着就说明歌还在播，不重复启动（否则每键起一个新播放器）
+        if let Some(child) = guard.as_mut() {
+            if child.try_wait().ok().flatten().is_none() {
+                return;
+            }
+        }
+        // 用 WPF 的 MediaPlayer（System.Windows.Media），不用 WMPlayer.OCX：
+        // 本机实测 WMPlayer.OCX 在无窗口的隐藏进程里一直卡在 playState=9(transitioning)，
+        // 而 WPF MediaPlayer 能正常出声（2026-10-19 实测位置 0.8→4.9s 递增，时长 177.5s）。
+        // 循环靠轮询 Position >= NaturalDuration 后回零重播（无消息泵时 MediaEnded 不触发）。
+        // 「打字演奏」模式（用户 2026-10-19 选 C）：每按一键把播放位置往前推一小段，
+        // 播 260ms 再暂停 —— 不按键就没有声音，连打时像用键盘弹这首歌。
+        //
+        // 引擎与脚本之间用「命令文件长度」通信：引擎每收到一键就往
+        // %TEMP%\weasel-song-step.txt 追加 1 字节，脚本数长度差决定前进几个 step。
+        const SCRIPT: &str = r#"
+param([string]$Path)
+Add-Type -AssemblyName PresentationCore
+$log = Join-Path $env:TEMP 'weasel-song.log'
+$cmd = Join-Path $env:TEMP 'weasel-song-step.txt'
+$step = 0.25
+$player = New-Object System.Windows.Media.MediaPlayer
+$player.Open([uri]$Path)
+$player.Play()
+$player.Pause()
+("ready " + $Path) | Set-Content $log
+$seen = 0
+if (Test-Path $cmd) { $seen = (Get-Item $cmd).Length }
+while ($true) {
+  Start-Sleep -Milliseconds 50
+  if (-not (Test-Path $cmd)) { continue }
+  $len = (Get-Item $cmd).Length
+  if ($len -le $seen) { $seen = $len; continue }
+  $delta = $len - $seen
+  $seen = $len
+  $dur = $player.NaturalDuration
+  if (-not $dur.HasTimeSpan) { continue }
+  $pos = $player.Position.TotalSeconds + ($delta * $step)
+  if ($pos -ge $dur.TimeSpan.TotalSeconds) { $pos = 0 }
+  $player.Position = [TimeSpan]::FromSeconds($pos)
+  $player.Play()
+  Start-Sleep -Milliseconds 260
+  $player.Pause()
+  ("{0:HH:mm:ss} pos={1:N2}s delta={2}" -f (Get-Date), $pos, $delta) | Add-Content $log
+}
+"#;
+        let script = std::env::temp_dir().join("weasel-song.ps1");
+        if std::fs::write(&script, SCRIPT).is_err() {
+            return;
+        }
+        let spawned = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-File",
+            ])
+            .arg(&script)
+            .arg("-Path")
+            .arg(path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        {
+            use std::io::Write as _;
+            if let Ok(mut handle) = std::fs::OpenOptions::new().create(true).append(true)
+                .open(std::env::temp_dir().join("weasel-song-trace.log"))
+            {
+                let _ = writeln!(handle, "spawn ok={} path={:?}", spawned.is_ok(), path);
+            }
+        }
+        if let Ok(child) = spawned {
+            *guard = Some(child);
+        }
+    }
+
+    /// 打字演奏：往命令文件追加 1 字节，脚本据此把播放位置往前推一步。
+    fn step_song() {
+        use std::io::Write as _;
+        if let Ok(mut handle) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::env::temp_dir().join("weasel-song-step.txt"))
+        {
+            let _ = handle.write_all(b"x");
+        }
+    }
+
+    /// 关声音时把后台播放器杀掉。
+    fn stop_song() {
+        use std::sync::Mutex;
+        static CHILD: OnceLock<Mutex<Option<std::process::Child>>> = OnceLock::new();
+        // 与 `play_song` 共用同一个槽位做不到（静态变量按函数隔离），
+        // 这里改用进程级清理：按命令行匹配杀掉 weasel-song.ps1。
+        let _ = CHILD;
+        let _ = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                "Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { $_.CommandLine -like '*weasel-song.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+
     /// 用 MCI 播放 mp3。
     ///
     /// 别名按调用序号轮换（4 个），这样上一声不会被这一声立刻掐断；`close` 之后重新
@@ -995,6 +1283,16 @@ pub(crate) mod sound {
                 mciSendStringW(wide.as_ptr(), std::ptr::null_mut(), 0, std::ptr::null_mut())
             };
         };
+        // 查 MCI 状态的辅助闭包（用于判断"歌还在播"）
+        let query = |command: &str| -> String {
+            let wide: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut buffer = [0u16; 128];
+            let _ = unsafe {
+                mciSendStringW(wide.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32, std::ptr::null_mut())
+            };
+            let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+            String::from_utf16_lossy(&buffer[..len])
+        };
         let file = path.to_string_lossy().to_string();
         let alias = {
             let mut open = match OPEN.lock() {
@@ -1017,6 +1315,14 @@ pub(crate) mod sound {
                 }
             }
         };
+        // 用户 2026-10-19：整曲（歌曲）已经在播就别重开，
+        // 否则每按一键都从 0 秒重来，只有开头那一瞬；播完了下一键自然重来。
+        if to_ms <= from_ms {
+            let mode = query(&format!("status {alias} mode"));
+            if mode.trim().eq_ignore_ascii_case("playing") {
+                return;
+            }
+        }
         send(&format!("stop {alias}"));
         if to_ms > from_ms {
             send(&format!("play {alias} from {from_ms} to {to_ms}"));
@@ -1062,6 +1368,10 @@ pub(crate) mod sound {
     /// 用系统时间的纳秒做种、配一个原子计数推进，因此不需要引入随机数依赖，
     /// 连续两次也不会取到同一个文件。
     fn pick_key(config: &Config, dir: &PathBuf) -> Option<PathBuf> {
+        // 用户显式配了 key（mp3 之类）→ 直接用它，不被 wav 样本池随机盖掉。
+        if config.key_explicit {
+            return config.key.clone();
+        }
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let pool = key_pool(dir);
         if pool.is_empty() {
@@ -1079,6 +1389,732 @@ pub(crate) mod sound {
         Some(pool[(mixed >> 33) as usize % pool.len()].clone())
     }
 
+    /// 「打字演奏」（用户 2026-10-19 定案）：**不起命令行、不跳段**，按键累计后依次播放。
+    ///
+    /// 设计要点：
+    /// * mp3 在**引擎进程内**用纯 Rust 的 `nanomp3` 解码成 PCM，不 spawn powershell（没有任何命令行窗口）；
+    /// * 每次按键只做一次原子自增（微秒级），不给打字加延迟；
+    /// * 后台线程按队列逐片播放：取 `slice_ms` 长的一片 → 写成临时 wav → 交给现有
+    ///   `voices`（waveOut 多声部）→ **等这一片放完**再取下一条，所以永远不会压在上一段上；
+    /// * 队列为空就静音，不按键不出声；
+    /// * 配置写在 `%APPDATA%\Rime-Next\sound\sound.yaml` 的 `typing_song` 里。
+    pub(super) mod typing_song {
+        use std::io::Write as _;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Mutex, OnceLock};
+        use std::time::Duration;
+
+        #[derive(serde::Deserialize, Default, Clone)]
+        pub struct Settings {
+            pub enabled: Option<bool>,
+            pub file: Option<String>,
+            pub slice_ms: Option<u32>,
+        }
+
+        #[derive(serde::Deserialize, Default)]
+        struct Root {
+            typing_song: Option<Settings>,
+            mode: Option<Mode>,
+        }
+
+        /// 声音模式：music = 打字演奏（放歌），effect = 打字机音效。
+        #[derive(serde::Deserialize, Default, Clone)]
+        pub struct Mode {
+            pub kind: Option<String>,
+        }
+
+        struct Player {
+            /// 这首歌的来源文件（换歌时要重开设备、重新解码）
+            path: std::path::PathBuf,
+            samples: Vec<i16>,
+            rate: u32,
+            channels: u16,
+            cursor: usize,
+            slice: usize,
+        }
+
+        static QUEUE: AtomicUsize = AtomicUsize::new(0);
+        /// 空闲超时后要求下一片回到开头（用户 2026-10-19：1 分钟没打字就重头播）
+        static REWIND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        static PLAYER: OnceLock<Mutex<Option<Player>>> = OnceLock::new();
+        static STARTED: OnceLock<()> = OnceLock::new();
+        static SETTINGS: OnceLock<Mutex<Option<(Option<std::time::SystemTime>, Option<(std::path::PathBuf, u32)>)>>> =
+            OnceLock::new();
+
+        /// 读 `%APPDATA%\Rime-Next\sound\sound.yaml`（按 mtime 缓存，避免每键读盘）。
+        /// 声音配置文件的路径：**优先 `用户文件夹\sound\sound.yaml`**（和音频放一起），
+        /// 旧版放在用户目录根部的 `sound.yaml` 仍然认，作为兼容。
+        /// 2026-10-27：TOML 退出，只认 YAML（与全仓库一致）。
+        fn config_path(user_data: &std::path::Path) -> Option<std::path::PathBuf> {
+            let inside = user_data.join("sound").join("sound.yaml");
+            if inside.is_file() {
+                return Some(inside);
+            }
+            let legacy = user_data.join("sound.yaml");
+            if legacy.is_file() {
+                return Some(legacy);
+            }
+            None
+        }
+
+        pub fn settings() -> Option<(std::path::PathBuf, u32)> {
+            // 音乐模式且 [sound] music 指向存在的文件 → 直接用它
+            let sound = super::config();
+            if sound.music_mode {
+                if let Some(path) = sound.music.clone() {
+                    if path.is_file() {
+                        // 每键推进的时长。用户口径：250 ms 太短（"按一下就没了"）→ 先要 1000 ms，
+                        // 又改回 500 ms（2026-10-23）。500 ms/键 ⇒ 每秒 2 键以上就连续播歌。
+                        return Some((path, 500));
+                    }
+                }
+            }
+            let dir = weasel_common::process::RuntimePaths::discover().ok()?.user_data;
+            let Some(path) = config_path(&dir) else { return None; };
+            let mtime = std::fs::metadata(&path).and_then(|meta| meta.modified()).ok();
+            let cell = SETTINGS.get_or_init(|| Mutex::new(None));
+            let mut cache = match cell.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let Some((stamp, value)) = cache.as_ref() {
+                if *stamp == mtime {
+                    return value.clone();
+                }
+            }
+            let value = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| weasel_common::yaml::from_str::<Root>(&text).ok())
+                .and_then(|root| root.typing_song)
+                .and_then(|settings| {
+                    if !settings.enabled.unwrap_or(false) {
+                        return None;
+                    }
+                    let raw = settings.file?;
+                    let mut file = std::path::PathBuf::from(raw.replace('\\', "/"));
+                    if !file.is_absolute() {
+                        file = dir.join("sound").join(file.file_name()?);
+                    }
+                    if !file.is_file() {
+                        return None;
+                    }
+                    Some((file, settings.slice_ms.unwrap_or(250)))
+                });
+            *cache = Some((mtime, value.clone()));
+            value
+        }
+
+        /// 声音模式（用户 2026-10-19）：`sound.yaml` 的 `mode: kind`
+        ///
+        /// * `"music"` = 打字演奏：只放歌，**不放**打字机键音与上屏铃声
+        /// * `"effect"` = 传统音效：键音 + 上屏铃（默认）
+        pub fn music_mode() -> bool {
+            // weasel.yaml 的 [sound] mode == "music" 优先（设置界面里那个下拉框）
+            if super::config().music_mode {
+                return true;
+            }
+            static CACHE: OnceLock<Mutex<(Option<std::time::SystemTime>, bool)>> = OnceLock::new();
+            let Some(dir) = weasel_common::process::RuntimePaths::discover().ok().map(|p| p.user_data) else { return false; };
+            let Some(path) = config_path(&dir) else { return false; };
+            let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+            let cell = CACHE.get_or_init(|| Mutex::new((None, false)));
+            let mut cache = match cell.lock() { Ok(g) => g, Err(p) => p.into_inner() };
+            if cache.0 == mtime { return cache.1; }
+            let value = std::fs::read_to_string(&path).ok()
+                .and_then(|text| weasel_common::yaml::from_str::<Root>(&text).ok())
+                .map(|root| {
+                    if let Some(mode) = root.mode {
+                        return mode.kind.as_deref().map(|k| k.eq_ignore_ascii_case("music")).unwrap_or(false);
+                    }
+                    // 没写 [mode] 时按旧行为：有 [typing_song] 且 enabled 就算音乐模式
+                    root.typing_song.map(|s| s.enabled.unwrap_or(false)).unwrap_or(false)
+                })
+                .unwrap_or(false);
+            *cache = (mtime, value);
+            value
+        }
+
+        /// 直接用 `PlaySoundW` 播一个 wav（异步、不阻塞）。
+        ///
+        /// 为什么绕开 `voices`：2026-10-19 实测本机 `voices::play` 返回 true 却听不到
+        /// 任何声音（多声部 waveOut 设备打不开但没报错），而同一个 wav 用 PlaySound 正常。
+        fn playsound(path: &std::path::Path) -> bool {
+            use std::os::windows::ffi::OsStrExt as _;
+            #[link(name = "winmm")]
+            unsafe extern "system" {
+                fn PlaySoundW(
+                    sound: *const u16,
+                    module: *mut std::ffi::c_void,
+                    flags: u32,
+                ) -> i32;
+            }
+            let wide: Vec<u16> = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            // SND_FILENAME | SND_ASYNC | SND_NODEFAULT
+            let ok = unsafe { PlaySoundW(wide.as_ptr(), std::ptr::null_mut(), 0x0002_0000 | 0x0000_0001 | 0x0000_0002) };
+            ok != 0
+        }
+
+        /// 最近一次按键的时间（`step` 写、播放线程读，用来判断"停手了没有"）。
+        fn last_key_cell() -> &'static Mutex<Option<std::time::Instant>> {
+            static LAST: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+            LAST.get_or_init(|| Mutex::new(None))
+        }
+
+        /// 距离上次按键过了多久（还没按过则 `None`）。
+        fn idle_for() -> Option<Duration> {
+            let cell = last_key_cell();
+            let guard = match cell.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.map(|instant| instant.elapsed())
+        }
+
+        /// 记一次按键（累计，不阻塞）。
+        pub fn step() {
+            // 用户 2026-10-19：空闲超过 1 分钟 → 下次按键从歌的开头重新开始。
+            let cell = last_key_cell();
+            let mut last = match cell.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let Some(previous) = *last {
+                if previous.elapsed() >= Duration::from_secs(60) {
+                    REWIND.store(true, Ordering::Relaxed);
+                }
+            }
+            *last = Some(std::time::Instant::now());
+            QUEUE.fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// 确保后台播放线程已启动（幂等）。
+        pub fn start() {
+            STARTED.get_or_init(|| {
+                std::thread::spawn(|| loop {
+                    if QUEUE.load(Ordering::Relaxed) == 0 {
+                        // 队列空了并且已经停手 600 ms 以上：用**歌里真实内容**做一段淡出。
+                        // 不补的话最后一帧被硬切（"啪"）；补一个合成常数就是"噗"（都踩过了）。
+                        if idle_for().is_none_or(|idle| idle >= Duration::from_millis(600)) {
+                            settle_tail();
+                        }
+                        std::thread::sleep(Duration::from_millis(25));
+                        continue;
+                    }
+                    QUEUE.fetch_sub(1, Ordering::Relaxed);
+                    play_one_slice();
+                });
+            });
+        }
+
+        fn play_one_slice() {
+            // 诊断：音乐模式没声音时，靠这段判断卡在哪一步
+            let trace = |msg: &str| {
+                use std::io::Write as _;
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
+                    .open(std::env::temp_dir().join("weasel-typing.log"))
+                {
+                    let _ = writeln!(f, "{msg}");
+                }
+            };
+            trace(&format!("slice called music_mode={}", music_mode()));
+            let Some((file, slice_ms)) = settings() else {
+                trace("settings = None（没有可用的音乐配置）");
+                return;
+            };
+            let slot = PLAYER.get_or_init(|| Mutex::new(None));
+            let mut guard = match slot.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            // 第一次、或换了歌 → 冲掉旧设备队列再重新解码。
+            if guard.as_ref().map_or(true, |player| player.path != file) {
+                stream::reset();
+                *guard = load(&file, slice_ms);
+            }
+            let Some(player) = guard.as_mut() else {
+                return;
+            };
+            if player.samples.is_empty() {
+                return;
+            }
+            if REWIND.swap(false, Ordering::Relaxed) {
+                player.cursor = 0;
+                // 回到开头：旧队列里还排着上一轮的尾巴，先冲掉，别串音。
+                stream::reset();
+            }
+            let total = player.samples.len();
+            let len = player.slice.min(total);
+            let start = player.cursor.min(total.saturating_sub(1));
+            let mut chunk = Vec::with_capacity(len);
+            let mut index = start;
+            for _ in 0..len {
+                chunk.push(player.samples[index]);
+                index += 1;
+                if index >= total {
+                    index = 0;
+                }
+            }
+            // 无缝推流：切片连着的，写进同一个 waveOut 设备的**串行队列**就没有接缝。
+            // 只有"停手/复播"这一次边界需要手动淡出淡入（见 settle_tail）。
+            match stream::push(&chunk, player.rate, player.channels) {
+                Some((true, depth)) => {
+                    // 只有真排进队列才推进播放位置。
+                    player.cursor = index;
+                    trace(&format!("stream push start={} len={} depth={}", start, len, depth));
+                }
+                Some((false, depth)) => {
+                    // 队列满 → 这一片没播。**cursor 绝对不能推进**，否则就是"歌偷偷跳过去了"。
+                    trace(&format!("stream drop start={} depth={}", start, depth));
+                }
+                None => {
+                    // 设备打不开（极少见）→ 退回老的切片播放：有爆音，但至少有声音。
+                    trace("waveOut 不可用，退回 PlaySound 切片");
+                    fallback_slice(&chunk, player.rate, player.channels, slice_ms);
+                    player.cursor = index;
+                }
+            }
+        }
+
+        /// 停手：从**歌里接下来的 40 ms** 取一段，按衰减包络推进设备。
+        ///
+        /// 关键：不能再用"最后一个采样值"合成常数衰减 —— 那是直流，听感就是一个
+        /// 40 ms 的低频"噗"叠在歌底下（2026-10-22 用户报"两段同时响、叠着"）。
+        /// 也**不推进 cursor**：复播从同一位置接上，这 40 ms 会重复一次但已衰减到 0，
+        /// 听不出来；反过来推进 cursor 会让每次停顿都吃掉歌里一小段。
+        fn settle_tail() {
+            if !stream::wants_tail() {
+                return;
+            }
+            let slot = PLAYER.get_or_init(|| Mutex::new(None));
+            let guard = match slot.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let Some(player) = guard.as_ref() else {
+                return;
+            };
+            let total = player.samples.len();
+            if total == 0 {
+                return;
+            }
+            let channels = usize::from(player.channels.max(1));
+            let frames = (player.rate / 1000 * stream::edge_ms()).max(1) as usize;
+            let mut tail = Vec::with_capacity(frames * channels);
+            let mut index = player.cursor % total;
+            for frame in 0..frames {
+                let gain = 1.0 - frame as f32 / frames as f32;
+                for _ in 0..channels {
+                    tail.push((player.samples[index] as f32 * gain) as i16);
+                    index += 1;
+                    if index >= total {
+                        index = 0;
+                    }
+                }
+            }
+            stream::settled_tail(&tail, player.rate, player.channels);
+        }
+
+        /// 兜底：老的"临时 wav + PlaySound"切片播放。
+        ///
+        /// 只在 waveOut 打不开时用。每片两端淡入淡出、播完 sleep 一片的时间 ——
+        /// 有爆音和 4 Hz 泵动（这就是 2026-10-19 那一版的做法），但不会没声音。
+        fn fallback_slice(chunk: &[i16], rate: u32, channels: u16, slice_ms: u32) {
+            let mut chunk = chunk.to_vec();
+            let fade = ((rate as usize / 1000) * 8).max(1) * channels as usize;
+            let half = chunk.len() / 2;
+            let fade = fade.min(half);
+            for index in 0..fade {
+                let gain = index as f32 / fade as f32;
+                let front = index;
+                let back = chunk.len() - 1 - index;
+                chunk[front] = (chunk[front] as f32 * gain) as i16;
+                chunk[back] = (chunk[back] as f32 * gain) as i16;
+            }
+            let wav = wav_bytes(&chunk, rate, channels);
+            let temp = std::env::temp_dir().join("weasel-typing-note.wav");
+            if std::fs::write(&temp, &wav).is_err() {
+                return;
+            }
+            playsound(&temp);
+            std::thread::sleep(Duration::from_millis(u64::from(slice_ms)));
+        }
+
+        /// 音乐模式的**无缝推流**播放器（2026-10-21 重做）。
+        ///
+        /// 为什么弃用「临时 wav + PlaySound」切片（那是 2026-10-19 的做法）：
+        /// `PlaySound` 是**单通道、播新的就掐掉旧的**，而每片只有 250 ms、写完只 sleep 250 ms，
+        /// 扣掉写文件与启动的耗时，下一片必定在上一片淡出还没走完时把它打断
+        /// ⇒ 每 250 ms 一个爆音；再加上每片两端各 8 ms 淡入淡出 ⇒ 4 Hz 泵动。
+        /// 用户听感就是「很炸、很难听」。
+        ///
+        /// `waveOut` 的缓冲是**串行队列**：连着 Write 几段，放出来就是连续的。
+        /// 所以片与片之间不再需要任何淡入淡出 —— 只有「停手」和「复播」这两个边界需要。
+        mod stream {
+            use std::ffi::c_void;
+            use std::sync::{Mutex, OnceLock};
+
+            const WAVE_MAPPER: u32 = u32::MAX;
+            const CALLBACK_NULL: usize = 0;
+            const WHDR_DONE: u32 = 0x0000_0001;
+            const WHDR_PREPARED: u32 = 0x0000_0002;
+
+            /// 最多排几片（每片 250 ms）→ 约 500 ms 前瞻。
+            /// 必须设上限：不设的话打字快过每秒 4 键时队列无限增长，
+            /// 几十秒后播的就是很久以前切下的内容（「越打越拖」也是难听的一部分）。
+            /// 也别设太大：3 片（750 ms）时手一停音乐还会自己往下走一大段。
+            const MAX_PENDING: usize = 2;
+            /// 整体音量。旧注释写「整体降到 85%」，实际只缩了淡入淡出那几个采样，
+            /// 中段仍是满幅 —— 这首 mp3 本身压得很死，满幅播出来就是「炸」。
+            const GAIN: f32 = 0.55;
+            /// 停手淡出 / 复播淡入的长度（毫秒）。
+            const EDGE_MS: u32 = 40;
+
+            #[repr(C)]
+            #[derive(Clone, Copy, PartialEq, Eq)]
+            struct Format {
+                tag: u16,
+                channels: u16,
+                rate: u32,
+                byte_rate: u32,
+                block_align: u16,
+                bits: u16,
+                cb_size: u16,
+            }
+
+            #[repr(C)]
+            struct Header {
+                data: *mut u8,
+                length: u32,
+                recorded: u32,
+                user: usize,
+                flags: u32,
+                loops: u32,
+                next: *mut Header,
+                reserved: usize,
+            }
+
+            #[link(name = "winmm")]
+            unsafe extern "system" {
+                fn waveOutOpen(
+                    handle: *mut *mut c_void,
+                    device: u32,
+                    format: *const Format,
+                    callback: usize,
+                    instance: usize,
+                    flags: u32,
+                ) -> u32;
+                fn waveOutPrepareHeader(handle: *mut c_void, header: *mut Header, size: u32) -> u32;
+                fn waveOutWrite(handle: *mut c_void, header: *mut Header, size: u32) -> u32;
+                fn waveOutUnprepareHeader(
+                    handle: *mut c_void,
+                    header: *mut Header,
+                    size: u32,
+                ) -> u32;
+                fn waveOutReset(handle: *mut c_void) -> u32;
+                fn waveOutClose(handle: *mut c_void) -> u32;
+            }
+
+            struct Pending {
+                header: Box<Header>,
+                /// PCM 字节。**堆地址必须稳定**：`header.data` 指向它，
+                /// 所以这个 Vec 放进队列后绝不能再扩容。
+                data: Vec<u8>,
+            }
+
+            /// `Header` 里只有裸指针；整块只在本模块的互斥锁内使用。
+            unsafe impl Send for Pending {}
+
+            struct Device {
+                handle: *mut c_void,
+                format: Format,
+                pending: Vec<Pending>,
+                /// 最后推出去的那个采样值：停手时用它合成淡出尾巴
+                last_sample: i16,
+                /// 已经补过淡出尾巴（等下一片要淡入）
+                settled: bool,
+                needs_fade_in: bool,
+            }
+
+            unsafe impl Send for Device {}
+
+            static DEVICE: OnceLock<Mutex<Option<Device>>> = OnceLock::new();
+
+            fn cell() -> &'static Mutex<Option<Device>> {
+                DEVICE.get_or_init(|| Mutex::new(None))
+            }
+
+            fn lock() -> std::sync::MutexGuard<'static, Option<Device>> {
+                match cell().lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                }
+            }
+
+            /// 释放一个已经不再被驱动使用的缓冲。
+            unsafe fn release(handle: *mut c_void, mut pending: Pending) {
+                unsafe {
+                    if pending.header.flags & WHDR_PREPARED != 0 {
+                        waveOutUnprepareHeader(
+                            handle,
+                            &mut *pending.header,
+                            std::mem::size_of::<Header>() as u32,
+                        );
+                    }
+                }
+            }
+
+            /// 回收已经播完的缓冲，返回剩余排队数。
+            fn reclaim(device: &mut Device) -> usize {
+                let handle = device.handle;
+                let mut kept = Vec::with_capacity(device.pending.len());
+                for pending in device.pending.drain(..) {
+                    if pending.header.flags & WHDR_DONE != 0 {
+                        unsafe { release(handle, pending) };
+                    } else {
+                        kept.push(pending);
+                    }
+                }
+                device.pending = kept;
+                device.pending.len()
+            }
+
+            /// 把一段 PCM 写进设备的串行队列；调用方已保证队列有空位。
+            fn enqueue(device: &mut Device, samples: &[i16]) -> bool {
+                if samples.is_empty() {
+                    return false;
+                }
+                let mut data = Vec::with_capacity(samples.len() * 2);
+                for sample in samples {
+                    let scaled = (*sample as f32 * GAIN)
+                        .clamp(f32::from(i16::MIN), f32::from(i16::MAX))
+                        as i16;
+                    data.extend_from_slice(&scaled.to_le_bytes());
+                }
+                let mut header = Box::new(Header {
+                    data: data.as_mut_ptr(),
+                    length: data.len() as u32,
+                    recorded: 0,
+                    user: 0,
+                    flags: 0,
+                    loops: 0,
+                    next: std::ptr::null_mut(),
+                    reserved: 0,
+                });
+                let size = std::mem::size_of::<Header>() as u32;
+                let pointer = &mut *header as *mut Header;
+                unsafe {
+                    if waveOutPrepareHeader(device.handle, pointer, size) != 0 {
+                        return false;
+                    }
+                    header.flags |= WHDR_PREPARED;
+                    if waveOutWrite(device.handle, pointer, size) != 0 {
+                        waveOutUnprepareHeader(device.handle, pointer, size);
+                        return false;
+                    }
+                }
+                device.last_sample = *samples.last().unwrap_or(&0);
+                device.settled = false;
+                // data 的堆缓冲在 move 进队列后地址不变，header.data 仍然有效。
+                device.pending.push(Pending { header, data });
+                true
+            }
+
+            /// 关掉设备、丢掉所有排队缓冲（换歌 / 回到开头时用）。
+            pub fn reset() {
+                let mut guard = lock();
+                let Some(mut device) = guard.take() else {
+                    return;
+                };
+                unsafe {
+                    waveOutReset(device.handle);
+                    for pending in device.pending.drain(..) {
+                        release(device.handle, pending);
+                    }
+                    waveOutClose(device.handle);
+                }
+            }
+
+            /// 推一片进去。
+            ///
+            /// 返回 `None` = 设备不可用（调用方应退回 PlaySound）；
+            /// `Some((true, 深度))` = 已经排进队列；`Some((false, 深度))` = 队列满、**这一片没播**。
+            ///
+            /// ⚠️ 调用方必须靠这个返回值决定要不要推进播放位置。早先不管有没有排进去都推进，
+            /// 结果按住一个键（系统自动重复 ≈30 次/秒）时歌的位置按 7.5 秒/秒往前跳，
+            /// 一松手就从很后面接上 —— 用户 2026-10-22 报的「一直按着就直接跳到后面」。
+            fn submit(
+                samples: &[i16],
+                rate: u32,
+                channels: u16,
+                tail: bool,
+            ) -> Option<(bool, usize)> {
+                let channels = channels.max(1);
+                let rate = rate.max(8000);
+                let wanted = Format {
+                    tag: 1,
+                    channels,
+                    rate,
+                    byte_rate: rate * u32::from(channels) * 2,
+                    block_align: channels * 2,
+                    bits: 16,
+                    cb_size: 0,
+                };
+                let mut guard = lock();
+                let need_open = guard.as_ref().map_or(true, |device| device.format != wanted);
+                if need_open {
+                    if let Some(mut old) = guard.take() {
+                        unsafe {
+                            waveOutReset(old.handle);
+                            for pending in old.pending.drain(..) {
+                                release(old.handle, pending);
+                            }
+                            waveOutClose(old.handle);
+                        }
+                    }
+                    let mut handle: *mut c_void = std::ptr::null_mut();
+                    let code = unsafe {
+                        waveOutOpen(&mut handle, WAVE_MAPPER, &wanted, CALLBACK_NULL, 0, 0)
+                    };
+                    if code != 0 || handle.is_null() {
+                        return None;
+                    }
+                    *guard = Some(Device {
+                        handle,
+                        format: wanted,
+                        pending: Vec::new(),
+                        last_sample: 0,
+                        settled: false,
+                        needs_fade_in: true,
+                    });
+                }
+                let Some(device) = guard.as_mut() else {
+                    return None;
+                };
+                let depth = reclaim(device);
+                if depth >= MAX_PENDING {
+                    // 打字比播放快：这一片直接丢掉，保证实时，别越拖越远。
+                    return Some((false, depth));
+                }
+                let mut slice = samples.to_vec();
+                // 只有"复播的第一片"要淡入；淡出尾巴自己已经带了包络，不再套。
+                if !tail && device.needs_fade_in {
+                    let frames = (device.format.rate / 1000 * EDGE_MS).max(1) as usize;
+                    let edge = (frames * usize::from(device.format.channels)).min(slice.len());
+                    if edge > 0 {
+                        for index in 0..edge {
+                            let gain = index as f32 / edge as f32;
+                            slice[index] = (slice[index] as f32 * gain) as i16;
+                        }
+                    }
+                    device.needs_fade_in = false;
+                }
+                if !enqueue(device, &slice) {
+                    return None;
+                }
+                if tail {
+                    device.settled = true;
+                    device.needs_fade_in = true;
+                }
+                Some((true, device.pending.len()))
+            }
+
+            pub fn push(
+                samples: &[i16],
+                rate: u32,
+                channels: u16,
+            ) -> Option<(bool, usize)> {
+                submit(samples, rate, channels, false)
+            }
+
+            /// 停手淡出：`samples` 必须是**歌里真实的下一段**（调用方按包络衰减好）。
+            ///
+            /// 早先这里用"最后一个采样值"合成常数衰减 —— 那是直流，听着就是一个
+            /// 40 ms 的低频"噗"叠在歌底下（用户 2026-10-22 报的"两段同时响、叠着"）。
+            pub fn settled_tail(
+                samples: &[i16],
+                rate: u32,
+                channels: u16,
+            ) -> Option<(bool, usize)> {
+                submit(samples, rate, channels, true)
+            }
+
+            /// 淡入/淡出的长度（毫秒），给调用方切尾巴用。
+            pub fn edge_ms() -> u32 {
+                EDGE_MS
+            }
+
+            /// 是否还需要补一条淡出尾巴（有排队音频、且还没补过）。
+            pub fn wants_tail() -> bool {
+                let mut guard = lock();
+                let Some(device) = guard.as_mut() else {
+                    return false;
+                };
+                if device.settled {
+                    return false;
+                }
+                reclaim(device) > 0
+            }
+        }
+
+        fn load(path: &std::path::Path, slice_ms: u32) -> Option<Player> {
+            let bytes = std::fs::read(path).ok()?;
+            // 纯 Rust 解码（nanomp3）：一次性解出整首 PCM，后续切片不再碰文件
+            let decoded = nanomp3::decode_all::<i16>(&bytes);
+            let rate = decoded.sample_rate;
+            let channels = decoded.channels.map(|value| value.num() as u16).unwrap_or(2);
+            let samples = decoded.samples;
+            if samples.is_empty() || rate == 0 {
+                return None;
+            }
+            let per_ms = (rate as usize / 1000).max(1);
+            let slice = (per_ms * slice_ms as usize).max(1) * channels as usize;
+            Some(Player {
+                path: path.to_path_buf(),
+                samples,
+                rate,
+                channels,
+                cursor: 0,
+                slice,
+            })
+        }
+
+        fn wav_bytes(samples: &[i16], rate: u32, channels: u16) -> Vec<u8> {
+            let data_len = (samples.len() * 2) as u32;
+            let mut out = Vec::with_capacity(44 + data_len as usize);
+            out.extend_from_slice(b"RIFF");
+            out.extend_from_slice(&(36 + data_len).to_le_bytes());
+            out.extend_from_slice(b"WAVEfmt ");
+            out.extend_from_slice(&16u32.to_le_bytes());
+            out.extend_from_slice(&1u16.to_le_bytes());
+            out.extend_from_slice(&channels.to_le_bytes());
+            out.extend_from_slice(&rate.to_le_bytes());
+            out.extend_from_slice(&(rate * u32::from(channels) * 2).to_le_bytes());
+            out.extend_from_slice(&(channels * 2).to_le_bytes());
+            out.extend_from_slice(&16u16.to_le_bytes());
+            out.extend_from_slice(b"data");
+            out.extend_from_slice(&data_len.to_le_bytes());
+            for sample in samples {
+                out.extend_from_slice(&sample.to_le_bytes());
+            }
+            out
+        }
+
+        /// 诊断：把"这次播放从哪开始、多长"写到临时文件，方便核对。
+        pub fn trace(message: &str) {
+            if let Ok(mut handle) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(std::env::temp_dir().join("weasel-typing.log"))
+            {
+                let _ = writeln!(handle, "{message}");
+            }
+        }
+    }
+
     /// 按键响应：带回提交文本 → 上屏音；被接受的按键 → 从样本池随机取一个击键音。
     ///
     /// 重放类响应（例如能力变化后恢复内联预编辑）会把 `eaten` 置为 false，
@@ -1086,6 +2122,7 @@ pub(crate) mod sound {
     pub(super) fn play_for_response(response: &super::KeyEventResponse) {
         let config = config();
         if !config.enabled {
+            // 关掉声音时顺手杀掉后台播放器（用户 2026-10-19）
             return;
         }
         // 部署进行中一律静音（用户 2026-10-18 要求）：部署由另一个进程跑，
@@ -1093,10 +2130,23 @@ pub(crate) mod sound {
         if deploying() {
             return;
         }
+        // 音乐模式：不放打字机键音与上屏铃，但**每个键都要推进歌**
+        // （用户 2026-10-19 定的口径；2026-10-21 补充：上屏键也要算 —— 空格提交那一下
+        //   原来被 `commit_text.is_empty()` 排除掉了，既不出声也不推进，用户报「空格没声音」）
+        if typing_song::music_mode() {
+            if response.eaten || !response.commit_text.is_empty() {
+                typing_song::step();
+                typing_song::start();
+            }
+            return;
+        }
         if !response.commit_text.is_empty() {
-            if let Some(path) = config.commit.as_ref() {
-                // 上屏：只播铃的那一声（mp3 用窗口，wav 时窗口被忽略）。
-                play(path, BELL_FROM_MS, BELL_TO_MS);
+            // 用户 2026-10-19：放歌时不要上屏铃声；只有打字机音效模式才响铃。
+            if typing_song::settings().is_none() {
+                if let Some(path) = config.commit.as_ref() {
+                    // 上屏：只播铃的那一声（mp3 用窗口，wav 时窗口被忽略）。
+                    play(path, BELL_FROM_MS, BELL_TO_MS);
+                }
             }
             return;
         }
@@ -1114,7 +2164,29 @@ pub(crate) mod sound {
                 }
             }
             if let Some(path) = pick_key(&config, &dir) {
-                play(&path, 0, 0);
+                // 用户显式配了整首歌（mp3）→ 交给后台循环线程，保证连续播放
+                // （否则一曲结束就静音，按键时还会被打断）。
+                let is_song = config.key_explicit
+                    && path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3"));
+                if is_song {
+                    {
+                        use std::io::Write as _;
+                        if let Ok(mut handle) = std::fs::OpenOptions::new().create(true).append(true)
+                            .open(std::env::temp_dir().join("weasel-song-trace.log"))
+                        {
+                            let _ = writeln!(handle, "song-branch path={:?} exists={} explicit={}", path, path.is_file(), config.key_explicit);
+                        }
+                    }
+                    // 打字演奏：累计一次按键，后台线程依次播下一片（不跳段、不起命令行）
+                    typing_song::step();
+                    typing_song::start();
+                    // 打字演奏：每键把位置往前推一小段（脚本自己数文件长度）
+                } else {
+                    play(&path, 0, 0);
+                }
             }
         }
     }
@@ -1171,6 +2243,111 @@ fn bool_setting_or(
 }
 
 impl Engine {
+    /// 建一个原生会话并套用当前方案与 ASCII 模式。
+    ///
+    /// `OpenInput` 与"空闲回收后重建"共用这一条路径，避免两处初始化逻辑漂移。
+    fn new_session(
+        &self,
+        connection: &std::sync::Arc<ClientConnection>,
+    ) -> Result<librime::RimeSession, String> {
+        let mut session = self.rime.new_session()?;
+        if let Some(ascii) = self.global_ascii.or_else(|| {
+            self.settings.as_ref().and_then(|settings| {
+                settings
+                    .app_bool(connection.client_executable().unwrap_or(""), "ascii_mode")
+                    .map_err(|error| {
+                        tracing::error!(%error, "invalid application setting");
+                        error
+                    })
+                    .ok()
+            })
+        }) {
+            session.set_ascii_mode(ascii);
+        }
+        // 方案：用户目录 `schema/schema.yaml` 的 `active` 优先。
+        //
+        // 三条都必须遵守，否则会**把输入打断**（实测：连字母都打不出来 ✗）：
+        //   1. 已经是这个方案就**不要**再选 —— 重复 select 会重建会话（丢组合、卡一下）；
+        //   2. 选失败只是记日志，绝不改变会话状态（保留 librime 自己的选择）；
+        //   3. `select_schema` 自己也做保护：新方案加载失败时保留原会话并返回 false
+        //      （`librime-next/src/c_api.rs::rime_select_schema`）。
+        //
+        // 2026-10-29：这条以前**从来没生效过** —— `Engine/src/librime/api.rs` 的
+        // API 表漏装 `select_schema`，函数指针恒为 None ⇒ 永远走 else 分支记 warn。
+        // 装上之后才会真的切方案，所以第 1 条"已经一样就跳过"现在很关键，
+        // 否则每次焦点进入输入框都会重载一遍方案（仓颉/注音这种大表能明显卡顿）。
+        if let Some(active) = self.schemas.active.clone()
+            && session.current_schema().as_deref() != Some(active.as_str())
+            && !session.select_schema(&active)
+        {
+            tracing::warn!(
+                schema = %active,
+                "schema.yaml 里的当前方案不可用，保留 librime 的选择"
+            );
+        }
+        Ok(session)
+    }
+
+    /// 确保 client 有可用的原生会话；被空闲回收掉时就地重建。
+    ///
+    /// 重建只花"建会话 + 选方案"的代价，**不会**重新初始化 librime（那才是
+    /// 1010 ms 的大头），所以停顿很久之后的第一键也不会落空。
+    fn ensure_session(&mut self, client_id: u64) -> bool {
+        let Some(connection) = self
+            .clients
+            .get(&client_id)
+            .map(|client| client.connection.clone())
+        else {
+            return false;
+        };
+        if self
+            .clients
+            .get(&client_id)
+            .is_some_and(|client| client.session.is_some())
+        {
+            return true;
+        }
+        match self.new_session(&connection) {
+            Ok(session) => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    client.session = Some(session);
+                    client.touch();
+                }
+                true
+            }
+            Err(error) => {
+                tracing::error!(client_id, %error, "session re-creation failed");
+                false
+            }
+        }
+    }
+
+    /// 回收超过 [`SESSION_IDLE_RECLAIM`] 没打字的原生会话。
+    ///
+    /// 只 destroy 会话（释放词库句柄与组合状态），**保留连接、路由与渲染快照**：
+    /// 连接是池，会话是池里按需取用的资源。正在组合的一律不动 —— 用户可能只是
+    /// 停下来想词，回收会把他打了一半的内容清掉。
+    fn reclaim_idle_sessions(&mut self) {
+        let now = Instant::now();
+        let mut reclaimed = 0_usize;
+        for client in self.clients.values_mut() {
+            if client.session.is_none() || client.last_response.composing {
+                continue;
+            }
+            if now.duration_since(client.last_typing) >= SESSION_IDLE_RECLAIM {
+                client.session = None;
+                client.last_response = Default::default();
+                reclaimed += 1;
+            }
+        }
+        if reclaimed > 0 {
+            tracing::info!(
+                reclaimed,
+                "idle sessions reclaimed; process and connections stay alive"
+            );
+        }
+    }
+
     /// 锁定用户数据目录、初始化日志与 Rime，并读取服务级配置。
     ///
     /// 初始化或必需配置读取失败时返回错误；调用者应在专用工作线程中构造实例，
@@ -1196,17 +2373,21 @@ impl Engine {
             }
             None => (None, false),
         };
-        // 方案信息：用户目录 schema/schema.toml（出厂兜底在程序文件夹里）
-        let schema_path = paths.user_data.join("schema").join("schema.toml");
+        // 方案信息：用户目录 schema/schema.yaml（出厂兜底在程序文件夹里）。
+        // 2026-10-27 起与引擎侧 `SCHEMA_MANIFEST` 同名，`schema.toml` 不再参与。
+        let schema_path = paths
+            .user_data
+            .join("schema")
+            .join(weasel_style::switcher::SCHEMA_TABLE_FILE);
         let schemas = weasel_style::switcher::read_schema_table(
-            &paths.executable_directory.join("Rime-Next"),
+            &weasel_common::rime_layout::data_dir(&paths.executable_directory),
             &paths.user_data,
         );
         if schemas.active.is_some() || !schemas.schemas.is_empty() {
             tracing::info!(
                 active = schemas.active.as_deref().unwrap_or(""),
                 selected = schemas.selected_ids().len(),
-                "loaded schema preference from schema.toml"
+                "loaded schema preference from schema.yaml"
             );
         }
         Ok(Self {
@@ -1382,7 +2563,9 @@ impl Engine {
                     return;
                 }
             } else {
-                let mut session = match self.rime.new_session() {
+                // 会话创建与"套用当前方案/模式"集中在 [`Engine::new_session`]；
+                // 空闲回收后的重建走同一条路径，避免两处逻辑漂移。
+                let session = match self.new_session(&connection) {
                     Ok(session) => session,
                     Err(error) => {
                         tracing::error!(client_id, %error, "session creation failed");
@@ -1395,43 +2578,10 @@ impl Engine {
                         return;
                     }
                 };
-                if let Some(ascii) = self.global_ascii.or_else(|| {
-                    self.settings.as_ref().and_then(|settings| {
-                        settings
-                            .app_bool(connection.client_executable().unwrap_or(""), "ascii_mode")
-                            .map_err(|error| {
-                                tracing::error!(%error, "invalid application setting");
-                                error
-                            })
-                            .ok()
-                    })
-                }) {
-                    session.set_ascii_mode(ascii);
-                }
-                // 方案：用户目录 schema/schema.toml 里记的当前方案优先。
-                //
-                // 两条都必须遵守，否则会**把输入打断**（实测：连字母都打不出来 ✗）：
-                //   1. 已经是这个方案就**不要**再选 —— 重复 select 会返回 false；
-                //   2. 选失败只是记日志，绝不改变会话状态（保留 librime 自己的选择）。
-                // 方案：用户目录 schema/schema.toml 里记的当前方案优先。
-                // 选失败（方案被删/还没部署）就保留 librime 自己的选择，不影响输入。
-                //
-                // 注意：`schema.toml` 里**先不要写 active**。实测过一次教训：
-                // 写了之后引擎每个会话都调 select_schema，一旦它返回 false，
-                // 会话就拿不到方案 —— 表现是**连英文字母都打不出来** ✗。
-                // 等把 select 的失败语义查清楚（false 是否真的会清空会话）再启用。
-                if let Some(active) = self.schemas.active.clone() {
-                    if !session.select_schema(&active) {
-                        tracing::warn!(
-                            schema = %active,
-                            "schema.toml 里的方案当前不可用，保留 librime 的选择"
-                        );
-                    }
-                }
                 self.clients.insert(
                     client_id,
                     ClientSession {
-                        // 默认值来自主题（theme.toml 的 style/inline_preedit）；
+                        // 默认值来自主题（theme.yaml 的 style/inline_preedit）；
                         // app_options.<应用>.inline_preedit 仍然可以逐应用覆盖它。
                         inline_preedit: self
                             .settings
@@ -1451,7 +2601,8 @@ impl Engine {
                         connection_id,
                         connection: connection.clone(),
                         alive,
-                        session,
+                        session: Some(session),
+                        last_typing: Instant::now(),
                         revision: 0,
                         route: session_route::SessionRoute {
                             token: open.token.clone(),
@@ -1517,6 +2668,16 @@ impl Engine {
         }
         match envelope.payload {
             Some(Payload::KeyEvent(key_event)) => {
+                // 空闲回收后本会话可能已被释放；确保有可用会话，否则放弃本次按键。
+                if !self.ensure_session(client_id) {
+                    failure(
+                        &connection,
+                        envelope.request_id,
+                        FailureCode::Internal,
+                        "session unavailable",
+                    );
+                    return;
+                }
                 let (response, snapshot) = {
                     let next_mode_indicator = &mut self.next_mode_indicator;
                     let client = self
@@ -1535,32 +2696,49 @@ impl Engine {
                         let focus_changed = self.active_client != Some(client_id);
                         self.active_client = Some(client_id);
                         client.route.focused = true;
+                        // 真实打字活动：刷新"最后打字时间"，避免活跃会话被空闲回收误伤。
+                        client.touch();
                         if let Some(ascii) = self.global_ascii {
-                            client.session.set_ascii_mode(ascii);
+                            client.session.as_mut().expect("session ensured").set_ascii_mode(ascii);
                         }
-                        // [排障] 按键入口：有这行说明按键到了引擎
-                        tracing::info!(
-                            keycode = key_event.keycode,
-                                                    client = %client_id,
-                            "诊断: 收到按键"
+                        // [排障] 按键入口：有这行说明按键到了引擎。
+                        // 默认关闭：每键 3~4 行同步写盘（tracing-appender 不缓冲），
+                        // 实测每键 1~2ms，属于"打字卡"的可去掉成本；排查时设
+                        // `WEASEL_ENGINE_VERBOSE=1` 打开。
+                        if verbose_diagnostics() {
+                            tracing::info!(
+                                keycode = key_event.keycode,
+                                client = %client_id,
+                                "诊断: 收到按键"
+                            );
+                        }
+                        // 乙-1 插桩：`process_key` 的耗时就是宿主侧等待的绝大部分。
+                        // 采样开关与 Tip 侧同一个文件，攒够一批才落一次盘。
+                        let key_start = std::time::Instant::now();
+                        let mut response = client.session.as_mut().expect("session ensured").process_key(&key_event);
+                        weasel_common::key_timing::record(
+                            key_start.elapsed(),
+                            response.eaten,
+                            response.composing,
                         );
-                        let mut response = client.session.process_key(&key_event);
-                        tracing::info!(
-                            eaten = response.eaten,
-                            composing = response.composing,
-                            commit = %response.commit_text,
-                            composition = %response.composition,
-                            candidates = response.candidates.len(),
-                            ascii = ?response.ascii_mode,
-                            "诊断: rime 返回"
-                        );
+                        if verbose_diagnostics() {
+                            tracing::info!(
+                                eaten = response.eaten,
+                                composing = response.composing,
+                                commit = %response.commit_text,
+                                composition = %response.composition,
+                                candidates = response.candidates.len(),
+                                ascii = ?response.ascii_mode,
+                                "诊断: rime 返回"
+                            );
+                        }
                         if self.global_ascii.is_some()
                             && let Some(ascii) = response.ascii_mode
                         {
                             self.global_ascii = Some(ascii);
                         }
                         // 用户用快捷键/托盘换了方案：记进 schema.toml，下次启动仍然用它。
-                        if let Some(current) = client.session.current_schema() {
+                        if let Some(current) = client.session.as_mut().expect("session ensured").current_schema() {
                             if self.schemas.active.as_deref() != Some(current.as_str()) {
                                 self.schemas.set_active(current.clone());
                                 if let Err(error) =
@@ -1592,11 +2770,13 @@ impl Engine {
                         response.revision = client.revision;
                         if anchor_reset {
                             // 临时诊断（2026-10-18 候选窗不显示）：开始等宿主给插入点。
-                            tracing::info!(
-                                session_id = client_id,
-                                revision = response.revision,
-                                "诊断: 开始等锚点"
-                            );
+                            if verbose_diagnostics() {
+                                tracing::info!(
+                                    session_id = client_id,
+                                    revision = response.revision,
+                                    "诊断: 开始等锚点"
+                                );
+                            }
                             client.waiting_for_layout = Some(response.revision);
                         } else if response.state_updated && !response.composing {
                             client.waiting_for_layout = None;
@@ -1665,6 +2845,16 @@ impl Engine {
             }
             Some(Payload::ContextCommand(command)) => {
                 use weasel_common::message::ContextAction;
+                // 空闲回收后本会话可能已被释放；确保有可用会话，否则放弃本次命令。
+                if !self.ensure_session(client_id) {
+                    failure(
+                        &connection,
+                        envelope.request_id,
+                        FailureCode::Internal,
+                        "session unavailable",
+                    );
+                    return;
+                }
                 let (response, snapshot) = {
                     let next_mode_indicator = &mut self.next_mode_indicator;
                     let client = self
@@ -1696,7 +2886,7 @@ impl Engine {
                         if previous_context
                             != client.route.token.as_ref().map(|token| token.context_id)
                         {
-                            client.session.context_action(ContextAction::Cancel);
+                            client.session.as_mut().expect("session ensured").context_action(ContextAction::Cancel);
                             client.last_response = Default::default();
                             client.anchor = Default::default();
                             client.waiting_for_layout = None;
@@ -1722,7 +2912,7 @@ impl Engine {
                         if matches!(action, ContextAction::Focus | ContextAction::ToggleAscii)
                             && let Some(ascii) = self.global_ascii
                         {
-                            client.session.set_ascii_mode(ascii);
+                            client.session.as_mut().expect("session ensured").set_ascii_mode(ascii);
                         }
                         let previous_ascii = client.last_response.ascii_mode;
                         let mut response = match (action, command.ascii_mode) {
@@ -1736,9 +2926,9 @@ impl Engine {
                                 return;
                             }
                             (ContextAction::SetAscii, Some(ascii)) => {
-                                client.session.set_ascii_mode_response(ascii)
+                                client.session.as_mut().expect("session ensured").set_ascii_mode_response(ascii)
                             }
-                            _ => client.session.context_action(action),
+                            _ => client.session.as_mut().expect("session ensured").context_action(action),
                         };
                         if action == ContextAction::ToggleAscii
                             && self.global_ascii.is_some()
@@ -1852,7 +3042,14 @@ impl Engine {
         {
             return;
         }
-        let mut response = client.session.process_renderer_event(&event);
+        let Some(session) = client.session.as_mut() else {
+            tracing::debug!(
+                session_id = event.session_id,
+                "renderer event for reclaimed session; ignored"
+            );
+            return;
+        };
+        let mut response = session.process_renderer_event(&event);
         response.external_preedit =
             response.composing && self.renderer.supports_preedit() && !client.inline_preedit;
         client.revision = client.revision.wrapping_add(1);
@@ -1888,6 +3085,7 @@ impl Processor<Work> for Engine {
                 self.idle();
                 drop(_request);
             }
+            Work::ReclaimIdle => self.reclaim_idle_sessions(),
             Work::Renderer(event) => self.renderer_event(event),
         }
     }
@@ -1965,15 +3163,17 @@ impl Processor<Work> for Engine {
                     client.latest_layout_revision,
                 );
                 // 临时诊断（2026-10-18 候选窗不显示）：布局更新到底来没来、为什么被判不合格。
-                tracing::info!(
-                    session_id = client_id,
-                    revision = ?update.revision,
-                    waiting = ?client.waiting_for_layout,
-                    accepted = ?client.latest_layout_revision,
-                    matching,
-                    anchor_valid = ?update.anchor.as_ref().map(|anchor| anchor.valid),
-                    "诊断: 布局更新"
-                );
+                if verbose_diagnostics() {
+                    tracing::info!(
+                        session_id = client_id,
+                        revision = ?update.revision,
+                        waiting = ?client.waiting_for_layout,
+                        accepted = ?client.latest_layout_revision,
+                        matching,
+                        anchor_valid = ?update.anchor.as_ref().map(|anchor| anchor.valid),
+                        "诊断: 布局更新"
+                    );
+                }
                 if matching {
                     if let Some(revision) = update.revision {
                         client.latest_layout_revision = Some(revision);
@@ -2055,15 +3255,14 @@ mod sound_parse_tests {
         fs::write(sound_dir.join("typewriter-bell.wav"), b"x").unwrap();
         fs::write(sound_dir.join("typewriter-key.wav"), b"x").unwrap();
 
-        // ⚠️ 配置现在是 TOML：下面必须是合法 TOML（`key = "..."` 要带引号）。
-        // 2026-10-18 之前这两条测试还喂着 YAML，解析必然失败 → 一直是红的。
+        // ⚠️ 配置只有 YAML 一种格式：下面必须是合法 YAML（`key: value`）。
+        // 2026-10-23 起 TOML 连兼容读都没有了，喂 TOML 会静默读不到值。
         let config_text = r#"
-asset = "Rime-Next"
-
-[sound]
-enabled = true
-key = "sound/typewriter-key.wav"
-commit = "sound/typewriter-bell.wav"
+asset: Rime-Next
+sound:
+  enabled: true
+  key: sound/typewriter-key.wav
+  commit: sound/typewriter-bell.wav
 "#;
         let (enabled, key, commit) = parse_for_test(config_text, &exe_dir);
         assert!(enabled, "enabled 应为 true");
@@ -2075,16 +3274,16 @@ commit = "sound/typewriter-bell.wav"
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// 用户在设置界面里关掉声音：用户目录那份必须盖掉程序那份的 `enabled = true`。
+    /// 用户在设置界面里关掉声音：用户目录那份必须盖掉程序那份的 `enabled: true`。
     ///
-    /// 2026-10-18 实际踩到：界面写了 `weasel.custom.toml` 的 `enabled = false`，
-    /// 引擎却只读程序文件夹的 `weasel.toml`（`enabled = true`）⇒ 开关点了没用。
+    /// 2026-10-18 实际踩到：界面写了 `weasel.yaml` 的 `enabled = false`，
+    /// 引擎却只读程序文件夹的旧配置（`enabled = true`）⇒ 开关点了没用。
     #[test]
     fn user_custom_disables_sound_over_program_default() {
-        let host = "[sound]\nenabled = true\nkey = \"sound/typewriter-key.wav\"\n";
-        let user = "[sound]\nenabled = false\n";
+        let host = "sound:\n  enabled: true\n  key: sound/typewriter-key.wav\n";
+        let user = "sound:\n  enabled: false\n";
         let (enabled, key, _commit) = parse_merged_for_test(host, user);
-        assert!(!enabled, "用户 weasel.custom.toml 的 enabled = false 必须生效");
+        assert!(!enabled, "用户 weasel.yaml 的 enabled: false 必须生效");
         assert_eq!(
             key.unwrap(),
             std::path::PathBuf::from("sound/typewriter-key.wav"),
@@ -2099,10 +3298,10 @@ commit = "sound/typewriter-bell.wav"
         let _ = fs::remove_dir_all(&exe_dir);
         fs::create_dir_all(exe_dir.join("sound")).unwrap();
         let config_text = r#"
-[sound]
-enabled = true
-key = "sound/k.wav"
-commit = "sound/b.wav"
+sound:
+  enabled: true
+  key: sound/k.wav
+  commit: sound/b.wav
 "#;
         let (_, key, commit) = parse_for_test(config_text, &exe_dir);
         assert_eq!(key.unwrap(), exe_dir.join("sound").join("k.wav"));

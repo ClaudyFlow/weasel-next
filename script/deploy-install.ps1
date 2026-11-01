@@ -490,7 +490,7 @@ else { Write-Warn2 "32 位仍是: $value32" ; Write-Warn2 "期望: $expect32（�
 # 5) 清单
 Write-Step '安装目录关键文件'
 foreach ($f in 'Weasel-Next-Server.exe', 'Weasel-Next-Engine.exe', 'Weasel-Next-Renderer.exe', 'Weasel-Next.dll', 'rime.dll',
-    'Rime-Next\sound\typewriter-key.wav', 'Rime-Next\sound\typewriter-bell.wav', 'weasel_theme_official.dll') {
+    'Rime-Next\sound\typewriter-key.wav', 'Rime-Next\sound\typewriter-bell.wav', 'weasel-next-theme.dll') {
     $p = Join-Path $InstallDir $f
     $mark = if (Test-Path $p) { '✓' } else { '✗' }
     $size = if (Test-Path $p) { '{0:N0} 字节' -f (Get-Item $p).Length } else { '缺失' }
@@ -513,7 +513,7 @@ $stagePairs = @(
     @{ Src = 'Weasel-Next-Engine.exe';        Dst = 'Weasel-Next-Engine.exe' },
     @{ Src = 'Weasel-Next-Renderer.exe';      Dst = 'Weasel-Next-Renderer.exe' },
     @{ Src = 'Weasel-Next-Setting.exe';       Dst = 'Weasel-Next-Setting.exe' },
-    @{ Src = 'weasel_theme_official.dll';     Dst = 'weasel_theme_official.dll' },
+    @{ Src = 'weasel-next-theme.dll';     Dst = 'weasel-next-theme.dll' },
     @{ Src = 'weasel_tip.dll';                Dst = 'Weasel-Next.dll' },
     # rime.dll 从 artifact\smoke 复制（不在 target\release 里）
     @{ Src = '..\artifact\smoke\rime.dll';    Dst = 'rime.dll' }

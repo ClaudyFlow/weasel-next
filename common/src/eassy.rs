@@ -1,20 +1,21 @@
-//! 细胞词库（`*.eassy.toml`）的读取与归并。
+//! 细胞词库（`*.eassy.yaml`）的读取与归并。
 //!
 //! 约定（与用户目录分类一致）：
-//! - `eassy/<名字>/<名字>.eassy.toml`（首选）或 `dict/<名字>/<名字>.eassy.toml`（兼容旧位置）。
-//! - 也接受直接放在根目录的 `*.eassy.toml`。
-//! - 文件格式为 TOML 的 `[words]` 表：键是词，值是频次。
+//! - `eassy/<名字>/<名字>.eassy.yaml`（首选）或 `dict/<名字>/<名字>.eassy.yaml`（兼容旧位置）。
+//! - 也接受直接放在根目录的 `*.eassy.yaml`。
+//! - 文件格式是一个 `words:` 映射：键是词，值是频次。
 //!
-//! ```toml
-//! [words]
-//! "〇" = 981
-//! "〇一" = 488
+//! ```yaml
+//! words:
+//!   "〇": 981
+//!   "〇一": 488
 //! ```
 //!
 //! 归并规则：**同词频次求和**。输出 librime 需要的 `essay.txt`（每行 `词<TAB>频次`）。
 //!
-//! librime 只认 `essay.txt`（`vocabulary` 默认名就是 `essay`），所以 TOML 是**源**、
-//! `essay.txt` 是**部署产物**：仓库里只放 `.eassy.toml`，部署时生成 txt。
+//! librime 只认 `essay.txt`（`vocabulary` 默认名就是 `essay`），所以 YAML 是**源**、
+//! `essay.txt` 是**部署产物**：仓库里只放 `.eassy.yaml`，部署时生成 txt。
+//! （2026-10-27：从 `.eassy.toml` 转来，全仓库不再使用 TOML。）
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -24,24 +25,25 @@ use std::path::{Path, PathBuf};
 /// 词 → 频次（归并后的结果）。
 pub type Vocabulary = BTreeMap<String, u64>;
 
-/// 从一份 `*.eassy.toml` 文本解析出词表。
+/// 从一份 `*.eassy.yaml` 文本解析出词表。
 ///
-/// 只读取 `words:` 表，其余键忽略；值必须为正整数，非正整数条目跳过（不视为错误）。
+/// 只读取 `words:` 映射，其余键忽略；值必须为正整数，非正整数条目跳过（不视为错误）。
 ///
 /// 注意：YAML 允许重复键（后者覆盖），而旧的 TOML 形态禁止 —— 所以下面那条"宽容解析"
 /// 分支基本不会再走到（只在 YAML 本身语法错误时兜底）。词库里原本有 5 处重复词
 /// （軟麪筋 / 鋪 / 𪡏 / 𪢮 / 𪻐），改成 YAML 后这些词的频次取**最后一条**而不是求和，
 /// 对 37 万条词库的整体排序没有实际影响。
-pub fn parse(text: &str) -> Result<Vocabulary, toml::de::Error> {
-    match toml::from_str::<toml::Value>(text) {
+pub fn parse(text: &str) -> Result<Vocabulary, String> {
+    match crate::yaml::to_value(text) {
         Ok(value) => {
             let mut out = Vocabulary::new();
-            if let Some(words) = value.get("words").and_then(|v| v.as_table()) {
+            if let Some(words) = value.get("words").and_then(|v| v.as_object()) {
                 for (word, entry) in words {
-                    if let Some(freq) = entry.as_integer() {
-                        if freq > 0 {
-                            *out.entry(word.clone()).or_insert(0) += freq as u64;
-                        }
+                    let freq = entry.as_u64().or_else(|| {
+                        entry.as_i64().and_then(|n| (n > 0).then_some(n as u64))
+                    });
+                    if let Some(freq) = freq.filter(|f| *f > 0) {
+                        *out.entry(word.clone()).or_insert(0) += freq;
                     }
                 }
             }
@@ -54,7 +56,7 @@ pub fn parse(text: &str) -> Result<Vocabulary, toml::de::Error> {
 
 /// 宽容解析：逐行认 `"词": 频次`（也认旧的 `"词" = 频次`），重复词频次**相加**；
 /// 注释与其它键忽略。
-fn parse_lenient(text: &str, _cause: toml::de::Error) -> Vocabulary {
+fn parse_lenient(text: &str, _cause: String) -> Vocabulary {
     let mut out = Vocabulary::new();
     let mut in_words = false;
     for raw in text.lines() {
@@ -63,13 +65,19 @@ fn parse_lenient(text: &str, _cause: toml::de::Error) -> Vocabulary {
             continue;
         }
         if line.starts_with('[') {
+            // 旧 TOML 形态的 `[words]` 段头
             in_words = line.contains("words");
+            continue;
+        }
+        if line == "words:" || line.starts_with("words:") {
+            in_words = true;
             continue;
         }
         if !in_words {
             continue;
         }
-        let Some((key, value)) = line.split_once('=') else {
+        // YAML 用 `:`，旧 TOML 用 `=`；`"词:带冒号"` 这类键靠 `rsplit_once` 正确切分
+        let Some((key, value)) = line.rsplit_once(':').or_else(|| line.split_once('=')) else {
             continue;
         };
         let word = key.trim().trim_matches('"').trim_matches('\'').to_string();
@@ -93,13 +101,13 @@ fn parse_lenient(text: &str, _cause: toml::de::Error) -> Vocabulary {
     out
 }
 
-/// 读取一份 `*.eassy.toml` 文件。
+/// 读取一份 `*.eassy.yaml` 文件。
 pub fn read_file(path: &Path) -> io::Result<Vocabulary> {
     let text = fs::read_to_string(path)?;
     parse(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
 }
 
-/// 把 `dir` 本身与 `dir/*/` 下的 `*.eassy.toml` 收进 `files`。
+/// 把 `dir` 本身与 `dir/*/` 下的 `*.eassy.yaml` 收进 `files`。
 fn collect_into(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     if !dir.is_dir() {
         return Ok(());
@@ -120,7 +128,7 @@ fn collect_into(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     Ok(())
 }
 
-/// 扫描一份根下的全部 `*.eassy.toml` 并按词归并求和。
+/// 扫描一份根下的全部 `*.eassy.yaml` 并按词归并求和。
 ///
 /// 扫描位置：`<root>/eassy/*/`、`<root>/eassy/`、`<root>/dict/*/`、`<root>/dict/`、`<root>/`。
 /// 目录不存在时跳过（不报错）。
@@ -146,7 +154,7 @@ fn is_eassy(path: &Path) -> bool {
     path.is_file()
         && path
             .file_name()
-            .map(|n| n.to_string_lossy().ends_with(".eassy.toml"))
+            .map(|n| n.to_string_lossy().ends_with(".eassy.yaml"))
             .unwrap_or(false)
 }
 
@@ -208,19 +216,37 @@ mod tests {
     }
 
 
-    /// 重复键不再让整份词库作废：宽容解析按同词求和。
+    /// 重复键不再让整份词库作废。
+    ///
+    /// ⚠️ 语义变更（2026-10-27，TOML→YAML）：YAML 允许重复键，标准行为是**后者覆盖**
+    /// （得 4）；而旧的 TOML 形态里重复键是**语法错误**，会落到宽容解析那条兜底路径，
+    /// 逐行扫描时是**同词求和**（得 7）。同一份词库里只有 5 处重复词
+    /// （軟麪筋 / 鋪 / 𪡏 / 𪢮 / 𪻐），差几个频次对 37 万条的整体排序没有实际影响，
+    /// 所以这里按 YAML 的通行语义钉住"覆盖"。跨文件的同词仍然求和（见下一条测试）。
     #[test]
-    fn tolerates_duplicate_keys() {
-        let text = "[words]\n\"好\" = 3\n\"好\" = 4\n\"你\" = 1\n";
+    fn duplicate_keys_take_the_last_value() {
+        let text = "words:\n  \"好\": 3\n  \"好\": 4\n  \"你\": 1\n";
         let v = parse(text).expect("重复键不应报错");
-        assert_eq!(v.get("好"), Some(&7), "重复键应求和");
+        assert_eq!(v.get("好"), Some(&4), "YAML 重复键取最后一条");
         assert_eq!(v.get("你"), Some(&1));
         assert_eq!(v.len(), 2);
     }
+
+    /// 坏到 YAML 都解析不了的文件，仍有兜底：逐行宽容解析 → 同词**求和**，
+    /// 一份坏文件不会让整份词库作废。
+    #[test]
+    fn lenient_fallback_sums_duplicate_words() {
+        // tab 缩进在 YAML 里非法 ⇒ 必然落到 parse_lenient 那条路。
+        let text = "words:\n\t\"好\" = 3\n\t\"好\" = 4\n\t\"你\" = 1\n";
+        let v = parse(text).expect("宽容解析不应报错");
+        assert_eq!(v.get("好"), Some(&7), "兜底路径仍按同词求和");
+        assert_eq!(v.get("你"), Some(&1));
+    }
+
     #[test]
     fn merges_same_word_by_summing_frequencies() {
-        let a = parse("[words]\n\"好\" = 3\n\"你好\" = 5\n").unwrap();
-        let b = parse("[words]\n\"好\" = 4\n\"世界\" = 1\n").unwrap();
+        let a = parse("words:\n  \"好\": 3\n  \"你好\": 5\n").unwrap();
+        let b = parse("words:\n  \"好\": 4\n  \"世界\": 1\n").unwrap();
         let mut merged = a;
         for (w, f) in b {
             *merged.entry(w).or_insert(0) += f;
@@ -233,7 +259,7 @@ mod tests {
 
     #[test]
     fn ignores_other_tables_and_non_positive_values() {
-        let v = parse("[meta]\nname = \"x\"\n\n[words]\n\"甲\" = 2\n\"乙\" = \"x\"\n\"丙\" = -1\n").unwrap();
+        let v = parse("meta:\n  name: x\nwords:\n  \"甲\": 2\n  \"乙\": x\n  \"丙\": -1\n").unwrap();
         assert_eq!(v.len(), 1);
         assert_eq!(v.get("甲"), Some(&2));
     }
@@ -243,14 +269,14 @@ mod tests {
         let dir = temp_dir("write");
         fs::create_dir_all(dir.join("eassy/default")).unwrap();
         fs::write(
-            dir.join("eassy/default/default.eassy.toml"),
-            "[words]\n\"少\" = 1\n\"多\" = 9\n",
+            dir.join("eassy/default/default.eassy.yaml"),
+            "words:\n  \"少\": 1\n  \"多\": 9\n",
         )
         .unwrap();
         fs::create_dir_all(dir.join("dict/extra")).unwrap();
         fs::write(
-            dir.join("dict/extra/extra.eassy.toml"),
-            "[words]\n\"多\" = 1\n",
+            dir.join("dict/extra/extra.eassy.yaml"),
+            "words:\n  \"多\": 1\n",
         )
         .unwrap();
 
@@ -267,11 +293,13 @@ mod tests {
         let dir = temp_dir("both");
         fs::create_dir_all(dir.join("eassy/one")).unwrap();
         fs::create_dir_all(dir.join("dict/two")).unwrap();
-        fs::write(dir.join("eassy/one/one.eassy.toml"), "[words]\n\"甲\" = 1\n").unwrap();
-        fs::write(dir.join("dict/two/two.eassy.toml"), "[words]\n\"乙\" = 2\n").unwrap();
+        fs::write(dir.join("eassy/one/one.eassy.yaml"), "words:\n  \"甲\": 1\n").unwrap();
+        fs::write(dir.join("dict/two/two.eassy.yaml"), "words:\n  \"乙\": 2\n").unwrap();
         let v = collect(&dir).unwrap();
         assert_eq!(v.get("甲"), Some(&1));
         assert_eq!(v.get("乙"), Some(&2));
         let _ = fs::remove_dir_all(&dir);
     }
 }
+
+

@@ -138,6 +138,16 @@ pub(crate) fn diagnostic(text: &str) {
     }
 }
 
+/// 将一条**警告**级别的诊断写入 broker 日志。
+///
+/// broker 是 `windows_subsystem = "windows"`，`eprintln!` 写到哪里都看不见 ——
+/// 2026-10-29 的「broker 管道消失」事故就是因为失败信息全走了 stderr 而无人察觉。
+pub(crate) fn diagnostic_warn(text: &str) {
+    if let Some(logger) = LOGGER.get() {
+        logger.record(Level::WARN, "Weasel-Next-Server", format_args!("{text}"));
+    }
+}
+
 /// 返回 broker 是否正在退出。
 pub(crate) fn is_stopping() -> bool {
     STOPPING.load(Ordering::Acquire)
@@ -205,6 +215,10 @@ pub(crate) fn restore_after_operation(
         return;
     };
     let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+    // 操作(部署/重启)期间必定把后端拉起来了 ⇒ 一定要清掉空闲标记:
+    // 否则监控线程会按"空闲态不碰组件"跳过它,`monitor_children` 还会把刚归位的
+    // 渲染器立刻当成"多余"关掉,服务就再也回不到正常监管。
+    state.idle = false;
     state.server = services.server;
     state.server_retry.started(Instant::now());
     if operation == Operation::Restart {
@@ -297,11 +311,32 @@ pub(crate) fn monitor_children() {
     }
 }
 
+/// 判断某个 broker 管道客户端是不是**内部组件**（引擎 / 渲染器）。
+///
+/// 这两个进程启动时要连 broker 查配置（`load_broker_settings` / `load_theme`），
+/// 关闭时也可能发通知。它们**不代表有人在用输入法**：若把这种连接算作活动，
+/// 引擎一按五分钟自退，渲染器收尾的那一下就会在几十毫秒内把整套后端重新拉起
+/// —— 实测就是「进空闲态 38 ms 后 activity detected」，于是每 5 分钟重启一轮，
+/// 永远只剩不下 Server。真正的使用者是宿主进程里的 TIP（任意 exe）和设置界面。
+fn is_internal_client(client_executable: Option<&str>) -> bool {
+    matches!(
+        client_executable,
+        Some("Weasel-Next-Engine.exe") | Some("Weasel-Next-Renderer.exe")
+    )
+}
+
 /// 空闲态下响应 broker 管道活动:重新拉起渲染器与引擎,清空闲标记。
 ///
-/// 由 settings_rpc 的连接循环在**每次收到连接**时调用——空闲期任何管道
-/// 活动(宿主的 Ping / 设置查询)都视为"有人要用了"。
-pub(crate) fn wake_from_idle() {
+/// 由 settings_rpc 的连接循环在**每次收到连接**时调用——空闲期任何**外部**管道
+/// 活动(宿主的 Ping / 设置查询)都视为"有人要用了"；引擎与渲染器自己的连接不算
+/// （见 [`is_internal_client`]）。
+pub(crate) fn wake_from_idle(client_executable: Option<&str>) {
+    if is_internal_client(client_executable) {
+        diagnostic(&format!(
+            "ignored internal {client_executable:?} connection while idle"
+        ));
+        return;
+    }
     let Some(shared) = BROKER_STATE.get().cloned() else {
         return;
     };
@@ -313,7 +348,9 @@ pub(crate) fn wake_from_idle() {
         guard.idle = false;
         guard.paths.executable_directory.clone()
     };
-    diagnostic("activity detected while idle; restarting engine and renderer");
+    diagnostic(&format!(
+        "activity detected while idle (client={client_executable:?}); restarting engine and renderer"
+    ));
     // 启动序与 broker 启动一致:渲染器先行,确保第一份候选快照有接收端。
     let mut renderer = start_child(&directory, "Weasel-Next-Renderer.exe", &[])
         .map_err(|error| diagnostic(&format!("idle wake: renderer start failed: {error}")))
@@ -348,6 +385,12 @@ fn monitor_child(shared: &Arc<Mutex<BrokerState>>, component: ManagedComponent) 
     if is_stopping() || !component.is_monitored(state.operation) {
         return;
     }
+    // 空闲态只留 broker:两个组件都由 [`wake_from_idle`] 统一拉起来,监控线程此刻
+    // **不得**做"崩溃恢复"。否则刚被 `monitor_children` 停掉的渲染器会立刻被当成
+    // 崩溃重启(实测每 130 ms 一轮,进程号一直在换),引擎也会在同一秒被拉回来。
+    if state.idle {
+        return;
+    }
     let (slot, retry) = match component {
         ManagedComponent::Server => (&mut state.server, &mut state.server_retry),
         ManagedComponent::Renderer => (&mut state.renderer, &mut state.renderer_retry),
@@ -370,7 +413,12 @@ fn monitor_child(shared: &Arc<Mutex<BrokerState>>, component: ManagedComponent) 
                     *slot = None;
                     state.idle = true;
                     diagnostic(
-                        "engine idle shutdown (5 minutes without typing); entering idle state",
+                        // 时长同样是三十分钟（引擎侧 `IDLE_TIMEOUT_MS`）；写死
+                        // "5 minutes" 会让人照着错误的时长排查空闲自退问题。
+                        &format!(
+                            "engine idle shutdown ({} minutes without typing); entering idle state",
+                            weasel_common::ENGINE_IDLE_MINUTES
+                        ),
                     );
                     return;
                 }

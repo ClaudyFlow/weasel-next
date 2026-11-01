@@ -215,7 +215,12 @@ pub fn parse_yaml(text: &str) -> Result<Yaml, YamlError> {
         map: BTreeMap::new(),
         seq: None,
     }];
-    for (number, raw) in text.lines().enumerate() {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut cursor = 0usize;
+    while cursor < lines.len() {
+        let number = cursor + 1;
+        let raw = lines[cursor];
+        cursor += 1;
         let line_number = number + 1;
         let line = strip_comment(raw).trim_end();
         if line.trim().is_empty() || line.trim_start().starts_with("---") {
@@ -246,6 +251,62 @@ pub fn parse_yaml(text: &str) -> Result<Yaml, YamlError> {
         let key = unquote(&content[..colon]);
         let value = content[colon + 1..].trim();
 
+        // 块标量：`key: |` / `>`（可带 ± 收尾标记）+ 后续缩进更深的行。
+        // librime 用 yaml-cpp 写出的产物里 description/comment 大量用它；
+        // 不支持就整份解析失败（2026-10-23 对拍 30 份基线，30/30 全挂在这一点）。
+        if matches!(value, "|" | "|-" | "|+" | ">" | ">-" | ">+") {
+            let folded = value.starts_with('>');
+            let keep_trailing = value.ends_with('+');
+            let strip_trailing = value.ends_with('-');
+            let mut base: Option<usize> = None;
+            let mut collected: Vec<String> = Vec::new();
+            while cursor < lines.len() {
+                let candidate = lines[cursor];
+                let trimmed = candidate.trim_end();
+                if trimmed.trim().is_empty() {
+                    collected.push(String::new());
+                    cursor += 1;
+                    continue;
+                }
+                let line_indent = trimmed.len() - trimmed.trim_start().len();
+                if line_indent <= indent {
+                    break;
+                }
+                let root = *base.get_or_insert(line_indent);
+                if line_indent < root {
+                    break;
+                }
+                collected.push(trimmed[root..].to_string());
+                cursor += 1;
+            }
+            while matches!(collected.last(), Some(last) if last.is_empty()) {
+                collected.pop();
+            }
+            let mut content = if folded {
+                let mut out = String::new();
+                for (index, part) in collected.iter().enumerate() {
+                    if index > 0 {
+                        out.push(if part.is_empty() { '\n' } else { ' ' });
+                    }
+                    out.push_str(part);
+                }
+                out
+            } else {
+                collected.join("\n")
+            };
+            if !strip_trailing {
+                content.push('\n');
+            }
+            if keep_trailing {
+                content.push('\n');
+            }
+            stack
+                .last_mut()
+                .expect("current level exists")
+                .map
+                .insert(key, Yaml::Scalar(Scalar { text: content, quoted: true }));
+            continue;
+        }
         if value.is_empty() {
             // 子结构：压入一层，缩进要求比本行更深
             stack.push(Level {

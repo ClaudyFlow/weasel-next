@@ -1,7 +1,14 @@
 //! 加载并合并由 broker 管理的启动配置。
 //!
-//! 配置文件是 **TOML**（`weasel.toml` / 用户 `weasel.custom.toml`），按顺序叠加：
-//! 对象会递归合并，数组和标量会替换已有值；单个文件无效时保留该文件应用前的配置。
+//! **宿主配置的格式只有 YAML 一种**（2026-10-23 起）：`style::parse_file` 只认 YAML，
+//! 配置树与写盘序列化也统一在 `weasel_common::yaml`，所以 TOML/JSON **既不读也不写** ——
+//! 没有兼容层，也没有 TOML→YAML 的迁移：程序文件夹里没有 `weasel.yaml` 时，就用手上的
+//! 内嵌出厂默认值（旧 `weasel.toml` 由用户自己改成 YAML）。
+//!
+//! 读取顺序（后者覆盖前者）：程序文件夹 `weasel.yaml` → 用户补丁
+//! `%APPDATA%\Rime-Next\weasel.yaml`。
+//!
+//! 对象递归合并，数组和标量替换已有值；单个文件无效时保留该文件应用前的配置。
 //! 这里只检查文件、格式和传输大小；具体选项由消费组件校验。
 use serde_json::Value;
 use std::{
@@ -22,15 +29,14 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 /// 并继续使用此前有效的值。
 pub fn load(paths: &RuntimePaths, mut warn: impl FnMut(String)) -> ConfigSnapshot {
     // Also keep packaged defaults available to standalone cargo builds.
-    let mut value: Value = toml::from_str(include_str!("../../weasel.toml"))
-        .expect("packaged settings must be valid TOML");
-    // 配置一律 TOML：程序文件夹一份出厂值、用户目录一份覆盖。
-    // 旧的 *.json 名字继续读（老机器升级上来不会突然丢配置），TOML 优先。
+    let mut value: Value =
+        weasel_common::settings::parse_config_text(include_str!("../../Rime-Next/weasel.yaml"))
+            .expect("packaged settings must be valid YAML");
+    // 只有这两份 YAML：程序文件夹一份、用户目录一份。旧 `weasel.toml` / `weasel.json`
+    // 不在候选里 —— 读到它们的唯一结果就是"读不到"，然后继续用内嵌默认值。
     for path in [
-        paths.executable_directory.join("weasel.toml"),
-        paths.executable_directory.join("weasel.json"),
-        paths.user_data.join("weasel.custom.toml"),
-        paths.user_data.join("weasel.custom.json"),
+        weasel_common::settings::program_config_path(&paths.executable_directory),
+        weasel_common::settings::user_config_path(&paths.user_data),
     ] {
         if let Err(error) = overlay_file(&mut value, &path) {
             warn(format!(
@@ -44,8 +50,8 @@ pub fn load(paths: &RuntimePaths, mut warn: impl FnMut(String)) -> ConfigSnapsho
 
 /// 将单个可选配置文件叠加到基值；缺失文件不改变基值。
 ///
-/// 单文件最多读取 1 MiB。文件读取、字节解码、JSON 解析、根对象检查和配置合并均在
-/// 此处完成。新配置只有在全部检查通过后才会原子地替换基值。
+/// 单文件最多读取 1 MiB。文件读取、字节解码、YAML 解析（唯一格式）、根对象检查和
+/// 配置合并均在此处完成。新配置只有在全部检查通过后才会原子地替换基值。
 fn overlay_file(base: &mut Value, path: &Path) -> Result<(), String> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
@@ -61,15 +67,7 @@ fn overlay_file(base: &mut Value, path: &Path) -> Result<(), String> {
     }
     let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
     let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
-    // 兼容期：旧的 *.json 覆盖文件仍然按 JSON 解析
-    let patch: Value = if path.extension().is_some_and(|ext| ext == "json") {
-        serde_json::from_str(text).map_err(|e| e.to_string())?
-    } else {
-        toml::from_str(text).map_err(|e| e.to_string())?
-    };
-    if !patch.is_object() {
-        return Err("configuration must be a JSON object".into());
-    }
+    let patch: Value = weasel_common::settings::parse_config_text(text)?;
     let mut next = base.clone();
     merge(&mut next, patch);
 

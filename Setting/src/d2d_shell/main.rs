@@ -1249,6 +1249,12 @@ impl Shell {
             let cx = x + 14.0 * s + col as f32 * (ycell + ygap);
             let cy = heat_top + 28.0 * s + row as f32 * (ycell + ygap);
             draw_fill_round(rt, brush, cx, cy, ycell, ycell, 3.0 * s, tier_color(day.count));
+            // 今天：外圈一圈亮色描边 + 一格高亮（用户 09:5x：看不出哪格是今天）
+            if day.today {
+                // 描边：外圈亮色 + 内圈退回格子颜色（没有 stroke API，用两圈填色模拟）
+                draw_fill_round(rt, brush, cx - 1.5 * s, cy - 1.5 * s, ycell + 3.0 * s, ycell + 3.0 * s, 4.0 * s, 0xFFF7FAFF);
+                draw_fill_round(rt, brush, cx, cy, ycell, ycell, 3.0 * s, tier_color(day.count));
+            }
         }
         // 图例:少 □□□□ 多 (<100 / <500 / <1500 / ≥1500 键)
         let legend_y = heat_top + 28.0 * s + 7.0 * (ycell + ygap) + 2.0 * s;
@@ -1316,7 +1322,7 @@ impl Shell {
         self.text(rt, brush, &names, &f.label, area_x, ky + 20.0 * s, area_w, 16.0 * s, 0xFFC9D2E0);
 
         // ④ 常用字（字号 = 出现次数）
-        let words_top = ky + 44.0 * s;
+        let words_top = ky + 76.0 * s; // 用户：常用字贴太近
         self.text(rt, brush, "常用字", &f.heading, x, words_top, 200.0 * s, 26.0 * s, 0xFFF7FAFF);
         let words_peak = snap.words.first().map(|(_, c)| *c).unwrap_or(1).max(1) as f32;
         let mut wx = x;

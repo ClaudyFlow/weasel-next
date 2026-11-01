@@ -75,17 +75,25 @@ pub fn wasm_metadata(bytes: &[u8]) -> Result<Option<Metadata>, String> {
         .map(|mut m| Metadata::from_parts(m["defaults"].take(), m["richschema"].take()))
         .transpose()
 }
+/// 内嵌默认值的格式：宿主配置是 **YAML**（`weasel.yaml`，2026-10-23 起唯一格式），
+/// 各主题自己的 `config.json` 仍然是 JSON（随主题包分发，格式由主题定义）。
+#[derive(Clone, Copy, PartialEq)]
+enum DefaultsFormat {
+    Yaml,
+    Json,
+}
+
 /// 解析仓库/程序内嵌的默认值和扩展 Schema，并执行与外部元数据相同的验证。
 /// 由内嵌默认值与描述构造元数据。
-///
-/// `defaults_are_toml` 区分两种来源：宿主配置是 TOML（`weasel.toml`），
-/// 各主题自己的 `config.json` 仍然是 JSON。
-fn embedded(defaults: &[u8], rich: &[u8], defaults_are_toml: bool) -> Result<Metadata, String> {
+fn embedded(
+    defaults: &[u8],
+    rich: &[u8],
+    format: DefaultsFormat,
+) -> Result<Metadata, String> {
     let text = std::str::from_utf8(defaults).map_err(|e| e.to_string())?;
-    let defaults = if defaults_are_toml {
-        toml::from_str(text).map_err(|e| e.to_string())?
-    } else {
-        serde_json::from_str(text).map_err(|e| e.to_string())?
+    let defaults = match format {
+        DefaultsFormat::Yaml => weasel_common::yaml::to_value(text)?,
+        DefaultsFormat::Json => serde_json::from_str(text).map_err(|e| e.to_string())?,
     };
     Metadata::from_parts(defaults, serde_json::from_slice(rich).map_err(|e| e.to_string())?)
 }
@@ -104,9 +112,9 @@ pub fn load(paths: &RuntimePaths, document: &Document) -> Result<Catalog, String
         title: "常规".into(),
         mount: vec![],
         metadata: embedded(
-            include_bytes!("../../weasel.toml"),
+            include_bytes!("../../Rime-Next/weasel.yaml"),
             include_bytes!("../../weasel.richschema.json"),
-            true,
+            DefaultsFormat::Yaml,
         )?,
     });
     let mut budget = 64 * 1024 * 1024;
@@ -124,13 +132,13 @@ pub fn load(paths: &RuntimePaths, document: &Document) -> Result<Catalog, String
     ] {
         let path = paths
             .executable_directory
-            .join("themes")
+            .join("theme")
             .join(format!("weasel_theme_{id}.settings.json"));
         // 旁置描述损坏时报错而非静默使用不同版本的内置描述。
         let metadata = if path.exists() {
             Metadata::parse(&read(&path, 1024 * 1024, &mut budget)?)?
         } else {
-            embedded(defaults, rich, false)?
+            embedded(defaults, rich, DefaultsFormat::Json)?
         };
         catalog.sections.push(Section {
             title: format!("主题设置 - {id}"),

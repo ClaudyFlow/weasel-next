@@ -1,0 +1,115 @@
+# Rime Schema
+# encode: utf-8
+# newline: lf
+#
+# ★ 本文件由 `shuangpin-schema` 从 `Rime-Next\parser\shuangpin\xiaohe.parser.yaml` 生成。
+#   **不要手改**：改键位请改那份 YAML 再重新生成。
+#
+# 用 rime 的 **`__include` 深合并**继承 `pinyin.luna` 的骨架（engine / switches /
+# segmentors / translators 全部继承过来），下面**直接写要覆盖的字段**即可。
+#
+# ⚠️ 这里**不能**用 `patch:` —— 那是 `.custom.yaml` 专用语法，
+# 写在 `.schema.yaml` 里会被 rime 判为 `invalid schema definition` 而部署失败。
+# `__include` 的语义是深合并：映射递归合并、列表整体替换、标量覆盖。
+---
+__include: pinyin.luna.schema:/
+###
+schema:
+  id: double_pinyin.flypy
+  name: 小鹤双拼·简体
+  version: "2026.10.30"
+  author:
+    - 双拼键位：鹤
+  description: |
+    小鹤双拼·简体（明月拼音 + 双拼键位）。
+###
+speller:
+  algebra:
+    - derive/^([jqxy])u$/$1v/
+    - xform/^zh/V/
+    - xform/^ch/I/
+    - xform/^sh/U/
+    - xform/^([aoe])(ng)?$/$1$1$2/
+    - derive/^([aoe])([ioun])$/$1$1$2/
+    - xform/iu$/Q/
+    - xform/(.)ei$/$1W/
+    - xform/uan$/R/
+    - xform/[uv]e$/T/
+    - xform/un$/Y/
+    - xform/uo$/O/
+    - xform/ie$/P/
+    - xform/i?ong$/S/
+    - xform/ing$|uai$/K/
+    - xform/(.)ai$/$1D/
+    - xform/(.)en$/$1F/
+    - xform/(.)eng$/$1G/
+    - xform/[iu]ang$/L/
+    - xform/(.)ang$/$1H/
+    - xform/ian$/M/
+    - xform/(.)an$/$1J/
+    - xform/(.)ou$/$1Z/
+    - xform/[iu]a$/X/
+    - xform/iao$/N/
+    - xform/(.)ao$/$1C/
+    - xform/ui$/V/
+    - xform/in$/B/
+    - xlit/QWRTYUIOPSDFGHJKLZXCVBNM/qwrtyuiopsdfghjklzxcvbnm/
+    - abbrev/^([a-z]).+$/$1/
+###
+# 繁简双变体：与 pinyin.luna 同布局 —— simp/trad 嵌在 translator 下，
+# 引擎自动识别并随 `zh_hant` 开关切换；`preedit_format` 写在父层，两个变体继承。
+# 词库**单文件**：simp/trad 共用一本 `pinyin.luna`（纯简体），字形差异交给
+# opencc（继承 pinyin.luna 的 filter：zh_hant 关→t2s 保底简体、开→s2t 出繁体）。
+# `model:` = 语言模型（octagram）前缀：写 `zh-han.simp` 就自动挂载
+# model/zh-han.simp.*.gram 全部（essay-bgc 字级 + essay-bgw 词级，取最高分）；
+# 只想用某一本就写全名，如 zh-han.simp.essay-bgc。变体各带一套。
+translator:
+  preedit_format:
+    - xform/([bpmfdtnljqx])n/$1iao/
+    - xform/(\w)g/$1eng/
+    - xform/(\w)q/$1iu/
+    - xform/(\w)w/$1ei/
+    - xform/([dtnlgkhjqxyvuirzcs])r/$1uan/
+    - xform/(\w)t/$1ve/
+    - xform/(\w)y/$1un/
+    - xform/([dtnlgkhvuirzcs])o/$1uo/
+    - xform/(\w)p/$1ie/
+    - xform/([jqx])s/$1iong/
+    - xform/(\w)s/$1ong/
+    - xform/(\w)d/$1ai/
+    - xform/(\w)f/$1en/
+    - xform/(\w)h/$1ang/
+    - xform/(\w)j/$1an/
+    - xform/([gkhvuirzcs])k/$1uai/
+    - xform/(\w)k/$1ing/
+    - xform/([jqxnl])l/$1iang/
+    - xform/(\w)l/$1uang/
+    - xform/(\w)z/$1ou/
+    - xform/([gkhvuirzcs])x/$1ua/
+    - xform/(\w)x/$1ia/
+    - xform/(\w)c/$1ao/
+    - xform/([dtgkhvuirzcs])v/$1ui/
+    - xform/(\w)b/$1in/
+    - xform/(\w)m/$1ian/
+    - xform/([aoe])\1(\w)/$1$2/
+    - xform/(^|[ '])v/$1zh/
+    - xform/(^|[ '])i/$1ch/
+    - xform/(^|[ '])u/$1sh/
+    - xform/([jqxy])v/$1u/
+    - xform/([nl])v/$1ü/
+  # dict/prism 两变体共用（与 pinyin.luna 同本词库），提到这一层共享；
+  # 引擎把本层配置深合并进各变体，变体只写各自不同的 model（见下）。
+  dict: pinyin.luna
+  prism: double_pinyin.flypy
+  simp:
+    model: zh-han.simp
+  trad:
+    model: zh-han.trad
+###
+# 繁简开关名从 include 的 pinyin.luna 的 `switch: zh_hant` 直接推断，
+# 引擎自动绑定变体（@simp/@trad）与 filter（simplifier@zh_hans/@zh_hant）。
+###
+# 用家自選配置
+__patch:
+  - double_pinyin.flypy.custom:/patch?
+...

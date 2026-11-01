@@ -182,9 +182,12 @@ pub(crate) fn render_snapshot(
         revision,
         active: true,
         ascii_mode: response.ascii_mode,
-        visible: (!response.candidates.is_empty()
-            || (response.external_preedit && response.composing))
-            && anchor.valid,
+        // 可见性只由候选/组字内容决定，不再依赖锚点是否有效。
+        // 锚点无效（新组合首键、方案選單等尚无光标上下文）时窗口仍应出现，
+        // 沿用上一次的有效锚点兜底定位，待布局到达后再重定位——否则候选窗
+        // 与 Ctrl+` 方案選單会整帧被扣住而永远看不见。
+        visible: !response.candidates.is_empty()
+            || (response.external_preedit && response.composing),
         preedit: (response.external_preedit && response.composing).then(|| {
             weasel_common::message::RenderPreedit {
                 text: response.composition.clone(),

@@ -5,8 +5,10 @@ import { AppOptions, AppEntry, IconAction } from "app-options.slint";
 import { ColorEditor } from "color-editor.slint";
 import { WasmModules, WasmEntry } from "wasm-modules.slint";
 import { ColorSchemesPage, SchemeRow } from "color-schemes.slint";
-import { SchemaPicker, SchemaRow } from "schemas.slint";
+import { SchemaPicker, SchemaRow, SeriesNav } from "schemas.slint";
 import { StatsPage, StatDay, StatWord } from "stats.slint";
+import { DictPage, DictRow } from "dicts.slint";
+import { DownloadPage, RepoRow } from "download.slint";
 export { StatsWindow, StatDay, StatWord } from "stats.slint";
 export { DeployProgressWindow } from "progress.slint";
 export { ColorCodec } from "color-editor.slint";
@@ -16,7 +18,9 @@ export component SettingsWindow inherits Window {
     title: "小狼毫Next：设置";
     default-font-family: "Segoe UI";
     in property <bool> mica-enabled: false;
-    background: #ffffff;
+    // 玻璃只做「外壳」：标题栏/标签栏底下透出浅色亚克力，内容页与卡片保持不透明（可读性优先）。
+    // 87% 白：既能看到背后模糊，又不会被深色窗口衬成一片灰（2026-10-28 用户否掉了全透明版）。
+    background: mica-enabled ? #ffffffdd : #ffffff;
     // 白底必须配浅色主题，否则 Palette.foreground 还是深色主题的白色 → 白底白字。
     icon: @image-url("../../Rime-Next/icon/weasel.ico");
     preferred-width: 1280px;
@@ -47,7 +51,7 @@ export component SettingsWindow inherits Window {
     in property <string> scheme-status;
     in property <color> scheme-preview-back: #eceeee;
     in property <color> scheme-preview-border: #b0b0b0;
-    in property <color> scheme-preview-text: #000000;
+    in property <color> scheme-preview-text: #0f172a;
     in property <color> scheme-preview-hilited-back: #fa3a0a;
     in property <color> scheme-preview-hilited-text: #ffffff;
     in property <color> scheme-preview-comment: #888888;
@@ -55,8 +59,18 @@ export component SettingsWindow inherits Window {
     callback scheme-refresh();
     // 方案选单页（Rust 侧读 `weasel_style::switcher`，与官方对话框同一份数据）
     in property <[SchemaRow]> schema-rows;
+    in property <[SeriesNav]> series-nav;
     in property <string> schema-status;
     callback schema-toggle(string);
+    callback schema-series-toggled(string);
+    callback schema-series-select(string);
+    callback dict-find();
+    callback dict-add();
+    callback dict-remove();
+    callback dict-refresh();
+    callback download-tab-selected(string);
+    callback download-install(string);
+    callback download-dismiss-net();
     callback schema-apply();
     callback schema-refresh();
     callback schema-open-dialog();
@@ -80,15 +94,72 @@ export component SettingsWindow inherits Window {
         // 「应用选项」「外观与行为」两页已删除（用户 2026-10-18 要求）：
         // 前者是 app_options（按程序覆盖输入模式），后者只有启用了带配置的主题才有内容，
         // 平时都是空页。数据层没删，只是不再占页签。
-        { label: "更新", idx: 4 }
+        { label: "更新", idx: 4 },
+        { label: "词库", idx: 5 },
+        { label: "下载", idx: 6 }
     ];
     // 统计页的数据（Rust 侧灌；未接数据时全 0）
     in property <int> stat-today-keys: 0;
     in property <int> stat-today-chars: 0;
+    in property <int> stat-total-chars: 0;
+    in property <int> stat-best-speed: 0;
     in property <int> stat-today-speed: 0;
+    // 今日击键速度（键/秒，已格式化成一位小数）
+    in property <string> stat-today-key-speed-text: "0.0";
+    // 历史均速 / 历史极速的小字
+    in property <string> stat-all-speed-note: "";
+    in property <string> stat-best-speed-note: "";
+    // 击键秒速：历史最大 / 历史平均
+    in property <string> stat-best-key-speed-text: "0.0";
+    in property <string> stat-all-key-speed-note: "";
+    in property <string> stat-best-key-speed-note: "";
+    in property <string> stat-total-chars-note: "";
+    in property <string> stat-best-streak-note: "";
+    in property <string> stat-total-keys-note: "";
+    in property <string> stat-code-len-text: "0.00";
+    in property <string> stat-all-code-len-note: "";
+    // 键准 / 平均词长：今日值 + 灰色历史值（用户 2026-10-26）
+    in property <string> stat-key-accuracy-text: "0.0";
+    in property <string> stat-key-accuracy-note: "";
+    in property <string> stat-word-len-text: "0.00";
+    in property <string> stat-word-len-note: "";
+    // 打字时间：今日 / 累计有效输入时长（分钟，Rust 侧格式化好）
+    in property <string> stat-time-today-text: "0";
+    in property <string> stat-time-total-note: "";
+    // 平均每日字数：全期 / 近 7 天
+    in property <string> stat-avg-daily-text: "0";
+    in property <string> stat-avg-daily-note: "";
+    in property <int> stat-total-keys: 0;
     in property <int> stat-streak-days: 0;
     in property <[StatDay]> stat-days: [];
     in property <[StatWord]> stat-words: [];
+    in property <[StatWord]> stat-words2: [];
+    in property <[StatWord]> stat-words3: [];
+    // 键盘热力图 / 码长直方图（stat.bin 尾部扩展；老文件为空）
+    in property <[int]> stat-key-counts: [];
+    // 时段统计（24 个小时桶，0..100 百分比）
+    in property <[int]> stat-hour-keys: [];
+    in property <int> stat-hour-peak: 0;
+    in property <string> stat-hour-summary: "";
+    // 词库页
+    in property <[DictRow]> dict-rows;
+    in property <string> dict-status: "";
+    in-out property <string> dict-code: "";
+    in-out property <string> dict-word: "";
+    // 下载页
+    in property <[RepoRow]> download-repos;
+    in property <[string]> download-categories;
+    in-out property <string> download-active-tab: "全部";
+    in property <string> download-installing-name: "";
+    in property <string> download-installed-name: "";
+    in property <string> download-net-error: "";
+    in property <float> download-frac: 0.0;
+    in property <string> download-list-status: "";
+    in property <[int]> stat-code-lens: [];
+    in property <int> stat-key-peak: 1;
+    in property <string> stat-finger-hands: "—";
+    in property <string> stat-finger-rows: "—";
+    in property <string> stat-finger-names: "—";
     in property <string> stat-level-title: "";
     in property <int> stat-level: 1;
     in property <int> stat-exp-cur: 0;
@@ -96,20 +167,24 @@ export component SettingsWindow inherits Window {
     in property <float> stat-exp-ratio: 0.0;
     in property <string> stat-exp-next: "";
     in property <string> stat-realm: "";
+    // 名著字数水平（趣味对照，Rust 侧按累计上屏字数算好）
+    in property <string> stat-book-note: "";
     in property <string> stat-status: "";
     // Rust 侧用自身进程加 `/switcher`、`/style` 再起一个。
     in property <string> stat-quarter-label: "";
+    // 今日格在年度热力图里的坐标（-1 = 今天不在网格里，不画十字高亮）。
+    in property <int> stat-today-week: -1;
+    in property <int> stat-today-day: -1;
     // 主页热力格边长：53 列 + 52 个 3px 间隙铺满卡片内宽（贴到两端）。
     // 用 init / changed width 赋值而非属性绑定，绑定会和布局形成绑定环（编译实测）。
     private property <length> stats-heat-cell: 20px;
-    // 底色全部写死浅色（#ffffff 卡片 / #f4f5f7 页面），调色板必须一起钉在浅色。
+    // 底色全部写死浅色（#ffffff 卡片 / #f5f7fa 页面），调色板必须一起钉在浅色。
     // 系统是深色时 Palette.foreground 会是白的，设置页整片白底白字、看着像空白页
     // （2026-10-19 实测）。
     init => { self.stats-heat-cell = (self.width - 212px) / 53; Palette.color-scheme = ColorScheme.light; }
     changed width => { self.stats-heat-cell = (self.width - 212px) / 53; }
     callback open-switcher();
     callback open-style();
-    callback refresh-stats();
     VerticalBox {
         // 左右 padding 归零：让「主页」的灰底（StatsPage）能横向铺满整个窗口，
         // 各子块自己带 padding（用户 2026-10-18：宽度拉满，没到也拉满，后面渲染成灰色）。
@@ -122,7 +197,7 @@ export component SettingsWindow inherits Window {
             padding-left: 24px;
             // 给 DWM 原生标题栏按钮区域留出空间。
             padding-right: 144px;
-            Text { color: #1f2328; text: "小狼毫Next 设置"; font-size: 22px; vertical-alignment: center; }
+            Text { color: #17202b; text: "小狼毫Next 设置"; font-size: 22px; vertical-alignment: center; }
         }
         // ── 标签栏（用户要求：第一个叫「主页」，就是个人记录）──────────────
         HorizontalBox {
@@ -131,38 +206,85 @@ export component SettingsWindow inherits Window {
             padding-left: 24px;
             padding-right: 24px;
             spacing: 4px;
-            for item in root.nav-items : Rectangle {
-                width: 96px;
-                height: 32px;
-                border-radius: 6px;
-                background: root.current-page == item.idx ? #e4e7ec : transparent;
-                Text {
-                    text: item.label;
-                    font-size: 14px;
-                    color: root.current-page == item.idx ? #1f2328 : #57606a;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+
+            // 页签区改成绝对定位：选中底要能横向滑动（用户 2026-10-26：
+            // 「做一个那种高级的标签滑动切换效果，界面不用动画，只要标签就行」）。
+            // 宽度 = n×96 + (n−1)×4 间距；每个页签步长 100px（96 + 4）。
+            // ⚠️ 只给这一块的 `x` 加 animate，页面内容（StatsPage 等）**不参与**动画，
+            // 点页签仍然是瞬时切换。
+            Rectangle {
+                width: root.nav-items.length * 96px + (root.nav-items.length - 1) * 4px;
+                height: 34px;
+                background: transparent;
+
+                // 选中底：跟着 current-page 平移。
+                // 用户 2026-10-26 第二轮：「不够高级，neovide 的动画效果，或者 vscode animation，
+                // 要有跳跃感」→ 用 easeOutBack 曲线（前段冲过头、末端回弹）+ 260ms，
+                // 而不是 ease-in-out 那种"平移"感。Slint 只给 cubic-bezier，
+                // Neovide 的弹簧阻尼曲线用 (0.34, 1.56, 0.64, 1) 近似：y>1 就是冲过目标再弹回。
+                // 底下一层很浅的投影让它像一块实心薄片在滑，而不是色块切换。
+                Rectangle {
+                    x: root.current-page * 100px;
+                    y: 0px;
+                    width: 96px;
+                    height: 32px;
+                    border-radius: 6px;
+                    background: #e4e7ec;
+                    drop-shadow-color: #0f172a1f;
+                    drop-shadow-blur: 6px;
+                    drop-shadow-offset-y: 1px;
+                    animate x { duration: 260ms; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
                 }
-                ta := TouchArea { clicked => { root.current-page = item.idx; root.page-selected(item.idx); } }
+
+                // 文字与热区画在选中底上面。未选中的悬停/按下是实色，正好盖住底下没有东西的部分；
+                // 选中项只有按下时才盖一层更深的，平时保持透明让滑动底露出来。
+                for item in root.nav-items : Rectangle {
+                    x: item.idx * 100px;
+                    y: 0px;
+                    width: 96px;
+                    height: 32px;
+                    border-radius: 6px;
+                    background: root.current-page == item.idx
+                        ? (ta.pressed ? #cfd6df : transparent)
+                        : (ta.pressed ? #e2e8ef : (ta.has-hover ? #eef1f5 : transparent));
+                    Text {
+                        text: item.label;
+                        font-size: 14px;
+                        color: root.current-page == item.idx ? #17202b : (ta.has-hover ? #334155 : #57606a);
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        // 文字颜色跟着底一起渐变（选中变深、取消变浅），跳一下但不闪。
+                        animate color { duration: 200ms; easing: ease-out; }
+                    }
+                    ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.current-page = item.idx; root.page-selected(item.idx); }
+                    }
+                }
             }
+
             Rectangle { horizontal-stretch: 1; }
             // 操作按钮放在标签栏右侧：不占额外高度，底部也就不会多出一条操作条。
             // std-widgets 的 Button 在白底上是白底白字（几乎看不见），所以自绘。
+            // 自绘就得自己给悬停/按下反馈（用户 2026-10-26）。
             Rectangle {
                 width: 104px;
                 height: 28px;
                 border-radius: 6px;
-                background: white;
+                background: root.editable && !root.invalid
+                    ? (save-ta.pressed ? #d7dfe9 : (save-ta.has-hover ? #f1f5f9 : white))
+                    : white;
                 border-width: 1px;
-                border-color: #d1d5db;
+                border-color: save-ta.pressed ? #8fa0b4 : #c9d2de;
                 Text {
                     text: "保存并部署";
                     font-size: 13px;
-                    color: root.editable && !root.invalid ? #374151 : #c0c4cc;
+                    color: root.editable && !root.invalid ? #334155 : #c0c4cc;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
-                TouchArea {
+                save-ta := TouchArea {
+                    mouse-cursor: root.editable && !root.invalid ? pointer : default;
                     clicked => { if (root.editable && !root.invalid) { root.save(true); } }
                 }
             }
@@ -170,17 +292,20 @@ export component SettingsWindow inherits Window {
                 width: 64px;
                 height: 28px;
                 border-radius: 6px;
-                background: white;
+                background: close-ta.pressed ? #d7dfe9 : (close-ta.has-hover ? #f1f5f9 : white);
                 border-width: 1px;
-                border-color: #d1d5db;
+                border-color: close-ta.pressed ? #8fa0b4 : #c9d2de;
                 Text {
                     text: "关闭";
                     font-size: 13px;
-                    color: #374151;
+                    color: close-ta.pressed ? #0f172a : #334155;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
-                TouchArea { clicked => { root.request-close(); } }
+                close-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.request-close(); }
+                }
             }
         }
 
@@ -198,12 +323,46 @@ export component SettingsWindow inherits Window {
             // 主页横向 padding 为 0，页面宽 = 窗口宽；53 列 + 52 个 3px 间隙刚好铺满卡片。
             heat-cell: root.stats-heat-cell;
             quarter-label: root.stat-quarter-label;
+            today-week: root.stat-today-week;
+            today-day: root.stat-today-day;
             today-chars: root.stat-today-chars;
-            refresh => { root.refresh-stats(); }
+            total-chars: root.stat-total-chars;
+            best-speed: root.stat-best-speed;
             today-speed: root.stat-today-speed;
+            today-key-speed-text: root.stat-today-key-speed-text;
+            all-speed-note: root.stat-all-speed-note;
+            best-speed-note: root.stat-best-speed-note;
+            best-key-speed-text: root.stat-best-key-speed-text;
+            all-key-speed-note: root.stat-all-key-speed-note;
+            best-key-speed-note: root.stat-best-key-speed-note;
+            total-chars-note: root.stat-total-chars-note;
+            best-streak-note: root.stat-best-streak-note;
+            total-keys-note: root.stat-total-keys-note;
+            code-len-text: root.stat-code-len-text;
+            all-code-len-note: root.stat-all-code-len-note;
+            key-accuracy-text: root.stat-key-accuracy-text;
+            key-accuracy-note: root.stat-key-accuracy-note;
+            word-len-text: root.stat-word-len-text;
+            word-len-note: root.stat-word-len-note;
+            time-today-text: root.stat-time-today-text;
+            time-total-note: root.stat-time-total-note;
+            avg-daily-text: root.stat-avg-daily-text;
+            avg-daily-note: root.stat-avg-daily-note;
+            total-keys: root.stat-total-keys;
             streak-days: root.stat-streak-days;
             days: root.stat-days;
             words: root.stat-words;
+            words2: root.stat-words2;
+            words3: root.stat-words3;
+            key-counts: root.stat-key-counts;
+            hour-keys: root.stat-hour-keys;
+            hour-peak: root.stat-hour-peak;
+            hour-summary: root.stat-hour-summary;
+            code-lens: root.stat-code-lens;
+            key-peak: root.stat-key-peak;
+            finger-hands: root.stat-finger-hands;
+            finger-rows: root.stat-finger-rows;
+            finger-names: root.stat-finger-names;
             level-title: root.stat-level-title;
             level: root.stat-level;
             exp-cur: root.stat-exp-cur;
@@ -211,6 +370,7 @@ export component SettingsWindow inherits Window {
             exp-ratio: root.stat-exp-ratio;
             exp-next: root.stat-exp-next;
             realm: root.stat-realm;
+            book-note: root.stat-book-note;
             status: root.stat-status;
         }
         // ── 界面风格（tab 1）：配色方案页（官方 /style 对话框的 Slint 版）────────
@@ -238,7 +398,7 @@ export component SettingsWindow inherits Window {
             if root.schemes.length == 0 : Text {
                 text: "没有读到任何配色：检查程序文件夹的 Rime-Next/theme 与用户目录的 theme。";
                 font-size: 13px;
-                color: #5f6368;
+                color: #4b5563;
                 wrap: word-wrap;
             }
         }
@@ -252,6 +412,9 @@ export component SettingsWindow inherits Window {
                 status: root.schema-status;
                 editable: root.editable;
                 toggled(id) => { root.schema-toggle(id); }
+                    series-toggled(s) => { root.schema-series-toggled(s); }
+                    series-nav: root.series-nav;
+                    series-select(s) => { root.schema-series-select(s); }
                 apply() => { root.schema-apply(); }
                 refresh() => { root.schema-refresh(); }
                 open-dialog() => { root.schema-open-dialog(); }
@@ -468,6 +631,51 @@ export component SettingsWindow inherits Window {
                 }
             }
         }
+
+        // ── 词库（tab 5）：查编码 / 加词 / 删词 ──────────────────────────
+        // ⚠️ 两个都踩过：
+        //  1) 它以前和 VerticalBox 同级（Window 的直接子项），从窗口 (0,0) 开始画，
+        //     标题行、标签栏都被词库页文字压住（2026-10-26 截图实测）。
+        //  2) 只把它塞进 VerticalBox 还不够：DictPage 是**组件**，作为布局子项不吃剩余高度，
+        //     内容会被挤到中间、上下各留一大片白。套一层 ScrollView（和「主页」的 StatsPage
+        //     同款结构）之后内容才从顶部开始排、超出才滚动。
+    }
+    // ── 词库（tab 5）：查编码 / 加词 / 删词 ──────────────────────────
+    // ⚠️ 这一页**不能**放进上面的 VerticalBox：它内容比窗口矮，进布局就会当作可拉伸项
+    // 被推到下半屏（ScrollView / VerticalLayout / alignment: start / 写死高度 全试过，
+    // 2026-10-26 逐次截图实测）。这里按窗口坐标绝对摆放，y = 顶部留白 8 + 标题 48
+    // + 间距 12 + 标签栏 34 + 间距 12 = 114。
+    if root.current-page == 5 : DictPage {
+        x: 0px;
+        y: 114px;
+        width: root.width;
+        height: root.height - 114px;
+        rows: root.dict-rows;
+        status: root.dict-status;
+        code-input <=> root.dict-code;
+        word-input <=> root.dict-word;
+        find => { root.dict-find(); }
+        add => { root.dict-add(); }
+        remove => { root.dict-remove(); }
+        refresh => { root.dict-refresh(); }
+    }
+    // ── 下载（tab 6）：方案市场，浏览 GitHub Rime-Next 组织并一键安装 ──
+    if root.current-page == 6 : DownloadPage {
+        x: 0px;
+        y: 114px;
+        width: root.width;
+        height: root.height - 114px;
+        repos: root.download-repos;
+        categories: root.download-categories;
+        active-tab <=> root.download-active-tab;
+        installing-name: root.download-installing-name;
+        installed-name: root.download-installed-name;
+        net-error: root.download-net-error;
+        download-frac: root.download-frac;
+        list-status: root.download-list-status;
+        tab-selected(cat) => { root.download-tab-selected(cat); }
+        install(name) => { root.download-install(name); }
+        dismiss-net() => { root.download-dismiss-net(); }
     }
     add-popup := PopupWindow {
         x: (root.width - self.width) / 2;
@@ -484,7 +692,7 @@ export component SettingsWindow inherits Window {
             VerticalBox {
                 padding: 20px;
                 spacing: 12px;
-                Text { color: #1f2328; text: "添加应用"; font-size: 20px; font-weight: 600; }
+                Text { color: #17202b; text: "添加应用"; font-size: 20px; font-weight: 600; }
                 app-name := LineEdit {
                     placeholder-text: "程序文件名，例如 notepad.exe";
                     text <=> root.new-app-name;
@@ -492,7 +700,7 @@ export component SettingsWindow inherits Window {
                     init => { self.focus(); }
                 }
                 Text {
-                    color: #1f2328;
+                    color: #17202b;
                     text: root.app-add-error == "" ? "请输入程序文件名（例如 notepad.exe），不要包含路径。" : root.app-add-error;
                     font-size: 12px;
                     wrap: word-wrap;

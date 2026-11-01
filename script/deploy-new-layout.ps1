@@ -73,7 +73,7 @@ $files = @(
     'Weasel-Next-Setting.exe',
     'librime_next.dll',
     'rime_input_stat_core.dll',
-    'weasel_theme_official.dll',
+    'weasel-next-theme.dll',
     'weasel_tip.dll'
 )
 foreach ($f in $files) {

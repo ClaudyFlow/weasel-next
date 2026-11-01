@@ -1,0 +1,13 @@
+# Rime Dictionary
+# encode: utf-8
+# newline: lf
+---
+id: cangjie.5.char
+name: cangjie.5.char
+version: 2026.10.28
+sort: by_weight
+use_preset_vocabulary: false
+max_phrase_length: 1  # 不導入詞組，僅讀取字頻
+import_tables:
+  - cangjie.5.base
+...

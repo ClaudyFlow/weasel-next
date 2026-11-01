@@ -401,7 +401,7 @@ index 09a9a5c..d274560901c27d21b1642e8d30de2030b561c9b2 100644
 +  //   ③ *.gram        → <root>/model/<id><后缀>         （语言模型按 id 平铺，不建系列夹）
 +  //   ④ *.schema/.dict→ <root>/schema/<系列…>/<id><后缀>（staging 根去掉 schema/）
 +  //   ⑤ *.txt         → <root>/eassy/<id><后缀>         （essay 按 id 平铺，不建系列夹）
-+  //   ⑥ *.theme.toml  → <root>/theme/<系列…>/<id><后缀>
++  //   ⑥ *.theme.toml / *.theme.yaml → <root>/theme/<系列…>/<id><后缀>
 +  //   ⑦ *.lua         → <root>/plugin/<id>/<id>.lua
 +  //        （rime-lua 实际走 package.path：plugin/<系列>/<叶子>.lua，点号即目录；
 +  //         此分支暂无调用方，保持原样）
@@ -451,7 +451,7 @@ index 09a9a5c..d274560901c27d21b1642e8d30de2030b561c9b2 100644
    } else if (boost::ends_with(sfx, ".txt")) {
 -    subdir = "dict";                            // dict/（essay 等文本词库）
 +    subdir = "eassy";                           // eassy/<id>.txt（essay 按 id 平铺）
-+  } else if (boost::ends_with(sfx, ".theme.toml")) {
++  } else if (boost::ends_with(sfx, ".theme.toml") || boost::ends_with(sfx, ".theme.yaml")) {
 +    subdir = "theme/" + series_subdir(resource_id);  // theme/<系列…>/
    } else if (boost::ends_with(sfx, ".lua")) {
 -    subdir = "plugin";                          // plugin/（脚本）

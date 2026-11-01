@@ -103,7 +103,7 @@ pub fn parse(text: &str, format: ColorFormat) -> Option<u32> {
 
 /// 把内部 ARGB 写回官方风格的文本：不透明时用 6 位（不带 alpha），否则用 8 位。
 ///
-/// 生成 `default.theme.toml` 时用它——这样"不透明黑"与"全透明"不会在往返中互相污染。
+/// 生成 `default.theme.yaml` 时用它——这样"不透明黑"与"全透明"不会在往返中互相污染。
 pub fn format_text(argb: u32, format: ColorFormat) -> String {
     let a = (argb >> 24) & 0xff;
     let r = (argb >> 16) & 0xff;

@@ -6,7 +6,7 @@
 
 项目使用 [BSD-3-Clause](LICENSE) 开源许可，
 
-本项目基于诸多开源组件及技术，其许可清单见 [第三方许可清单](THIRD-PARTY-LICENSES.txt)。
+本项目基于诸多开源组件及技术，其许可清单见 [第三方许可清单](THIRD-PARTY-LICENSE.txt)。
 
 下载最新版本：[Releases](https://github.com/determ1ne/weasel-next/releases)
 
@@ -28,7 +28,7 @@ Rime 配置决定输入法的输入方案与交互，见 [Rime定制指南](http
 ## 自定义皮肤
 
 小狼毫通过 wasm 提供自定义皮肤接口，但目前并不保证接口稳定。
-`themes/wasm/` 下包括 SDK 及自带主题源码，可供参考。
+`theme/` 下包括主题契约与自带主题源码，可供参考。
 
 ## 构建
 

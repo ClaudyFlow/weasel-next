@@ -58,6 +58,10 @@ pub struct KeyEventResponse {
 /// (不重启引擎、关停渲染器),等待下一次管道连接时唤醒。
 pub const ENGINE_IDLE_EXIT_CODE: i32 = 3;
 
+/// 引擎空闲自退的时长（分钟）。这是**唯一真相源**：引擎看门狗用它换算毫秒，
+/// broker 与 TIP 的诊断文案也读它，避免各处把时长写死成互相矛盾的数字。
+pub const ENGINE_IDLE_MINUTES: u64 = 30;
+
 /// 进程内路由使用的消息负载。
 pub mod envelope {
     use super::*;

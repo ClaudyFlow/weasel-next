@@ -279,7 +279,9 @@ fn calc_page_indicator(
     inline_preedit: bool,
     vertical_text: bool,
 ) -> (f32, f32) {
-    if inline_preedit || !m.page_enabled {
+    // 2026-10-31：不再要求 `page_enabled`（配色没给翻页色是常态，见 paint::draw_page_buttons），
+    // 否则连矩形都不算，界面上永远看不到「还有下一页」。
+    if inline_preedit {
         return (0.0, 0.0);
     }
     let left = measured.page_prev;
@@ -470,7 +472,7 @@ impl Layout {
 
     /// 官方 `OnMouseMove` / `OnLeftClickDown` 的命中顺序：先翻页按钮，再候选。
     pub fn hit(&self, m: &Metrics, x: f32, y: f32) -> Option<Hit> {
-        if m.page_enabled && !self.inline_preedit && !self.rows.is_empty() {
+        if !self.inline_preedit && !self.rows.is_empty() {
             if !self.page_prev.is_null() && self.page_prev.contains(x, y) {
                 return Some(Hit::Previous);
             }
@@ -878,7 +880,7 @@ fn vertical_layout(
     // 翻页按钮（官方 VerticalLayout.cpp:162-178）
     let mut page_prev = Rect::default();
     let mut page_next = Rect::default();
-    if m.page_enabled && count > 0 && !m.inline_preedit {
+    if count > 0 && !m.inline_preedit {
         let x = content_size.cx - offset_x - real_margin_x + m.hilite_padding_x - pgw;
         let y = (preedit.top + preedit.bottom) / 2.0 - measured.page_prev.cy / 2.0;
         page_prev = Rect::new(x, y, x + measured.page_prev.cx, y + measured.page_prev.cy);
@@ -1108,15 +1110,13 @@ mod tests {
 
     #[test]
     fn matches_hand_computed_official_geometry() {
-        // 手算自官方 C++（aqua 出厂值、96 DPI、两条候选、无注释、无标记、无预编辑）：
-        //   real_margin = 12, offset = border*2 = 6, spacing = 4, candidate_spacing = 5,
-        //   min_width = 160
-        //   行 0：label(12,12)-(28,31)，text(32,12)-(80,31) → 运行宽度 80，高度 12+19=31
-        //   行 1：candidate_spacing 5 → 高度 36，label(12,36)-(28,55)，text(32,36)-(80,55) → 高度 55
-        //   max_candidate_width = 16+4+48 = 68 → content 宽 = max(80, 68+24) = 92 → 被 min_width 顶到 160
-        //   content 高 = 55 + margin_y 12 = 67
-        //   contentSize = (160+12, 67+12) = (172, 79)
-        //   候选矩形（再外扩 hilite_padding 2 之前）= left 18，right = 18-12+160-12 = 154
+        // 手算（96 DPI、两条候选、无注释、无标记、无预编辑）。间距/圆角已跟字高绑定：
+        //   字高 = 14pt * 96/72 = 18.6667；margin = 一个字高 18.6667；
+        //   candidate_spacing = 一个全角字符 = 字高 18.6667；offset = border*2 = 6
+        //   行 0：top = margin 18.6667 + offset 6 = 24.6667，行高 19 → 底 43.6667
+        //   行 1：top = 43.6667 + 18.6667 = 62.3333，底 = 81.3333
+        //   content 高 = 81.3333 + margin 18.6667 = 100 → contentSize 高 = 100 + offset 6
+        //   宽仍被 min_width 160 顶住 → contentSize = (172, 96.6667)
         let m = metrics();
         let mut sizes = Measured {
             label: vec![Size::new(16.0, 19.0); 2],
@@ -1128,27 +1128,27 @@ mod tests {
         sizes.page_next = Size::new(8.0, 18.0);
         let layout = Layout::build(&m, &view(2), &sizes);
 
-        assert_eq!(layout.content_size, Size::new(172.0, 79.0), "contentSize 手算值");
-        assert_eq!(layout.content, Rect::new(6.0, 6.0, 166.0, 73.0), "content 矩形");
+        assert_eq!(layout.content_size, Size::new(172.0, 106.0), "contentSize 手算值");
+        assert_eq!(layout.content, Rect::new(6.0, 6.0, 166.0, 100.0), "content 矩形");
         assert_eq!(
             layout.rows[0].label,
-            Rect::new(18.0, 18.0, 34.0, 37.0),
-            "行 0 序号矩形"
+            Rect::new(24.666668, 24.666668, 40.666668, 43.666668),
+            "行 0 序号矩形（margin 一个字高 18.67 + offset 6）"
         );
         assert_eq!(
             layout.rows[0].text,
-            Rect::new(38.0, 18.0, 86.0, 37.0),
+            Rect::new(44.666668, 24.666668, 92.66667, 43.666668),
             "行 0 正文矩形（label 之后 hilite_spacing）"
         );
-        assert_eq!(layout.rows[1].label.top, 42.0, "行 1 = 行 0 底 + candidate_spacing");
+        assert_eq!(layout.rows[1].label.top, 62.333336, "行 1 = 行 0 底 + 一个全角 18.67");
         assert_eq!(
             layout.rows[0].rect,
-            Rect::new(18.0, 18.0, 154.0, 37.0),
+            Rect::new(24.666668, 24.666668, 147.33333, 43.666668),
             "高亮矩形（右边界贴面板右边距）"
         );
         assert_eq!(
             layout.highlight_rect(&m, 0),
-            Rect::new(16.0, 16.0, 156.0, 39.0),
+            Rect::new(22.666668, 22.666668, 149.33333, 45.666668),
             "绘制/命中用矩形 = 行矩形外扩 hilite_padding"
         );
     }
@@ -1275,19 +1275,17 @@ mod tests {
         );
     }
 
+    /// 2026-10-31 改：翻页按钮**不再**要求配色给翻页色。
+    /// 出厂 37 套配色的 prevpage/nextpage 全是 `0x00000000`，旧语义导致用户永远看不见「还有下一页」。
     #[test]
-    fn page_buttons_only_when_colors_are_opaque() {
+    fn page_buttons_are_laid_out_even_without_page_colors() {
         let m = metrics();
-        assert!(!m.page_enabled, "官方 aqua 的 prevpage/nextpage 是全透明 → 不画翻页");
+        assert!(!m.page_enabled, "aqua 的 prevpage/nextpage 仍是全透明（配色没变）");
         let layout = Layout::build(&m, &view(3), &measured(3));
-        assert!(layout.page_prev.is_null() && layout.page_next.is_null());
-
-        let mut style = UIStyle::default();
-        style.color_scheme = "aqua".into();
-        let mut m = Metrics::new(&style, 96.0);
-        m.page_enabled = true;
-        let layout = Layout::build(&m, &view(3), &measured(3));
-        assert!(!layout.page_prev.is_null(), "着色后应给出翻页按钮矩形");
+        assert!(
+            !layout.page_prev.is_null() && !layout.page_next.is_null(),
+            "透明配色也要给翻页按钮矩形，否则界面上画不出来"
+        );
     }
 
     #[test]

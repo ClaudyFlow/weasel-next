@@ -22,7 +22,7 @@ const WM_RENDERER_THEME: u32 = WM_APP as u32 + 12;
 
 /// 加载首选主题及 ten 回退主题的可用工厂。
 ///
-/// DLL 只从 renderer 所在目录的 `themes` 子目录加载；成功或失败结果均缓存到进程退出。
+/// DLL 先从 renderer 所在目录找，找不到再看同目录的 `theme` 子目录；成功或失败结果均缓存到进程退出。
 fn theme_candidates(preferred: &str) -> Vec<&'static dyn ThemeFactory> {
     static OFFICIAL: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
 static ELEVEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
@@ -58,23 +58,26 @@ static TEST: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new
                 _ => unreachable!("candidate names are normalized above"),
             };
             let loaded = slot.get_or_init(|| {
-                let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-                let directory = executable
-                    .parent()
-                    .ok_or("renderer has no executable directory")?;
                 let directory = std::env::current_exe()
-            .map_err(|error| error.to_string())?
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .ok_or("renderer executable has no directory")?;
-        // 主题 DLL 直接放在 renderer 所在目录（程序文件夹根）；兼容旧的 theme\ 子目录。
-        let file = format!("weasel_theme_{name}.dll");
-        let root_path = directory.join(&file);
-        let path = if root_path.is_file() {
-            root_path
-        } else {
-            directory.join("themes").join(&file)
-        };
+                    .map_err(|error| error.to_string())?
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .ok_or("renderer executable has no directory")?;
+                // 主题 DLL 直接放在 renderer 所在目录（程序文件夹根）；兼容旧的 theme\ 子目录。
+                // 官方主题改名叫 `weasel-next-theme.dll`（用户 2026-10-31 要求）；
+                // 其它主题（eleven/ten/abc/void/wasm/seven/test）仍是 `weasel_theme_<name>.dll`。
+                // 兼容：新名不存在时回退旧名，避免旧安装包直接加载不到主题而黑屏。
+                let file = if name == "official" {
+                    "weasel-next-theme.dll".to_string()
+                } else {
+                    format!("weasel_theme_{name}.dll")
+                };
+                let root_path = directory.join(&file);
+                let path = if root_path.is_file() {
+                    root_path
+                } else {
+                    directory.join("theme").join(&file)
+                };
                 crate::theme_dll::Factory::load(name, &path)
             });
             match loaded {
@@ -209,8 +212,9 @@ fn normalized_renderer_settings(
     let Some(mut root) = config.query(".").ok().flatten().cloned() else {
         return config.clone();
     };
-    let defaults: serde_json::Value = toml::from_str(include_str!("../../weasel.toml"))
-        .expect("embedded settings must be valid JSON");
+    // 内嵌出厂默认值是 YAML（`weasel.yaml`，2026-10-23 起唯一格式）。
+    let defaults: serde_json::Value = weasel_common::yaml::to_value(include_str!("../../Rime-Next/weasel.yaml"))
+        .expect("embedded settings must be valid YAML");
     let Some(root_object) = root.as_object_mut() else {
         return weasel_common::settings::ConfigSnapshot::new(defaults);
     };
@@ -389,7 +393,7 @@ impl UiCommandSender {
         let message = match command {
             UiCommand::Render(owner, snapshot) => {
                 crate::state::validate(&snapshot)?;
-                crate::diagnostics::record(format_args!("收到渲染命令：owner={owner}"));
+                crate::diagnostics::record_verbose(format_args!("收到渲染命令：owner={owner}"));
                 if !mailbox.render(owner, snapshot) {
                     crate::diagnostics::record(format_args!("渲染命令被丢弃：owner={owner} 不是当前所有者"));
                     return Ok(());
@@ -699,8 +703,18 @@ fn run_ui(
                 .map_err(|_| "renderer mailbox poisoned")?
                 .take_pending();
             if let Some((owner, snapshot)) = pending {
-                crate::diagnostics::record(format_args!("准备绘制 owner={owner} 快照={snapshot:?}"));
-                if let Err(error) = presentation.apply(owner, snapshot) {
+                crate::diagnostics::record_verbose(format_args!("准备绘制 owner={owner} 快照={snapshot:?}"));
+                // 乙-1 插桩：一帧从"拿到快照"到"画完"的耗时。它不阻塞打字
+                // （publish 是异步的），但决定了候选窗落后按键多久。
+                let frame_start = std::time::Instant::now();
+                let composing = snapshot.as_ref().is_some_and(|s| s.preedit.is_some());
+                let applied = presentation.apply(owner, snapshot);
+                weasel_common::key_timing::record(
+                    frame_start.elapsed(),
+                    true,
+                    composing,
+                );
+                if let Err(error) = applied {
                     crate::diagnostics::record(format_args!("UI 循环退出：渲染失败 {error}"));
                     return Err(error);
                 }

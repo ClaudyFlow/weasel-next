@@ -211,6 +211,12 @@ pub fn generate() {
             "Windows.Win32.IDWriteFontFallback",
             "Windows.Win32.DWRITE_UNICODE_RANGE",
             "Windows.Win32.ID2D1RenderTarget::{SetDpi,CreateSolidColorBrush,BeginDraw,EndDraw,Clear,FillRectangle,FillRoundedRectangle,DrawRoundedRectangle,DrawText}",
+            // 线性渐变刷：手绘玻璃底用它一次填满圆角路径，避免分带产生的横向接缝
+            "Windows.Win32.ID2D1RenderTarget::{CreateGradientStopCollection,CreateLinearGradientBrush}",
+            "Windows.Win32.ID2D1GradientStopCollection", "Windows.Win32.ID2D1LinearGradientBrush",
+            "Windows.Win32.D2D1_GRADIENT_STOP", "Windows.Win32.D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES",
+            "Windows.Win32.D2D1_GAMMA_2_2",
+            "Windows.Win32.D2D1_EXTEND_MODE_CLAMP",
             "Windows.Win32.D2D1_FACTORY_TYPE", "Windows.Win32.D2D1_PRESENT_OPTIONS",
             "Windows.Win32.D2D1_DRAW_TEXT_OPTIONS", "Windows.Win32.D2D1_ALPHA_MODE",
             "Windows.Win32.D2DERR_RECREATE_TARGET",

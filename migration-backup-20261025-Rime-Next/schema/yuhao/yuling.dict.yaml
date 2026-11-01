@@ -1,0 +1,49 @@
+# encoding: utf-8
+#
+# 宇浩·靈明
+# 版本: 20260718
+#
+---
+name: "yuling"
+version: "20260718"
+sort: original
+import_tables:
+  # 以下是簡碼字詞，空格上屏
+  - schema/yuhao/yuling.quick
+  # 以下是簡碼字詞，韻碼上屏
+  - schema/yuhao/yuling.pop
+  # 以下是單字全碼，包括陸標、臺標、港標、兼容拆分
+  - schema/yuhao/yuling.full
+  # 以下是高優先級用户自定义詞庫
+  - schema/yuhao/yuhao.private
+  # 以下是字根提示
+  - schema/yuhao/yuling.roots
+  # 以下是宇浩極簡千詞詞庫
+  - schema/yuhao/yuling_sc.words_essence
+  - schema/yuhao/yuling.words_essence
+  # 以下是全碼詞庫
+  - schema/yuhao/yuling_sc.words 
+  - schema/yuhao/yuling_tc.words
+  # 以下是低優先級用户自定义詞庫
+  - schema/yuhao/yuhao.extended
+  # 以下是符號
+  - schema/yuhao/yuhao.symbols
+columns:
+  - text
+  - code
+encoder:
+  exclude_patterns:
+    - "^[a-z]$"
+    - "[^a-z]"
+  rules:
+    - length_equal: 2
+      formula: "AaAbBaBb"
+    - length_equal: 3
+      formula: "AaBaCaCb"
+    - length_in_range: [4, 20]
+      formula: "AaBaCaZa"
+...
+
+宇浩
+殿下
+

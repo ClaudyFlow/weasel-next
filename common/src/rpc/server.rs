@@ -130,7 +130,17 @@ impl RpcServer {
         if next_instance.is_none() {
             *next_instance = Some(self.create_instance(true)?);
         }
-        next_instance.as_ref().unwrap().connect().await?;
+        // ⚠️ 连接失败必须**丢掉这个实例**再返回错误。
+        //
+        // `NamedPipeServer::connect()` 失败后（客户端在 accept 之前就断开，典型是
+        // `ERROR_NO_DATA`），这个实例已经不在监听状态；若原样留在 `next_instance`
+        // 里，后续每次 `accept()` 都会在同一具"死管道"上重复失败 —— 调用方无论怎么
+        // 重试都永远接不到客户端，只能重建监听器（2026-10-29：broker 管道就是这样
+        // 永久消失，输入法语言栏显示「无法连接到 Rime」）。
+        if let Err(error) = next_instance.as_ref().unwrap().connect().await {
+            *next_instance = None;
+            return Err(error.into());
+        }
         // The connected instance remains alive, so the namespace is continuously
         // held while adding subsequent instances for simultaneous clients.
         let replacement = self.create_instance(false)?;

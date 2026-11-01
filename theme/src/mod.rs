@@ -472,7 +472,9 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
             ex_style,
             CLASS,
             title,
-            (WS_POPUP as u32 | WS_CLIPSIBLINGS as u32)
+            // + WS_THICKFRAME：Win11 的 DWM 圆角模板只对**有边框**的窗口生效；
+            // 无边框 popup 上 `DWMWA_WINDOW_CORNER_PREFERENCE` 会被忽略（试过）。
+            (WS_POPUP as u32 | WS_CLIPSIBLINGS as u32 | 0x0004_0000u32) // WS_THICKFRAME
                 | if preview { WS_SYSMENU as u32 } else { 0 },
             0,
             0,
@@ -489,6 +491,33 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
         window.hwnd.set(hwnd);
         // 系统级毛玻璃：DWM 在窗口矩形背后做模糊，面板（半透明）与四角都透出桌面。
         // 染色用配色背景色，和皮肤观感保持一致。
+        // 自绘模糊这档：关掉 DWM 给无边框窗口加的**系统投影**
+        // （DWMWA_NCRENDERING_POLICY = DWMNCRP_DISABLED），否则圆角外侧仍会有一圈黑边。
+        {
+            unsafe extern "system" {
+                fn DwmSetWindowAttribute(
+                    hwnd: HWND,
+                    attribute: u32,
+                    value: *const core::ffi::c_void,
+                    size: u32,
+                ) -> i32;
+            }
+            // Win11 系统圆角（带 WS_THICKFRAME 之后才会生效）
+            let round: i32 = 2;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                33,
+                &round as *const _ as *const core::ffi::c_void,
+                core::mem::size_of::<i32>() as u32,
+            );
+            let disabled: i32 = 2; // DWMNCRP_DISABLED
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                2, // DWMWA_NCRENDERING_POLICY
+                &disabled as *const _ as *const core::ffi::c_void,
+                core::mem::size_of::<i32>() as u32,
+            );
+        }
         if glass {
             accent::sync_acrylic(hwnd, true, tint);
             // Win11：让 DWM 把**窗口本身**裁成圆角。亚克力铺满窗口矩形，
@@ -764,14 +793,34 @@ impl Window {
             if w <= 0 || h <= 0 {
                 return;
             }
-            let Some((rgba, bw, bh)) = backdrop::capture_blurred(wr.left, wr.top, w, h)
+            let Some((mut rgba, bw, bh)) = backdrop::capture_blurred(wr.left, wr.top, w, h)
             else {
                 return;
             };
+            // 圆角遮罩：背景只留在**面板**范围内（窗口比面板大 offset 一圈，那圈给阴影/描边，
+            // 必须透明），半径就用面板圆角本身——之前写 `radius / 2.0`，遮罩比面板圆角小一半，
+            // 圆角外的背景没被裁掉，四角就露出方角（用户 11-01："圆角怎么还没切掉"）。
+            // ⚠️ `round_corner_ex` 已经是**像素**（`Metrics` 里按 DPI 缩放过），
+            // 再乘 dpi/96 会让遮罩半径大 25% ⇒ 面板弧和遮罩弧曲率不一致（21:1x 用户报的）。
+            let radius = metrics.round_corner_ex;
+            let (inset_x, inset_y) = metrics.offset();
+            // 抓屏位图可能跟窗口不同尺寸，按比例换算到像素
+            let sx = bw as f32 / w.max(1) as f32;
+            let sy = bh as f32 / h.max(1) as f32;
+            backdrop::mask_rounded(
+                &mut rgba,
+                bw as usize,
+                bh as usize,
+                radius * sx,
+                inset_x * sx,
+                inset_y * sy,
+            );
             let props = D2D1_BITMAP_PROPERTIES {
                 pixelFormat: D2D1_PIXEL_FORMAT {
                     format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    alphaMode: D2D1_ALPHA_MODE_IGNORE,
+                    // 逐像素 alpha（圆角外透明）。之前是 IGNORE —— alpha 直接被丢弃，
+                    // 上面算出来的遮罩等于白做，背景就整块方形贴上来，四角露方角。
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
                 },
                 dpiX: 96.0,
                 dpiY: 96.0,
@@ -1341,6 +1390,9 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                     }
                     return LRESULT(0);
                 }
+                // 加了 WS_THICKFRAME 之后：客户区要铺满整个窗口，且不提供缩放/拖动边框。
+                WM_NCCALCSIZE if wp.0 != 0 => return LRESULT(0),
+                WM_NCHITTEST => return LRESULT(1), // HTCLIENT
                 WM_ERASEBKGND => return LRESULT(1),
                 WM_CLOSE => {
                     if window.preview {
@@ -1361,6 +1413,14 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                     }
                     window.invalidate();
                     return LRESULT(0);
+                }
+                // 移动/尺寸变化后重抓背景：候选窗自己动时，模糊背景跟着更新（用户 11:5x）
+                (0x0003 | 0x0047) => { // WM_MOVE | WM_WINDOWPOSCHANGED（绑定里没有这两个常量）
+                    if window.glass_self {
+                        window.capture_backdrop();
+                        window.invalidate();
+                    }
+                    return DefWindowProcW(hwnd, msg, wp, lp);
                 }
                 WM_DPICHANGED => {
                     window.dpi.set((wp.0 as u32 & 0xffff).max(1));

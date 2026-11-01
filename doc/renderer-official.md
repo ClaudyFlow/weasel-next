@@ -8,7 +8,7 @@
 ```
 C:\Program Files\Weasel-Next\
   Weasel-Next-Renderer.exe            渲染器宿主：进程、消息循环、设置下发
-  weasel_theme_official.dll           本主题（渲染器从**自身目录**加载；也兼容 themes\ 子目录）
+  weasel_theme_official.dll           本主题（渲染器从**自身目录**加载；也兼容 theme\ 子目录）
   Rime-Next\theme\default\default.theme.toml   出厂皮肤（36 套配色）
 %APPDATA%\Rime-Next\theme\theme.toml  用户布局 + `color_scheme`（用哪套皮肤；可选）
 ```

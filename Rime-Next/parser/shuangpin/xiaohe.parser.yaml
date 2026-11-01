@@ -1,0 +1,67 @@
+# 小鹤双拼 · 键位定义（YAML）
+#
+# ★ 这是**唯一要人编辑的配置**。运行 `shuangpin-schema`（cargo run -p weasel-style --bin shuangpin-schema）会把它生成
+#   `schema\<id 的每一段>\<id>.schema.yaml`（id 里的点就是目录层级，如 `double_pinyin.flypy`
+#   → `schema\double_pinyin\flypy\double_pinyin.flypy.schema.yaml`）。rime 只认 .schema.yaml，
+#   那份是**生成物**，别手改。
+#
+# 想加自然码 / 微软 / 紫光：复制这份、改键位、改 id 即可。
+# 格式是公开约定，实现是自己写的。
+
+# ── 元信息 ────────────────────────────────────────────────
+schema:
+  id: double_pinyin.flypy          # 决定 <id>.schema.yaml 的文件名和目录层级，改它等于换方案
+  parse: 双拼/小鹤                 # 人看的分类标签（大类/键位名），不参与配对
+  name: "小鹤双拼·简体"
+  version: "2026.10.30"
+  author: "双拼键位：鹤"
+  dict: "pinyin.luna"              # 简繁共用一本（纯简体词库，字形靠 opencc 切）
+  prism: "double_pinyin.flypy"     # 棱镜是**本方案**的拼写产物，不能跟着词库走
+  base: "pinyin.luna"              # 继承骨架 + 繁简开关（zh_hant）+ opencc filter
+  abbrev: true                     # 简拼：打第 1 个键（声母）就出候选，不等第 2 个键
+
+# ── 声母 ────────────────────────────────────────────────
+# 只有两字母声母需要指定；单字母声母默认在自己的键上。
+# 想挪键就写一行，例如 j: "q"
+initials:
+  zh: "v"
+  ch: "i"
+  sh: "u"
+
+# ── 韵母 ────────────────────────────────────────────────
+# 键值 = 韵母 → 键位。生成器会按「长的优先」自动排序成 rime 的 algebra，
+# 所以这里**顺序随便写**，不用担心 iang 被 ang 抢先匹配。
+finals:
+  a: "a"
+  o: "o"
+  e: "e"
+  i: "i"
+  u: "u"
+  v: "v"
+  ai: "d"
+  ei: "w"
+  ui: "v"
+  ao: "c"
+  ou: "z"
+  iu: "q"
+  ie: "p"
+  ue: "t"
+  ve: "t"
+  an: "j"
+  en: "f"
+  in: "b"
+  un: "y"
+  ang: "h"
+  eng: "g"
+  ing: "k"
+  ong: "s"
+  ia: "x"
+  iao: "n"
+  ian: "m"
+  iang: "l"
+  iong: "s"
+  ua: "x"
+  uo: "o"
+  uai: "k"
+  uan: "r"
+  uang: "l"

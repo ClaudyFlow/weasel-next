@@ -284,10 +284,42 @@ impl<'a> Painter<'a> {
 /// [`GLASS_ALPHA`]，本就半透明的配色保持原样。文字仍是实色绘制，可读性不受影响。
 pub(crate) const GLASS_ALPHA: u32 = 0x33;
 
+/// 玻璃态的**亮度层**（scrim）：铺在 tint 之下，压住背景穿透。
+///
+/// 只有一层 20% 的 tint 时，背后的桌面/网页纹理会整片透上来 ⇒ 面板发灰发脏、
+/// 文字读不清（截图里那种"murky"）。Fluent Acrylic 的 `luminosityOpacity` 就是
+/// 干这个的：tint 保留玻璃的色调，亮度层负责把背景压暗到能读字。
+/// 叠完后整体不透明度 ≈ 1-(1-0.20)*(1-0.63) ≈ 70%，还透得出一点背景。
+pub(crate) const GLASS_SCRIM: u32 = 0xA00A_0C10; // 深蓝黑（跟手绘玻璃底 #141617 同调）
+
+/// 取亮度层颜色；`WEASEL_GLASS_SCRIM` 可以只覆盖 alpha（十六进制，如 `B0`），
+/// 用来在实机上直接调深浅，不用重新编译。
+fn glass_scrim() -> u32 {
+    std::env::var("WEASEL_GLASS_SCRIM")
+        .ok()
+        .and_then(|text| u32::from_str_radix(text.trim().trim_start_matches("0x"), 16).ok())
+        .map(|alpha| ((alpha & 0xff) << 24) | (GLASS_SCRIM & 0x00ff_ffff))
+        .unwrap_or(GLASS_SCRIM)
+}
+
 pub(crate) fn glassify(argb: u32) -> u32 {
     let alpha = (argb >> 24) & 0xff;
     let alpha = alpha.min(GLASS_ALPHA);
     (alpha << 24) | (argb & 0x00ff_ffff)
+}
+
+/// RGB 分量乘系数（压暗）。
+fn darken_color(argb: u32, factor: f32) -> u32 {
+    let r = (((argb >> 16) & 0xFF) as f32 * factor) as u32 & 0xFF;
+    let g = (((argb >> 8) & 0xFF) as f32 * factor) as u32 & 0xFF;
+    let b = ((argb & 0xFF) as f32 * factor) as u32 & 0xFF;
+    (r << 16) | (g << 8) | b
+}
+
+/// RGB 分量往白里混（提亮）。
+fn lighten_color(argb: u32, amount: f32) -> u32 {
+    let mix = |channel: u32| ((channel as f32) + (255.0 - channel as f32) * amount).min(255.0) as u32;
+    (mix((argb >> 16) & 0xFF) << 16) | (mix((argb >> 8) & 0xFF) << 8) | mix(argb & 0xFF)
 }
 
 /// 内部 ARGB（`0xAARRGGBB`）→ Direct2D 颜色。
@@ -408,10 +440,35 @@ impl Painter<'_> {
             let draw_background = (!empty_context && !style.inline_preedit)
                 || (style.inline_preedit && (has_candidates || !layout.aux.is_empty()));
             if draw_background {
-                let back_color = if self.glass {
-                    glassify(self.scheme.back_color)
-                } else {
-                    self.scheme.back_color
+                // 材质三档（用户 21:0x 定名）：glass / acrylic / metal，走环境变量
+                // `WEASEL_MATERIAL`（默认 glass，即自绘模糊那一档）。
+                // 材质由设置界面写进 `%APPDATA%\Rime-Next	heme\material.txt`；
+                // 文件不存在时退回环境变量，再退回 glass（用户 21:0x：要在设置里切）。
+                let material = std::env::var_os("APPDATA")
+                    .map(std::path::PathBuf::from)
+                    .map(|base| base.join("Rime-Next").join("theme").join("material.txt"))
+                    .and_then(|path| std::fs::read_to_string(path).ok())
+                    .map(|text| text.trim().to_string())
+                    .filter(|text| !text.is_empty())
+                    .or_else(|| std::env::var("WEASEL_MATERIAL").ok())
+                    .unwrap_or_default();
+                let back_color = match material.as_str() {
+                    // 亚克力：乳白半透（不模糊，比玻璃"实"）
+                    "acrylic" => {
+                        let base = lighten_color(self.scheme.back_color, 0.22);
+                        (0xB4u32 << 24) | (base & 0x00FF_FFFF)
+                    }
+                    // 金属：不透明哑光
+                    "metal" => 0xFF00_0000 | (darken_color(self.scheme.back_color, 0.78) & 0x00FF_FFFF),
+                    // 玻璃：手绘底 + 20% 染色。glass_self 时 `self.glass` 为 false（关了 DWM 亚克力），
+                    // 但面板仍要 20% alpha，否则 DComp 逐像素透明被不透明 back_color 盖死（用户 12:1x：为什么不透明）。
+                    _ => {
+                        if self.glass || self.glass_self {
+                            glassify(self.scheme.back_color)
+                        } else {
+                            self.scheme.back_color
+                        }
+                    }
                 };
                 // 玻璃态：面板画满**整个窗口矩形**，而不是内缩 `offset` 的内框。
                 // 否则窗口比面板大一圈，那圈被 DWM 亚克力填满 ⇒ 边框外面多出一层灰（用户 13:4x 报的"还有一层"）。
@@ -427,17 +484,81 @@ impl Painter<'_> {
                     layout.content
                 };
                 if self.glass_self {
-                    self.draw_backdrop(&back_rect, self.backdrop);
+                    self.draw_hand_backdrop(&back_rect, style.round_corner_ex);
+                }
+                // 亮度层：先铺深色压住背景纹理，再叠皮肤色 tint。
+                // 少了这层，20% 的面板叠在什么背景上都是一片浑浊的灰。
+                if self.glass || self.glass_self {
+                    self.fill_geometry(
+                        &back_rect,
+                        glass_scrim(),
+                        style.round_corner_ex,
+                        &RoundInfo::default(),
+                        false,
+                    );
                 }
                 self.highlight_rect(
                     &back_rect,
                     style.round_corner_ex,
                     style.border,
                     back_color,
-                    self.scheme.shadow_color,
-                    self.scheme.border_color,
+                    // 自绘模糊这档**不画投影**：投影画在 offset 那圈里，而窗口就是面板本身，
+                    // 投影会从圆角外侧顶出一圈深色方框（20:5x 用户截图里的"黑边"）。
+                    if self.glass { 0 } else { self.scheme.shadow_color },
+                    // 玻璃档的描边用白色高光：原来用配色的 border_color
+                    // （steam 是深灰 #353638）压在蓝色模糊上就是一圈脏黑边（21:2x 用户截图）。
+                    // 但 25% 白太淡 ⇒ 窗口边界糊在背景里（"smeared"），提到 55% 才收得住边。
+                    if self.glass || self.glass_self { 0x8CFF_FFFF } else { self.scheme.border_color },
                     &RoundInfo::default(),
                 );
+                if material == "metal" {
+                    // 金属：**分段渐变**（用户 23:1x：4:2:3:1 的黑白黑白，但每一段之间要有过渡）。
+                    // 做法：给出若干控制点，段内线性插值 ⇒ 既保留 4:2:3:1 的比例，又不再是刀切边。
+                    let h = back_rect.height().max(1.0);
+                    let info = RoundInfo::default();
+                    // (位置, 亮度)：暗→亮→暗→亮的 4 段，边界用 4% 宽度做斜坡
+                    // 用户 23:2x 拍板：**上白下黑**，就是一条竖直渐变（顶部最亮 → 底部最暗）。
+                    // 之前那套 3:2:1:4 的黑白黑白分段全撤掉。
+                    // 用户 23:2x 定：**上 30% 纯白 → 10% 渐变 → 60% 纯黑**（正好 100%）
+                    // 用户 23:2x：白色还是多 ⇒ **12% 纯白 + 8% 渐变 + 80% 纯黑**
+                    const POINTS: [(f32, f32); 4] = [
+                        (0.00, 1.00), // 0–12%   纯白
+                        (0.12, 1.00), //         渐变起点
+                        (0.20, 0.10), // 12–20%  渐变到黑
+                        (1.00, 0.10), // 20–100% 纯黑（80%）
+                    ];
+                    let steps = 96;
+                    for index in 0..steps {
+                        let t = index as f32 / (steps - 1) as f32;
+                        // 找所在区间并线性插值
+                        let mut lit: f32 = POINTS[POINTS.len() - 1].1;
+                        for pair in POINTS.windows(2) {
+                            let (t0, v0) = pair[0];
+                            let (t1, v1) = pair[1];
+                            if t <= t1 && t >= t0 {
+                                let k = if (t1 - t0).abs() < 1e-6 { 1.0 } else { (t - t0) / (t1 - t0) };
+                                lit = v0 + (v1 - v0) * k;
+                                break;
+                            }
+                        }
+                        let alpha = (lit.clamp(0.0, 1.0) * 0x9Eu32 as f32) as u32;
+                        if alpha == 0 {
+                            continue;
+                        }
+                        let top = back_rect.top + h * t;
+                        let bottom = back_rect.top + h * ((index + 1) as f32 / steps as f32) + 0.5;
+                        self.fill_geometry(
+                            &Rect::new(back_rect.left, top, back_rect.right, bottom),
+                            (alpha << 24) | 0xFF_FFFF,
+                            0.0,
+                            &info,
+                            false,
+                        );
+                    }
+                    // 顶部/底部 1px 硬边收口
+                    self.fill_geometry(&Rect::new(back_rect.left, back_rect.top, back_rect.right, back_rect.top + 1.0), 0xCCFF_FFFF, 0.0, &info, false);
+                    self.fill_geometry(&Rect::new(back_rect.left, back_rect.bottom - 1.0, back_rect.right, back_rect.bottom), 0x8800_0000, 0.0, &info, false);
+                }
             }
             // 预编辑（L452-457）：非 inline 且有内容才画
             if !inline && self.view.preedit.is_some() {
@@ -461,6 +582,55 @@ impl Painter<'_> {
     /// 显示，抓到的才是背后真实画面；paint 里现场抓会把候选窗自己抓进去，
     /// 糊成一团灰（2026-10-31 检查点 §7.5 的教训）。这里只读缓存，无缓存跳过
     /// （面板底色照旧盖住），尺寸对不上就拉伸（模糊图伸缩无碍观感）。
+    /// 手绘玻璃底（用户 11:5x）：不抓屏、不依赖背后内容，
+    /// 直接在**圆角路径里**画一条竖直渐变 + 顶部高光。因为是自己画、又用圆角几何裁，
+    /// 所以圆角外侧天然透明，彻底没有"方角一圈"。
+    fn draw_hand_backdrop(&self, rect: &Rect, radius: f32) {
+        if let Ok(path) = rounded_rect_path(self.factory, rect, radius, &RoundInfo::default()) {
+            // 用**真线性渐变刷**一次填满圆角路径。
+            // 之前是 24 条横带近似竖直渐变，而且每条带都各画一遍圆角矩形 ⇒
+            // 带与带的抗锯齿接缝叠在一起就是一片可见的**横线**（用户 11-01 截图：
+            // "这不是横线吗，这哪是模糊"）。渐变刷没有分带，也就没有接缝。
+            // 亮度：顶部 1.0 → 底部 0.75（玻璃受光），基色 #141617，alpha 0x33。
+            let lit = |factor: f32| -> u32 {
+                let r = (0x14u32 as f32 * factor) as u32;
+                let g = (0x16u32 as f32 * factor) as u32;
+                let b = (0x17u32 as f32 * factor) as u32;
+                (0x33u32 << 24) | (r << 16) | (g << 8) | b
+            };
+            let stops = [
+                D2D1_GRADIENT_STOP {
+                    position: 0.0,
+                    color: d2d_color(lit(1.0)),
+                },
+                D2D1_GRADIENT_STOP {
+                    position: 1.0,
+                    color: d2d_color(lit(0.75)),
+                },
+            ];
+            unsafe {
+                let Ok(collection) = self.target.CreateGradientStopCollection(
+                    &stops,
+                    D2D1_GAMMA_2_2,
+                    D2D1_EXTEND_MODE_CLAMP,
+                ) else {
+                    return;
+                };
+                let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                    startPoint: windows_numerics::Vector2 { x: rect.left, y: rect.top },
+                    endPoint: windows_numerics::Vector2 { x: rect.left, y: rect.bottom },
+                };
+                let Ok(brush) = self
+                    .target
+                    .CreateLinearGradientBrush(&props, None, &collection)
+                else {
+                    return;
+                };
+                self.target.FillGeometry(&path, &brush, None::<&ID2D1Brush>);
+            }
+        }
+    }
+
     fn draw_backdrop(&self, rect: &Rect, cached: Option<&BackdropCache>) {
         let Some(cached) = cached else {
             return;
@@ -875,14 +1045,14 @@ impl Painter<'_> {
         let text = self.scheme.text_color;
         let fallback = |alpha: u32| (alpha << 24) | (text & 0x00ff_ffff);
         let prev = if transparent(self.scheme.prevpage_color) {
-            fallback(if self.view.can_page_previous { 0x8c } else { 0x40 })
+            fallback(if self.view.can_page_previous { 0xCC } else { 0x59 })
         } else if self.view.can_page_previous {
             self.scheme.prevpage_color
         } else {
             fallback(0x40)
         };
         let next = if transparent(self.scheme.nextpage_color) {
-            fallback(if self.view.can_page_next { 0x8c } else { 0x40 })
+            fallback(if self.view.can_page_next { 0xCC } else { 0x59 })
         } else if self.view.can_page_next {
             self.scheme.nextpage_color
         } else {

@@ -505,6 +505,18 @@ typedef struct RIME_FLAVORED(rime_api_t) {
                                               size_t index);
 
   Bool (*change_page)(RimeSessionId session_id, Bool backward);
+
+  // ---- 三个根目录的 get/set（2026-10-25 增补，挂在 change_page 之后）----
+  //! 程序文件夹（program_dir）
+  const char* (*get_program_dir)(void);
+  //! 程序文件夹（带缓冲区的线程安全版本）
+  void (*get_program_dir_s)(char* dir, size_t buffer_size);
+  //! 设置程序文件夹（运行期覆盖，部署时 layout() 会用到）
+  void (*set_program_dir)(const char* dir);
+  //! 设置共享数据目录（= Rime-Next 数据目录）
+  void (*set_shared_data_dir)(const char* dir);
+  //! 设置用户数据目录
+  void (*set_user_data_dir)(const char* dir);
 } RIME_FLAVORED(RimeApi);
 
 //! API entry

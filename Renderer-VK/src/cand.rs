@@ -97,7 +97,7 @@ pub unsafe fn run(entry: &Entry) -> Result<(), Box<dyn std::error::Error>> {
         RegisterClassW(&wnd_class);
         let hwnd = CreateWindowExW(
             // 置顶(0x8) + 工具窗(0x80)：不进任务栏、不会被别的窗口压住
-            windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0x0000_0008 | 0x0000_0080 | 0x0020_0000),
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0x0000_0008 | 0x0000_0080), // 去掉 NOREDIRECTIONBITMAP，让 PRE_MULTIPLIED alpha 生效
             class_name,
             w!("候选窗 (Vulkan)"),
             WS_POPUP | WS_VISIBLE,
@@ -130,15 +130,8 @@ pub unsafe fn run(entry: &Entry) -> Result<(), Box<dyn std::error::Error>> {
         let bitmap = CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0)?;
         let old_bitmap = SelectObject(dc, bitmap.into());
         let _ = SetBkMode(dc, TRANSPARENT);
-        // 亚克力：抓窗口背后的画面做模糊（先 CPU 版，GPU 版等 shader 管线）。
-        // `capture_blurred` 已经在 theme/src/backdrop.rs 里（GDI StretchBlt + 三趟箱式模糊）。
-        let mut blur_bg: Option<(Vec<u8>, u32, u32)> = None;
-        {
-            let (wx, wy) = (300, 260);
-            if let Some((pixels, bw, bh)) = crate::blur::capture_blurred(wx, wy, width, height) {
-                blur_bg = Some((pixels, bw, bh));
-            }
-        }
+        // 高斯模糊背景：抓窗口背后的画面，降采样 + 三趟箱式模糊（≈高斯）。
+        let blur_bg = crate::blur::capture_blurred(300, 260, width, height);
         let mut fill = |x: f32, y: f32, w: f32, h: f32, color: u32| {
             let brush = CreateSolidBrush(COLORREF(color));
             let rect = RECT {
@@ -151,26 +144,8 @@ pub unsafe fn run(entry: &Entry) -> Result<(), Box<dyn std::error::Error>> {
             let _ = DeleteObject(brush.into());
         };
         // 面板底 + 顶部高光带（金属那套的简化版）
-        if let Some((bg, bw, bh)) = &blur_bg {
-            // 把模糊图按窗口尺寸放大铺满（双线性最近邻都行，本来就是糊的）
-            for py in 0..height {
-                for px in 0..width {
-                    let sx = (px as u32 * *bw / width.max(1) as u32).min(bw.saturating_sub(1));
-                    let sy = (py as u32 * *bh / height.max(1) as u32).min(bh.saturating_sub(1));
-                    let src = ((sy * *bw + sx) * 4) as usize;
-                    let dst = ((py * width + px) * 4) as usize;
-                    let target = (bits as *mut u8).add(dst);
-                    // 与灰色叠一层（85% 不透明），就是亚克力的"染色"
-                    for channel in 0..3 {
-                        let base = 0x2Bu32;
-                        let value = (base as f32 * 0.15 + bg[src + channel] as f32 * 0.85) as u8;
-                        *target.add(channel) = value;
-                    }
-                }
-            }
-        } else {
-            fill(0.0, 0.0, 760.0, 80.0, 0x002B2B2B);
-        }
+        // 75% 灰（#BFBFBF），不透明：用户 11:1x 要求"做成 75% 灰、无透明"
+        fill(0.0, 0.0, 760.0, 80.0, 0x00333333); // #FFFFFF × 20% = #333333
         let mut text = |content: &str, x: f32, y: f32, size: f32, bold: bool, color: u32| {
             let font = CreateFontW(
                 (size * scale) as i32,
@@ -267,7 +242,7 @@ pub unsafe fn run(entry: &Entry) -> Result<(), Box<dyn std::error::Error>> {
         std::ptr::copy_nonoverlapping(bits as *const u8, pixels.as_mut_ptr(), pixels.len());
         // 外侧圆角（用户 23:5x：大候选框也要圆角）+ 预乘 alpha：
         // GDI 写出来的 alpha 恒为 0，必须自己按"圆角矩形覆盖率"填，并做预乘。
-        let radius = 20.0f32 * scale; // 外侧面板圆角 = 一个字高（用户 00:1x）
+        let radius = 20.0f32 * scale; // 圆角 20（用户最终定）
         let (fw, fh) = (width as f32, height as f32);
         for y in 0..height as usize {
             for x in 0..width as usize {
@@ -297,7 +272,7 @@ pub unsafe fn run(entry: &Entry) -> Result<(), Box<dyn std::error::Error>> {
                     1.0
                 };
                 let index = (y * width as usize + x) * 4;
-                let alpha = (coverage * 255.0 * 0.85) as u32; // 半透明：不透明度 85%
+                let alpha = (coverage * 255.0 * 0.2) as u32; // 对齐 D2D 玻璃档：GLASS_ALPHA=0x33(51)≈20%
                 for channel in 0..3 {
                     pixels[index + channel] = ((pixels[index + channel] as u32 * alpha) / 255) as u8;
                 }
@@ -618,7 +593,22 @@ pub unsafe fn run(entry: &Entry) -> Result<(), Box<dyn std::error::Error>> {
         );
         let _ = device.wait_for_fences(&[fence], true, u64::MAX);
         println!("候选窗已呈现 {}×{}，保持 12 秒", extent.width, extent.height);
-        std::thread::sleep(std::time::Duration::from_secs(180));
+                // 消息循环 180 秒：拖动、Esc、重画都靠它，硬 sleep 会让窗口卡死
+        {
+            use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, PeekMessageW, TranslateMessage, DispatchMessageW, PM_REMOVE};
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+            while std::time::Instant::now() < deadline {
+                let mut msg = windows::Win32::UI::WindowsAndMessaging::MSG::default();
+                while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                    if msg.message == 0x0012 { // WM_QUIT
+                        break;
+                    }
+                    let _ = TranslateMessage(&msg);
+                    let _ = DispatchMessageW(&mut msg);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
+        }
 
         device.destroy_fence(fence, None);
         device.destroy_semaphore(sem_rendered, None);

@@ -41,6 +41,9 @@ try {
         # 自定义双拼的解析器：把 parser\shuangpin\*.parser.yaml 生成成 rime 认的 .schema.yaml。
         # 必须随包分发 —— 用户机器上没有 Python / Rust 工具链，没有它就没法改键位。
         'target\release\shuangpin-schema.exe',
+        # 配方管理器 PlumNext（東風破的 Rust 重写）：设置界面「获取更多输入方案...」
+        # 就是拉起它；没有它那个按钮只能提示找不到。
+        'target\release\plum-next.exe',
         'target\release\Weasel-Next.dll',
         # 32 位 TIP：由 script\build-tip32.ps1 单独编出（llvm-mingw 的 i686 目标）。
         # 32 位宿主（WPS 等）只查 WOW6432Node 的 InprocServer32，没有这份就没有输入法。
@@ -48,6 +51,8 @@ try {
         # 而不是静默打出一个缺 32 位 TIP 的安装包。
         'target\release\Weasel-Next-32.dll',
         'artifact\smoke\rime.dll',
+        # 新引擎槽位（Engine 优先加载 rime-next.dll）；arm64 包则由 build-installer-arm64.ps1 提供。
+        'target\release\rime-next.dll',
         'Rime-Next\default.yaml',
                 'target\release\weasel_broker.pdb',
         'target\release\weasel_server.pdb',
@@ -101,7 +106,11 @@ try {
     $payloadDestinations = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($payload in @(
         # 整个 Rime-Next（含 theme\ 皮肤、eassy、schema、weasel.yaml 等）
-        @{ Macro = 'RimePayload'; RemoveMacro = 'RemoveRimePayload'; ValidateMacro = 'ValidateRimePayloadRemoval'; Source = 'Rime-Next'; Target = 'Rime-Next' },
+        # ⚠️ 目标目录必须是 `data`：`rime_layout::data_dir()` 在安装根下**优先**用 `data\`
+        # （2026-10-28 改名），只有没有 `data\` 时才回退旧的 `Rime-Next\`。
+        # 2026-10-31 实测：装到 `Rime-Next\` 会让引擎继续读那份没人更新的 `data\`
+        # —— 逗号翻页在包里修好了却永远不生效（`data\key_bindings.yaml` 停在 10-29）。
+        @{ Macro = 'RimePayload'; RemoveMacro = 'RemoveRimePayload'; ValidateMacro = 'ValidateRimePayloadRemoval'; Source = 'Rime-Next'; Target = 'data' },
         @{ Macro = 'WasmPayload'; RemoveMacro = 'RemoveWasmPayload'; ValidateMacro = 'ValidateWasmPayloadRemoval'; Source = 'artifact\theme-wasm'; Target = 'theme-wasm' }
     )) {
         $files = @()

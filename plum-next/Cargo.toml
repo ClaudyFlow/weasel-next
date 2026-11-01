@@ -1,0 +1,32 @@
+[package]
+name = "plum-next"
+version = "0.1.0"
+edition = "2021"
+license = "BSD-3-Clause"
+description = "東風破 /plum/ 的 Rust 重写（PlumNext）：libgit2 拉取 + 镜像自动嗅探与切换"
+
+[[bin]]
+name = "plum-next"
+path = "src/main.rs"
+
+[dependencies]
+# 用户文件夹解析：安装器自选位置（`WEASEL_NEXT_USER_DIR` > `<程序目录>\userdir.txt` >
+# `%APPDATA%\Rime-Next`）；与其他组件共用同一份实现，别在这里自己拼 APPDATA。
+weasel-common = { path = "../common" }
+# libgit2 绑定：替代 plum 里对 `git` 命令行的依赖（内嵌 libgit2，无需装 Git for Windows）
+git2 = { version = "0.21", default-features = false, features = ["https"] }
+# 与 librime-next 保持同一套 YAML 插头（serde_yaml 的维护分支）
+serde = { version = "1", features = ["derive"] }
+serde_norway = "0.9"
+# `--progress-file` 的 JSON 进度行
+serde_json = "1"
+# 仅用于 `download_files` 的直链下载与镜像可达性探测
+# TLS 后端用 rustls:GFW 对 Windows schannel 指纹的 TLS RST 命中 reqwest
+# 默认(native-tls)栈,同刻 curl/openssl 能握手成功——换栈实测绕开。
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# clone/fetch 进度条（抄自 rime-cli：fxliang/rime-cli）
+indicatif = "0.17"
+# 「拉取 + 搬运」流程里把 part1/part2 整体搬移到用户根目录（同盘 rename，跨盘自动 copy+delete）
+fs_extra = "1.3"
+# 删除临时仓库目录（含 .git 只读文件，Windows 下比 std::fs 稳）
+remove_dir_all = "0.8"

@@ -368,10 +368,9 @@ async fn read_connection(
     }
 }
 
-/// 最后一次打字活动的毫秒时钟(UNIX epoch)。空闲看门狗据此判断。
+/// 最后一次打字活动的毫秒时钟(UNIX epoch)。连接池模型下引擎不再因空闲自退,
+/// 但仍记录活跃度,供将来排查或按需扩展(例如零连接超长空闲再回收进程)。
 static LAST_ACTIVITY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// 空闲自退出的等待时长:五分钟不打字(用户 2026-10-27 定)。
-const IDLE_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 /// 进程内标记:本轮退出是**空闲自退**(broker 据退出码识别,不重启、关渲染器)。
 static IDLE_EXIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -384,10 +383,6 @@ fn now_ms() -> u64 {
 
 fn touch_activity() {
     LAST_ACTIVITY_MS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
-}
-
-fn activity_elapsed_ms() -> u64 {
-    now_ms().saturating_sub(LAST_ACTIVITY_MS.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// 解析服务启动参数并映射启动结果为进程退出码。
@@ -557,15 +552,15 @@ async fn serve(paths: RuntimePaths) -> Result<(), String> {
     );
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);
     touch_activity();
-    let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel::<()>(1);
+    let engine_sender = engine.sender.clone();
     tokio::spawn(async move {
-        // 空闲看门狗:每 30 秒巡检一次,五分钟无打字 ⇒ 请求优雅退出。
+        // 连接池：空闲只回收原生会话（释放词库句柄/内存），进程与命名管道连接保留。
+        // 唤醒后第一键即时重建会话（仅"建会话 + 选方案"，不重初始化 librime），
+        // 没有"冷启动停顿、第一键丢失"的问题。
+        // 每 30 秒巡检一次；具体回收判据（超过 SESSION_IDLE_RECLAIM 没打字）在引擎内。
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-            if activity_elapsed_ms() >= IDLE_TIMEOUT_MS {
-                let _ = idle_tx.send(()).await;
-                break;
-            }
+            let _ = engine_sender.try_send(Work::ReclaimIdle);
         }
     });
 
@@ -582,11 +577,6 @@ async fn serve(paths: RuntimePaths) -> Result<(), String> {
             biased;
             _ = &mut parent_dead, if _parent_watch.is_some() => { tracing::info!("broker exited; shutting down"); break; }
             request = shutdown_rx.recv() => { notice = request; break; }
-            _ = idle_rx.recv() => {
-                tracing::info!("idle timeout: no typing for 5 minutes; shutting down");
-                IDLE_EXIT.store(true, std::sync::atomic::Ordering::Release);
-                break;
-            }
             _ = &mut engine.finished => { break; }
             Some(result) = readers.join_next_with_id(), if !readers.is_empty() => {
                 let task = match result { Ok((task, _)) => task, Err(error) => error.id() };

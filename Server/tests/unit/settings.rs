@@ -19,7 +19,7 @@ fn temporary_directory() -> std::path::PathBuf {
 fn apply_patch(base: &mut Value, patch: &Value) -> Result<(), String> {
     let directory = temporary_directory();
     std::fs::create_dir(&directory).unwrap();
-    let path = directory.join("weasel.custom.toml");
+    let path = directory.join("weasel.yaml");
     std::fs::write(&path, weasel_common::yaml::to_string_pretty(&patch)).unwrap();
     let result = overlay_file(base, &path);
     std::fs::remove_dir_all(directory).unwrap();
@@ -89,21 +89,27 @@ fn files_follow_precedence_and_missing_files_are_optional() {
     };
     paths.ensure().unwrap();
     let mut warnings = Vec::new();
-    // 没有任何配置文件时用内嵌默认值（weasel.toml 里的 theme = "official"）
+    // 没有任何配置文件时用内嵌默认值（出厂 `weasel.yaml` 里的 theme = "official"）
     assert_eq!(
         load(&paths, |w| warnings.push(w))
             .required::<String>(".theme")
             .unwrap(),
         "official"
     );
-    std::fs::write(directory.join("weasel.toml"), b"theme: ten\n").unwrap();
+    // 程序文件夹那份是 `weasel.yaml`（2026-10-23 起宿主配置只有 YAML 一种格式）。
+    std::fs::write(
+        weasel_common::settings::program_config_path(&directory),
+        b"theme: ten\n",
+    )
+    .unwrap();
     assert_eq!(
         load(&paths, |w| warnings.push(w))
             .required::<String>(".theme")
             .unwrap(),
         "ten"
     );
-    let custom = paths.user_data.join("weasel.custom.toml");
+    let custom = weasel_common::settings::user_config_path(&paths.user_data);
+    std::fs::create_dir_all(custom.parent().unwrap()).unwrap();
     std::fs::write(&custom, b"\xef\xbb\xbftheme: eleven\n").unwrap();
     assert_eq!(
         load(&paths, |w| warnings.push(w))
@@ -122,5 +128,88 @@ fn files_follow_precedence_and_missing_files_are_optional() {
     assert_eq!(warnings.len(), 1);
     std::fs::write(&custom, vec![b' '; MAX_CONFIG_BYTES as usize + 1]).unwrap();
     assert!(overlay_file(&mut json!({"theme":"ten"}), &custom).is_err());
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// 验收①：`weasel.yaml` 里的值必须被读出来（程序文件夹 + 用户目录）。
+#[test]
+fn yaml_program_config_is_read() {
+    let directory = temporary_directory();
+    std::fs::create_dir_all(&directory).unwrap();
+    let paths = RuntimePaths {
+        executable_directory: directory.clone(),
+        user_data: directory.join("user-data"),
+        logs: directory.join("logs"),
+    };
+    paths.ensure().unwrap();
+    std::fs::write(
+        weasel_common::settings::program_config_path(&directory),
+        b"theme: eleven\ninput_mode_indicator_duration_ms: 1234\nsound:\n  enabled: false\n",
+    )
+    .unwrap();
+    let mut warnings = Vec::new();
+    let settings = load(&paths, |w| warnings.push(w));
+    assert_eq!(settings.required::<String>(".theme").unwrap(), "eleven");
+    assert_eq!(
+        settings
+            .required::<u64>(".input_mode_indicator_duration_ms")
+            .unwrap(),
+        1234
+    );
+    assert_eq!(settings.required::<bool>(".sound.enabled").unwrap(), false);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// 验收②：程序文件夹里**只有**旧 `weasel.toml`（或更老的 `weasel.json`）时，
+/// 读不到任何配置 —— 不报错、不崩，直接走内嵌出厂默认值；且不会生成/改名任何文件。
+#[test]
+fn legacy_toml_only_program_config_falls_back_to_defaults() {
+    let directory = temporary_directory();
+    std::fs::create_dir_all(&directory).unwrap();
+    let paths = RuntimePaths {
+        executable_directory: directory.clone(),
+        user_data: directory.join("user-data"),
+        logs: directory.join("logs"),
+    };
+    paths.ensure().unwrap();
+    std::fs::write(
+        directory.join("weasel.toml"),
+        b"theme = \"ten\"\ninput_mode_indicator_duration_ms = 1234\n",
+    )
+    .unwrap();
+    std::fs::write(directory.join("weasel.json"), br#"{"theme":"seven"}"#).unwrap();
+    let mut warnings = Vec::new();
+    let settings = load(&paths, |w| warnings.push(w));
+    assert_eq!(
+        settings.required::<String>(".theme").unwrap(),
+        "official",
+        "旧 TOML/JSON 不该被读：走内嵌出厂默认值"
+    );
+    assert_eq!(
+        settings
+            .required::<u64>(".input_mode_indicator_duration_ms")
+            .unwrap(),
+        800,
+        "TOML 里的 1234 不该生效"
+    );
+    assert!(warnings.is_empty(), "读不到不是错误，不该有告警：{warnings:?}");
+    // 不迁移、不生成、不改名：旧文件原样留着，也没有 weasel.yaml。
+    assert!(!weasel_common::settings::program_config_path(&directory).exists());
+    assert!(directory.join("weasel.toml").is_file());
+    assert!(directory.join("weasel.json").is_file());
+    // 用户自己写好 YAML 之后立即生效。
+    std::fs::write(
+        weasel_common::settings::program_config_path(&directory),
+        b"theme: eleven
+",
+    )
+    .unwrap();
+    assert_eq!(
+        load(&paths, |w| warnings.push(w))
+            .required::<String>(".theme")
+            .unwrap(),
+        "eleven"
+    );
     std::fs::remove_dir_all(&directory).unwrap();
 }

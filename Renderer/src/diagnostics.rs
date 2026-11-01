@@ -29,6 +29,19 @@ pub fn initialize() {
 pub fn record(message: fmt::Arguments<'_>) {
     record_at(Level::INFO, message);
 }
+/// 逐帧明细（默认关闭；`WEASEL_RENDERER_LOG=1` 打开）。
+///
+/// ⚠️ 2026-10-29 实测：原来每次绘制都 INFO 落一条"收到渲染命令"，外加一条把**整个
+/// `RenderSnapshot` Debug 出来**的"准备绘制"；`tracing-appender` 是同步无缓冲写盘，
+/// `renderer.2026-10-28.log` 一天长到 **386 MB**。这是每键固定的毫秒级开销，默认关掉，
+/// 排查布局/绘制问题时再用环境变量打开。
+pub fn record_verbose(message: fmt::Arguments<'_>) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("WEASEL_RENDERER_LOG").is_some()) {
+        return;
+    }
+    record(message);
+}
 /// 使用指定级别记录信息；尚未显式初始化时惰性启用 stderr 日志器。
 pub fn record_at(level: Level, message: fmt::Arguments<'_>) {
     LOGGER

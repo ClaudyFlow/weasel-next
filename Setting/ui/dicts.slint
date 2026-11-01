@@ -1,0 +1,139 @@
+// 词库页：查编码 → 看候选（名次）→ 加词 / 删词。
+//
+// 数据层在 `weasel_settings::dict`（解析、加词、删词），这页只负责交互。
+// 只改用户目录根部的 `*.dict.yaml`，写前自动备份（Rust 侧做）。
+
+import { Button, LineEdit, ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+/// 一行候选：名次 + 词 + 编码 + 来自哪个词典。
+export struct DictRow {
+    rank: int,
+    word: string,
+    code: string,
+    source: string,
+}
+
+export component DictPage inherits VerticalBox {
+    in property <[DictRow]> rows;
+    in property <string> status: "";
+    in-out property <string> code-input: "";
+    in-out property <string> word-input: "";
+
+    callback find();
+    callback add();
+    callback remove();
+    callback refresh();
+
+    padding: 12px;
+    spacing: 10px;
+    // 这一页内容比窗口矮，剩下的高度不许把内容顶到中间/底部（2026-10-26 实测：
+    // 不写 alignment 时整块内容跑到下半屏，上面空一大片）。贴顶排，剩下的留在底部。
+    alignment: start;
+
+    HorizontalBox {
+        vertical-stretch: 0;
+        spacing: 8px;
+        Text {
+            text: "词库";
+            font-size: 18px;
+            font-weight: 700;
+            color: #17202b;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.status;
+            font-size: 12px;
+            color: #4b5563;
+            vertical-alignment: center;
+        }
+        Button { text: "重新读取"; clicked => { root.refresh(); } }
+    }
+
+    Text {
+        text: "把用户目录里所有 *.dict.yaml 汇总在一起。行序就是名次（第 1 行是首选）。改完记得回主页「保存并部署」。";
+        font-size: 12px;
+        color: #4b5563;
+        wrap: word-wrap;
+        vertical-stretch: 0;
+    }
+
+    HorizontalBox {
+        vertical-stretch: 0;
+        spacing: 8px;
+        LineEdit {
+            text <=> root.code-input;
+            placeholder-text: "编码（如 cs，可只打前缀）";
+            horizontal-stretch: 1;
+        }
+        Button { text: "查候选"; clicked => { root.find(); } }
+    }
+
+    HorizontalBox {
+        vertical-stretch: 0;
+        spacing: 8px;
+        LineEdit {
+            text <=> root.word-input;
+            placeholder-text: "要加的词";
+            horizontal-stretch: 1;
+        }
+        Button { text: "加入（用上面的编码）"; clicked => { root.add(); } }
+        Button { text: "删除该词"; clicked => { root.remove(); } }
+    }
+
+    Rectangle {
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: #c9d2de;
+        background: #ffffff;
+        // 固定高度：本页现在套在 ScrollView 里（见 main.slint），内容按自然高度排、
+        // vertical-stretch 不再起作用；结果区自己内部滚动。
+        height: 300px;
+        ScrollView {
+            VerticalBox {
+                for row in root.rows : HorizontalBox {
+                    height: 32px;
+                    padding-left: 8px;
+                    spacing: 10px;
+                    Text {
+                        text: row.rank;
+                        width: 36px;
+                        font-size: 12px;
+                        color: #94a3b8;
+                        vertical-alignment: center;
+                        horizontal-alignment: end;
+                    }
+                    Text {
+                        text: row.word;
+                        width: 180px;
+                        font-size: 14px;
+                        color: #17202b;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: row.code;
+                        width: 130px;
+                        font-size: 12px;
+                        color: #15803d;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: row.source;
+                        font-size: 11px;
+                        color: #94a3b8;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                }
+                if root.rows.length == 0 : Text {
+                    text: "（还没有查询结果）";
+                    font-size: 12px;
+                    color: #94a3b8;
+                    padding: 12px;
+                }
+            }
+        }
+    }
+}

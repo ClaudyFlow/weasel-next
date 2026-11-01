@@ -11,9 +11,10 @@ pub mod deploy_manifest;
 pub mod eassy;
 pub mod rime_layout;
 pub mod deploy_protocol;
+pub mod key_timing;
 pub mod logging;
 pub mod message;
-pub use message::ENGINE_IDLE_EXIT_CODE;
+pub use message::{ENGINE_IDLE_EXIT_CODE, ENGINE_IDLE_MINUTES};
 #[cfg(windows)]
 pub mod process;
 pub mod rpc;

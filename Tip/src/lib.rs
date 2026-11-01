@@ -9,6 +9,7 @@ mod boundary;
 mod class_factory;
 mod diagnostics;
 mod icons;
+mod key_latency;
 mod keyboard;
 mod module;
 mod registration;

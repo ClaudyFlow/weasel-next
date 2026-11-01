@@ -40,8 +40,8 @@ pub fn run() -> Result<(), String> {
     let settings = runtime.block_on(load_theme(false)).unwrap_or_else(|error| {
         crate::diagnostics::record(format_args!("{error}; using embedded settings"));
         weasel_common::settings::ConfigSnapshot::new(
-            toml::from_str(include_str!("../../weasel.toml"))
-                .expect("embedded settings must be valid JSON"),
+            weasel_common::yaml::to_value(include_str!("../../Rime-Next/weasel.yaml"))
+                .expect("embedded settings must be valid YAML"),
         )
     });
     let theme = settings.required::<String>(".theme").map_err(|error| {

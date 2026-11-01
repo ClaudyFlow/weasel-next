@@ -1,0 +1,87 @@
+# Rime Schema
+# encode: utf-8
+# newline: lf
+---
+schema:
+  id: wubi.86
+  name: 86五笔
+  version: 2026.10.28
+  author:
+    - 發明人 王永民先生
+  description: |
+    五筆字型86版
+    碼表源自 ibus-table
+    敲 z 鍵進入拼音反查
+  dependency:
+    - pinyin.luna
+###
+switch:
+  - name: ascii_mode
+    reset: 0
+    state: [ 中文, 西文 ]
+  - name: full_shape
+    state: [ 半角, 全角 ]
+  - name: extended_charset
+    state: [ 常用, 增廣 ]
+  - name: ascii_punct
+    state: [ 。，, ．， ]
+###
+engine:
+  processor:
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentor:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translator:
+    - punct_translator
+    - reverse_lookup_translator
+    - table_translator
+###
+speller:
+  delimiter: " ;'"
+  #max_code_length: 4
+###
+# 形码不做繁简双变体：字根不分简繁，一本词库足够；
+# 也不挂语言模型 `model:` —— octagram 是给拼音串组词用的，喂字根串没有意义。
+translator:
+  dict: wubi.86
+  enable_charset_filter: true
+  enable_sentence: true
+  enable_encoder: true
+  encode_commit_history: true
+  max_phrase_length: 4
+  disable_user_dict_for_patterns:
+    - "^z.*$"
+###
+reverse_lookup:
+  schema: pinyin.luna
+  prefix: "z"
+  suffix: "'"
+  tips: 〔拼音〕
+  preedit_format:
+    - xform/([nl])v/$1ü/
+    - xform/([nl])ue/$1üe/
+    - xform/([jqxy])v/$1u/
+###
+punctuator:
+  import_preset: symbols
+###
+key_binder:
+  import_preset: default
+###
+recognizer:
+  import_preset: default
+  patterns:
+    punct: '^/([0-9]0?|[A-Za-z]+)$'
+    reverse_lookup: "^z[a-z]*'?$"
+...

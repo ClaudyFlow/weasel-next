@@ -1,0 +1,14 @@
+# 方案信息 —— 勾选清单 + 当前使用的方案。
+# 由部署流程自动生成：识别程序文件夹里过准入检查的方案后写入。
+# 之后由「方案选单设定」与输入法自己维护；手改请保持 `schemas` 是 id 列表。
+active: pinyin.luna
+schemas:
+  - 092
+  - cangjie.5
+  - double_pinyin.flypy
+  - double_pinyin.ziranma
+  - pinyin.luna
+  - pinyin.terra
+  - stroke
+  - wubi.86
+  - zhuyin

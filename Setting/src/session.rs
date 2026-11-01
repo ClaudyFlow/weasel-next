@@ -257,7 +257,8 @@ impl Session {
             }
         }
 
-        let config = paths.user_data.join("weasel.custom.toml");
+        // 用户补丁 2026-10-21 起是用户目录根下的 `weasel.yaml`（去掉 custom、不再进子目录）
+        let config = weasel_common::settings::user_config_path(&paths.user_data);
         Ok(View {
             sections,
             notices: self.catalog.notices.clone(),
@@ -299,7 +300,7 @@ mod tests {
         let view = session.view(&paths).expect("生成视图");
         assert_eq!(view.sections.len(), session.catalog().sections.len());
         assert!(!view.paths.config.is_empty());
-        assert!(view.paths.config.ends_with("weasel.custom.toml"));
+        assert!(view.paths.config.ends_with("weasel.yaml"));
         assert!(!view.dirty);
     }
 

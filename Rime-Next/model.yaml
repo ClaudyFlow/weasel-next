@@ -1,24 +1,37 @@
-# Rime configuration - grammar（语言模型 preset）
+# Rime configuration - 语言模型（octagram）注册表
 #
-# 供方案里的 `__patch: - grammar:/hans?` / `- grammar:/hant?` 引用。
-# `?` = 本文件不存在时静默跳过（librime 的 optional preset），所以老安装不会因此报错。
+# 命名规则：`zh-han.<变体>.<语料>-<级别>.gram`
+#   zh-han            = 语言（汉语）
+#   .simp / .trad     = 变体（简体 / 繁体）
+#   .essay-bgc        = 语料 essay + 字级（29 MB，小、快）
+#   .essay-bgw        = 语料 essay + 词级（206 MB，质量最好）
 #
-# 这些 preset 会被合并进方案的**根节点**，效果等价于在方案里写：
-#     grammar:
-#       language: zh-hans-t-essay-bgw
-# librime 的 octagram（grammar 组件）在组句/调序时读 `grammar/language`，
-# 然后按 <数据目录>/model/<language>.gram 找模型（用户目录优先，其次程序文件夹）。
+# 方案里只写**前缀**（`model: zh-han.simp` / `model: zh-han.trad`），
+# 引擎自动扫描 `<数据根>/model/` 下所有以该前缀开头的 `.gram` 并**全部挂载**，
+# 查询时取各本里最高的分。加模型只要把文件丢进 model/ 并按规则命名，不用改方案。
 #
-# 模型文件（4 个，放在 %APPDATA%\Rime-Next\model\ 或 <程序>\Rime-Next\model\）：
-#   zh-hans-t-essay-bgw.gram   206 MB   ← 默认用这个（词级，质量最好）
-#   zh-hans-t-essay-bgc.gram    29 MB   ← 字级，小、快，效果弱一些
-#   zh-hant-t-essay-bgw.gram   208 MB
-#   zh-hant-t-essay-bgc.gram    30 MB
-# 换模型只改这里的 language，不用动方案。
-hans:
-  grammar:
-    language: zh-hans-t-essay-bgw
+#     translator:
+#       simp:
+#         model: zh-han.simp   →  zh-han.simp.essay-bgc.gram
+#                                 zh-han.simp.essay-bgw.gram   （两本都挂）
+#       trad:
+#         model: zh-han.trad   →  zh-han.trad.essay-bgc.gram
+#                                 zh-han.trad.essay-bgw.gram
+#
+# 只想用某一本就写全名：`model: zh-han.simp.essay-bgc`（只挂字级那本）。
+# 查找顺序用户目录优先、其次程序文件夹；同名文件只取先出现的那个。
+# 一个都没匹配到就不装 Poet，组句走动态规划。
+#
+# 现有 4 个模型（%APPDATA%\Rime-Next\model\ 或 <程序>\Rime-Next\model\）：
+#   zh-han.simp.essay-bgc.gram    29 MB   （旧名 zh-hans-t-essay-bgc）
+#   zh-han.simp.essay-bgw.gram   206 MB   （旧名 zh-hans-t-essay-bgw）
+#   zh-han.trad.essay-bgc.gram    30 MB   （旧名 zh-hant-t-essay-bgc）
+#   zh-han.trad.essay-bgw.gram   208 MB   （旧名 zh-hant-t-essay-bgw）
+#
+# ⚠️ 旧的 `grammar/language` 写法与 `hans`/`hant` preset 已废弃，引擎不再识别。
 
-hant:
-  grammar:
-    language: zh-hant-t-essay-bgw
+zh-han.simp:
+  model: zh-han.simp
+
+zh-han.trad:
+  model: zh-han.trad

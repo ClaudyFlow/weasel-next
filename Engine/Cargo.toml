@@ -1,12 +1,11 @@
 [package]
 name = "Weasel-Next-Engine"
-version = "0.18.0"
+version = "0.18.5"
 edition = "2024"
 license.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-toml = "1"
 serde_json = "1"
 weasel-common = { path = "../common" }
 weasel-style = { path = "../style" }
@@ -20,6 +19,7 @@ windows-reference = "0.100.0"
 windows-time = "0.100.0"
 
 windows-strings = "0.100.0"
+nanomp3 = "0.2.0"
 
 [build-dependencies]
 embed-resource = "3"

@@ -3,6 +3,9 @@
 
 Var ScanMode
 Var ScanResult
+; 版本化升级时，正在运行的是**旧版本目录**里的进程：除了 $INSTDIR，还要按这个目录
+; 匹配并停掉（否则旧 broker 占着命名管道，新 broker 起不来）。
+Var ScanExtraDir
 Var ProcessSnapshot
 Var ProcessEntry
 Var ProcessHandle
@@ -71,7 +74,12 @@ Function ${PREFIX}ScanApplicationProcesses
     StrCpy $4 ${NSIS_MAX_STRLEN}
     System::Call 'kernel32::QueryFullProcessImageNameW(p $ProcessHandle, i 0, w .r3, *i r4) i.r0'
     StrCmp $0 0 scan_entry_error
-    StrCmp $3 "$INSTDIR\$ProcessName" 0 scan_close_process
+    StrCmp $3 "$INSTDIR\$ProcessName" 0 scan_check_extra
+    Goto scan_matched
+  scan_check_extra:
+    StrCmp $ScanExtraDir "" scan_close_process
+    StrCmp $3 "$ScanExtraDir\$ProcessName" 0 scan_close_process
+  scan_matched:
     ${If} $ProcessTerminate == 0
       StrCpy $ScanResult 10
     ${Else}

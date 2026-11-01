@@ -19,21 +19,39 @@ export struct SchemaRow {
     description: string,
     /// 是否已勾选进方案选单。
     selected: bool,
+    /// 所属系列（父目录名，例如 yuhao）；空串 = 不属于任何系列。
+    series: string,
+    /// 这一行是系列标题（不是可勾选方案）。
+    header: bool,
+    /// 缩进层级（0 = 顶层，1 = 系列内的方案）。
+    level: int,
     /// 是否是当前使用的方案。
+    active: bool,
+}
+
+/// 左侧系列导航的一项（系列名 + 方案数）。
+export struct SeriesNav {
+    /// 系列名（目录名；"全部" 用空串表示不过滤）。
+    name: string,
+    /// 显示文字（"全部 (21)" / "yuhao (6)"）。
+    label: string,
+    /// 当前选中。
     active: bool,
 }
 
 /// 一行方案：左侧勾选框，中间名字与作者，右侧「使用中」标记。
 component SchemaItem inherits Rectangle {
     in property <SchemaRow> entry;
+    in property <length> indent: 0px;
     callback toggled(string);
 
     height: 56px;
     border-radius: 6px;
-    background: touch.has-hover ? #f2f4f7 : transparent;
+    background: touch.has-hover ? #eef2f6 : transparent;
 
     HorizontalBox {
         padding: 8px;
+        padding-left: 8px + root.indent;
         spacing: 10px;
         // 勾选框：没有用 std-widgets 的 CheckBox（它的文字排版会把整行撑高）
         Rectangle {
@@ -41,10 +59,10 @@ component SchemaItem inherits Rectangle {
             height: 18px;
             border-radius: 4px;
             border-width: 1px;
-            border-color: entry.selected ? #1a73e8 : #c4c8ce;
-            background: entry.selected ? #1a73e8 : #ffffff;
+            border-color: entry.selected ? #15803d : #c4c8ce;
+            background: entry.selected ? #15803d : #ffffff;
             Text {
-                text: entry.selected ? "✓" : "";
+                text: entry.selected ? "" : "";
                 color: #ffffff;
                 font-size: 12px;
                 horizontal-alignment: center;
@@ -60,14 +78,14 @@ component SchemaItem inherits Rectangle {
             Text {
                 text: entry.name;
                 font-size: 14px;
-                color: #202124;
+                color: #17202b;
                 vertical-alignment: center;
                 overflow: elide;
             }
             Text {
                 text: entry.author == "" ? entry.id : entry.id + " · " + entry.author;
                 font-size: 11px;
-                color: #5f6368;
+                color: #4b5563;
                 vertical-alignment: center;
                 overflow: elide;
             }
@@ -85,10 +103,10 @@ component SchemaItem inherits Rectangle {
             width: 56px;
             height: 22px;
             border-radius: 11px;
-            background: #e8f0fe;
+            background: #dcfce7;
             Text {
                 text: "使用中";
-                color: #1a73e8;
+                color: #15803d;
                 font-size: 11px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -104,9 +122,13 @@ component SchemaItem inherits Rectangle {
 /// 方案选单页本体。
 export component SchemaPicker inherits VerticalBox {
     in property <[SchemaRow]> rows;
+    /// 左侧系列导航。
+    in property <[SeriesNav]> series-nav;
     in property <string> status;
     in property <bool> editable: true;
     callback toggled(string);
+    callback series-toggled(string);
+    callback series-select(string);
     callback apply();
     callback refresh();
     callback open-dialog();
@@ -122,7 +144,7 @@ export component SchemaPicker inherits VerticalBox {
         Text {
             text: root.status;
             font-size: 12px;
-            color: #5f6368;
+            color: #4b5563;
             vertical-alignment: center;
             horizontal-stretch: 1;
         }
@@ -133,22 +155,48 @@ export component SchemaPicker inherits VerticalBox {
     Text {
         text: "勾选要出现在方案选单里的方案，列表顺序就是选单顺序（第一条是默认方案）。改完点「保存并部署」让引擎生效。";
         font-size: 12px;
-        color: #5f6368;
+        color: #4b5563;
         wrap: word-wrap;
     }
 
-    // 方案列表：竖排 ScrollView 里必须给外层容器可拉伸高度，否则列表会塌成一行。
+    // 单栏树（VS Code 资源管理器样式）：文件夹可折叠，方案缩进一层。
     Rectangle {
         border-radius: 6px;
         border-width: 1px;
-        border-color: #dadce0;
+        border-color: #c9d2de;
         background: #ffffff;
         vertical-stretch: 1;
         ScrollView {
             VerticalBox {
-                for row in root.rows : SchemaItem {
-                    entry: row;
-                    toggled(id) => { root.toggled(id); }
+                for row in root.rows : Rectangle {
+                    height: row.header ? 30px : 52px;
+                    background: transparent;
+
+                    // ── 文件夹节点：chevron + 名字 + 数量 ──
+                    if row.header : Rectangle {
+                        border-radius: 4px;
+                        background: head-touch.has-hover ? #eef2f6 : transparent;
+                        Text {
+                            x: 8px;
+                            text: row.series;
+                            font-size: 13px;
+                            font-weight: 600;
+                            color: #17202b;
+                            vertical-alignment: center;
+                        }
+                        head-touch := TouchArea {
+                            clicked => { root.series-toggled(row.id); }
+                        }
+                    }
+
+                    // ── 方案节点：缩进一层 ──
+                    if !row.header : SchemaItem {
+                        x: row.level * 18px;
+                        width: parent.width - row.level * 18px;
+                        height: 52px;
+                        entry: row;
+                        toggled(id) => { root.toggled(id); }
+                    }
                 }
             }
         }

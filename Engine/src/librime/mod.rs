@@ -180,7 +180,7 @@ impl Librime {
     /// 共同持有；最后一个持有者释放时调用 `finalize` 并卸载 DLL。
     pub fn load(base_dir: &Path, user_data_dir: &Path) -> Result<Self, String> {
         // 由 eassy/**/*.eassy.yaml 归并生成 essay.txt（仓库只放 YAML，txt 是部署产物）
-        generate_essay_txt(&base_dir.join("Rime-Next"), user_data_dir);
+        generate_essay_txt(&weasel_common::rime_layout::data_dir(base_dir), user_data_dir);
         // 顺手清掉用户根目录里遗留的扁平 yaml/编译产物（分类副本存在时才算重复品）
         match weasel_common::rime_layout::cleanup_flat_sources(user_data_dir) {
             Ok(removed) if !removed.is_empty() => {
@@ -191,7 +191,7 @@ impl Librime {
             Ok(_) => {}
             Err(error) => tracing::warn!("rime_layout: 清理旧扁平文件失败: {error}"),
         }
-        for root in [base_dir.join("Rime-Next"), user_data_dir.to_path_buf()] {
+        for root in [weasel_common::rime_layout::data_dir(base_dir), user_data_dir.to_path_buf()] {
             match weasel_common::rime_layout::normalize(&root) {
                 Ok(moves) if !moves.is_empty() => {
                     for m in &moves {
@@ -206,7 +206,7 @@ impl Librime {
         let library = RimeLibrary::load(&engine_dll_path(base_dir))?;
         let api = unsafe { RimeLibraryApi::load(library.api().as_ptr(), false)? };
         let app_name = CString::new("rime.weasel-next").expect("static app name has no NUL");
-        let shared_data_dir = CString::new(base_dir.join("Rime-Next").to_string_lossy().as_bytes())
+        let shared_data_dir = CString::new(weasel_common::rime_layout::data_dir(base_dir).to_string_lossy().as_bytes())
             .map_err(|error| format!("invalid shared data directory path: {error}"))?;
         let user_data_dir = path_string(user_data_dir)?;
         let mut traits: raw::RimeTraits = unsafe { std::mem::zeroed() };
@@ -237,8 +237,8 @@ impl Librime {
     /// 缺失或加载/路径配置失败时返回错误。
     pub fn deploy(base_dir: &Path, user_data_dir: &Path) -> Result<(), String> {
         // 由 eassy/**/*.eassy.yaml 归并生成 essay.txt（仓库只放 YAML，txt 是部署产物）
-        generate_essay_txt(&base_dir.join("Rime-Next"), user_data_dir);
-        for root in [base_dir.join("Rime-Next"), user_data_dir.to_path_buf()] {
+        generate_essay_txt(&weasel_common::rime_layout::data_dir(base_dir), user_data_dir);
+        for root in [weasel_common::rime_layout::data_dir(base_dir), user_data_dir.to_path_buf()] {
             match weasel_common::rime_layout::normalize(&root) {
                 Ok(moves) if !moves.is_empty() => {
                     for m in &moves {
@@ -253,7 +253,7 @@ impl Librime {
         let library = RimeLibrary::load(&engine_dll_path(base_dir))?;
         let api = unsafe { RimeLibraryApi::load(library.api().as_ptr(), true)? };
         let app_name = CString::new("rime.weasel-next").expect("static app name has no NUL");
-        let shared_data_dir = CString::new(base_dir.join("Rime-Next").to_string_lossy().as_bytes())
+        let shared_data_dir = CString::new(weasel_common::rime_layout::data_dir(base_dir).to_string_lossy().as_bytes())
             .map_err(|error| format!("invalid shared data directory path: {error}"))?;
         let user_data_dir = path_string(user_data_dir)?;
         let log_dir = CString::new("").expect("empty string has no NUL");
@@ -616,6 +616,128 @@ impl RimeLibraryApi {
 }
 
 #[cfg(test)]
+mod live_dll_tests {
+    //! 对着**真实安装目录里的** `rime-next.dll` 验 ABI 表装载。
+    //!
+    //! 这条测试专门防 2026-10-29 那类事故：`api.rs` 的 `field!(...)` 列表漏一项，
+    //! 函数指针恒为 `None`，上层代码静默走 else 分支 —— 编译、单测、甚至"打字能出字"
+    //! 都看不出来，只有真机上那条 `WARN … 当前方案不可用` 反复出现。
+    //!
+    //! 没装 live 版本（或不是 Windows 装机布局）时直接跳过，不失败。
+
+    use super::*;
+
+    fn live_dir() -> Option<std::path::PathBuf> {
+        let root = std::path::PathBuf::from(r"C:\Program Files\Rime-Next\Weasel-Next-0.18.5");
+        if root.join(RIME_DLL_NEXT).is_file() {
+            Some(root)
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn live_dll_exposes_select_schema_and_can_switch() {        let Some(base) = live_dir() else {
+            eprintln!("跳过：live 安装目录里没有 rime-next.dll");
+            return;
+        };
+        let user = std::env::var_os("APPDATA")
+            .map(|a| std::path::PathBuf::from(a).join("Rime-Next"))
+            .expect("APPDATA");
+        let librime = Librime::load(&base, &user).expect("加载 live rime-next.dll");
+        // ① API 表必须真的把 select_schema 拷出来（漏装就是 None）。
+        assert!(
+            librime.inner.api.api.select_schema.is_some(),
+            "API 表没有 select_schema：Engine/src/librime/api.rs 的 field! 列表又漏项了"
+        );
+        let mut session = librime.new_session().expect("创建会话");
+        let schema = "pinyin.luna";
+        assert!(
+            session.select_schema(schema),
+            "select_schema({schema}) 返回 false：live DLL 里这个入口坏了"
+        );
+        assert_eq!(session.current_schema().as_deref(), Some(schema));
+        // ② 切完还能出候选（切方案不能把会话切哑）
+        let mut last = KeyEventResponse::default();
+        for ch in "nihao".chars() {
+            last = session.process_key(&InputKey {
+                keycode: ch as i32,
+                ..Default::default()
+            });
+        }
+        assert!(
+            !last.candidates.is_empty(),
+            "切换到 {schema} 后 nihao 没有候选：{last:?}"
+        );
+        eprintln!(
+            "live rime-next.dll：select_schema ok，候选数 {}（首项 {}）",
+            last.candidates.len(),
+            last.candidates.first().map(|c| c.text.as_str()).unwrap_or("")
+        );
+    }
+
+    /// 手动探针：对 **live DLL** 喂一串输入，打印候选与空格提交结果。
+    ///
+    /// 用途：同一组输入分别跑「线上 dll」和「工作树编出来的库」，判断质量差距到底
+    /// 在线上还是只在未完成的重构里。默认 `#[ignore]`，不占 CI 时间。
+    ///
+    /// 跑法：
+    /// ```text
+    /// RIME_PROBE_SCHEMA=double_pinyin.flypy \
+    /// RIME_PROBE_INPUTS=nihao,nihaoshijie,jintiantianqihenhao \
+    /// cargo test --release -p Weasel-Next-Engine --bins live_dll_probe_candidates -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "手动探针：需要 live 安装 + RIME_PROBE_* 环境变量"]
+    fn live_dll_probe_candidates() {
+        let Some(base) = live_dir() else {
+            eprintln!("跳过：live 安装目录里没有 rime-next.dll");
+            return;
+        };
+        let user = std::env::var_os("APPDATA")
+            .map(|a| std::path::PathBuf::from(a).join("Rime-Next"))
+            .expect("APPDATA");
+        let schema =
+            std::env::var("RIME_PROBE_SCHEMA").unwrap_or_else(|_| "double_pinyin.flypy".into());
+        let inputs =
+            std::env::var("RIME_PROBE_INPUTS").unwrap_or_else(|_| "nihao".to_string());
+        let librime = Librime::load(&base, &user).expect("加载 live rime-next.dll");
+        for input in inputs.split(',').filter(|s| !s.is_empty()) {
+            let Ok(mut session) = librime.new_session() else {
+                eprintln!("创建会话失败");
+                return;
+            };
+            session.select_schema(&schema);
+            let mut last = KeyEventResponse::default();
+            for ch in input.chars() {
+                last = session.process_key(&InputKey {
+                    keycode: ch as i32,
+                    ..Default::default()
+                });
+            }
+            let cands: Vec<String> = last
+                .candidates
+                .iter()
+                .take(8)
+                .map(|c| format!("{}[{}]", c.text, c.comment))
+                .collect();
+            let space = session.process_key(&InputKey {
+                keycode: 0x20,
+                ..Default::default()
+            });
+            println!(
+                "PROBE {schema} {input}: composing={} n={} preedit={:?}\n      cands={}\n      space_commit=[{}]",
+                last.composing,
+                last.candidates.len(),
+                last.composition,
+                cands.join("  "),
+                space.commit_text
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod input_mode_tests {
     use super::*;
     use std::cell::RefCell;
@@ -905,42 +1027,111 @@ fn active_schema_name(user_data: &std::path::Path) -> Option<String> {
 /// `qiinengk` 这种乱码。这里改用 `shuangpin_parse` 解析原始按键串（`raw_input`），
 /// 只覆盖**显示**，不影响 rime 的查词与上屏。
 fn rewrite_double_pinyin_preedit(response: &mut KeyEventResponse, schema_id: &str) {
-    // 诊断：确认这个函数真的被调用
-    {
-        use std::io::Write as _;
-        if let Ok(mut handle) = std::fs::OpenOptions::new().create(true).append(true)
-            .open(std::env::temp_dir().join("weasel-preedit.log"))
-        {
-            let _ = writeln!(handle, "call raw={:?} composition={:?}", response.raw_input, response.composition);
-        }
-    }
     use std::sync::{Mutex, OnceLock};
     let Some(raw) = response.raw_input.clone() else { return; };
     if raw.is_empty() || response.composition.is_empty() {
         return;
     }
     let Some(paths) = weasel_common::process::RuntimePaths::discover().ok() else { return; };
-    let yaml_name = match schema_id {
-        "double_pinyin_flypy" => "xiaohe.yaml",
-        "double_pinyin_ziranma" => "ziranma.yaml",
-        _ => return,
+    // 解析器路由（2026-10-27 方言定稿）：
+    //   * 键位文件的 id 就是**相对 `parser\` 的路径**：`shuangpin/xiaohe` →
+    //     `parser\shuangpin\xiaohe.parser.yaml`（子文件夹=大类，主干=键位名）。
+    //     路径即唯一标识，与任何方案无关——多个方案（含反查方案）可共用一套键位；
+    //   * 方案在 **`speller:` 块**写 `parser: shuangpin/xiaohe` 声明拼写用哪套键位
+    //     （schema: 块保持纯 rime 词汇，不放自定义键；大类由引用第一段推导）；
+    //   * 方案没写 `parser:` 时引擎不接管预编辑（全拼/形码/未实现的解析器）。
+    // parser 是出厂数据，住在**程序文件夹**（`Rime-Next\parser\`，随安装包分发）；
+    // 用户目录只作为兼容兜底，程序文件夹有就不再看用户目录。
+    let (parser_ref, parse_family) = scheme_parser_ref(&paths, schema_id);
+    if parse_family.as_deref().is_some_and(|f| f != "双拼") {
+        // 全拼 / 注音 / 形码：rime 原生预编辑就是对的，解析器不接管。
+        return;
+    }
+    let scheme_path = {
+        // 主契约：路径直查——引用本身就是文件位置，不扫描、不读内容。
+        let direct = |want: &str| -> Option<std::path::PathBuf> {
+            let rel = want.replace('\\', "/");
+            if rel.is_empty() || rel.contains("..") {
+                return None;
+            }
+            for root in [
+                weasel_common::rime_layout::data_dir(&paths.executable_directory).join("parser"),
+                paths.user_data.join("parser"),
+            ] {
+                let path = root.join(format!("{rel}.parser.yaml"));
+                if path.is_file() {
+                    return Some(path);
+                }
+            }
+            None
+        };
+        // 兜底契约：按 parser 文件里 `schema.id == 方案 id` 配对（旧的一对一写死）。
+        let scan_by_schema_id = |want: &str| -> Option<std::path::PathBuf> {
+            let mut candidates = Vec::new();
+            let mut push_dir = |dir: std::path::PathBuf| {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().is_some_and(|ext| ext == "yaml") {
+                            candidates.push(path);
+                        }
+                    }
+                }
+            };
+            push_dir(
+                weasel_common::rime_layout::data_dir(&paths.executable_directory)
+                    .join("parser")
+                    .join("shuangpin"),
+            );
+            push_dir(paths.user_data.join("parser").join("shuangpin"));
+            for path in &candidates {
+                let Ok(text) = std::fs::read_to_string(path) else { continue };
+                let Ok(value) = weasel_common::yaml::to_value(&text) else { continue };
+                if value
+                    .get("schema")
+                    .and_then(|s| s.get("id"))
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|sid| sid == want)
+                {
+                    return Some(path.clone());
+                }
+            }
+            None
+        };
+        let found = match parser_ref.as_deref() {
+            Some(p) => direct(p).or_else(|| scan_by_schema_id(schema_id)),
+            None => scan_by_schema_id(schema_id),
+        };
+        let Some(found) = found else { return; };
+        found
     };
-    let dir = paths.user_data.join("schema").join("shuangpin");
-    let scheme_path = dir.join(yaml_name);
     let mtime = std::fs::metadata(&scheme_path).and_then(|m| m.modified()).ok();
+    // 音节表在 parser/pinyin/syllables.parser.yaml（2026-10-27 从 syllables.txt 转为 YAML）。
+    // 同样程序文件夹优先、用户目录兼容兜底。
+    let syllables_path = {
+        let program = weasel_common::rime_layout::data_dir(&paths.executable_directory)
+            .join("parser")
+            .join("pinyin")
+            .join("syllables.parser.yaml");
+        if program.is_file() {
+            program
+        } else {
+            paths.user_data.join("parser").join("pinyin").join("syllables.parser.yaml")
+        }
+    };
     static CACHE: OnceLock<Mutex<Option<(String, Option<std::time::SystemTime>, weasel_style::shuangpin_parse::Scheme)>>> =
         OnceLock::new();
     let cell = CACHE.get_or_init(|| Mutex::new(None));
     let mut guard = match cell.lock() { Ok(g) => g, Err(p) => p.into_inner() };
     let stale = match guard.as_ref() {
-        Some((name, stamp, _)) => name != yaml_name || *stamp != mtime,
+        Some((name, stamp, _)) => name.as_str() != scheme_path.to_string_lossy() || *stamp != mtime,
         None => true,
     };
     if stale {
         let Ok(scheme_text) = std::fs::read_to_string(&scheme_path) else { return; };
-        let Ok(syllables_text) = std::fs::read_to_string(dir.join("syllables.txt")) else { return; };
-        match weasel_style::shuangpin_parse::Scheme::from_parts(&scheme_text, &syllables_text) {
-            Ok(scheme) => *guard = Some((yaml_name.to_string(), mtime, scheme)),
+        let Ok(syllables_yaml) = std::fs::read_to_string(&syllables_path) else { return; };
+        match weasel_style::shuangpin_parse::Scheme::from_yaml_parts(&scheme_text, &syllables_yaml) {
+            Ok(scheme) => *guard = Some((scheme_path.to_string_lossy().into_owned(), mtime, scheme)),
             Err(_) => return,
         }
     }
@@ -953,4 +1144,95 @@ fn rewrite_double_pinyin_preedit(response: &mut KeyEventResponse, schema_id: &st
         response.composition = text;
         response.composition_cursor = response.composition.encode_utf16().count() as u32;
     }
+}
+
+/// 读方案的解析器声明：`(parser 引用, 家族)`。
+///
+/// 方言（2026-10-27 定稿）：
+/// * 主契约：`speller: parser: shuangpin/xiaohe` —— 拼写用哪套键位；
+///   家族 = 引用第一段（`shuangpin`→双拼、`zhuyin`→注音、`pinyin`→全拼），
+///   **没有 `parse:` 键**，`schema:` 块保持纯 rime 词汇。
+/// * 兼容旧写法：`schema: parser:` + `schema: parse: 双拼/小鹤`（旧方案文件）。
+/// * 都没有 → `(None, None)`：引擎不接管预编辑（全拼/形码天然不接管）。
+///
+/// 方案文件按顺序找：用户目录 `schema/<id>/<id>.schema.yaml` → 用户目录
+/// `build/<id>.schema.yaml`（部署编译产物）→ 程序文件夹出厂 `schema/`。
+fn scheme_parser_ref(
+    paths: &weasel_common::process::RuntimePaths,
+    schema_id: &str,
+) -> (Option<String>, Option<String>) {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<Option<(String, Option<String>, Option<String>)>>> = OnceLock::new();
+    let cell = CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = match cell.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    if let Some((cached_id, parser, family)) = guard.as_ref() {
+        if cached_id == schema_id {
+            return (parser.clone(), family.clone());
+        }
+    }
+    let mut read_value = |path: std::path::PathBuf| -> Option<serde_json::Value> {
+        let text = std::fs::read_to_string(path).ok()?;
+        weasel_common::yaml::to_value(&text).ok()
+    };
+    let value = read_value(
+        paths.user_data
+            .join("schema")
+            .join(schema_id)
+            .join(format!("{schema_id}.schema.yaml")),
+    )
+    .or_else(|| read_value(paths.user_data.join("build").join(format!("{schema_id}.schema.yaml"))))
+    .or_else(|| {
+        read_value(
+            weasel_common::rime_layout::data_dir(&paths.executable_directory)
+                .join("schema")
+                .join(schema_id)
+                .join(format!("{schema_id}.schema.yaml")),
+        )
+    });
+    // 主契约：speller.parser；兼容：schema.parser。
+    let parser = value
+        .as_ref()
+        .and_then(|v| v.get("speller"))
+        .and_then(|s| s.get("parser"))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            value
+                .as_ref()
+                .and_then(|v| v.get("schema"))
+                .and_then(|s| s.get("parser"))
+                .and_then(|v| v.as_str())
+        })
+        .map(str::to_string);
+    // 家族：引用第一段（shuangpin→双拼 / zhuyin→注音 / pinyin→全拼）；
+    // 旧写法没有引用但有 schema.parse 时退回它。
+    let family = parser
+        .as_deref()
+        .and_then(|p| p.split('/').next())
+        .map(|seg| match seg.trim() {
+            "shuangpin" => "双拼".to_string(),
+            "zhuyin" => "注音".to_string(),
+            "pinyin" => "全拼".to_string(),
+            other => other.to_string(),
+        })
+        .or_else(|| {
+            value
+                .as_ref()
+                .and_then(|v| v.get("schema"))
+                .and_then(|s| s.get("parse"))
+                .and_then(|v| v.as_str())
+                .and_then(|p| p.split_once('/').map(|(f, _)| f.trim()))
+                .or_else(|| {
+                    value
+                        .as_ref()
+                        .and_then(|v| v.get("schema"))
+                        .and_then(|s| s.get("parse"))
+                        .and_then(|v| v.as_str())
+                })
+                .map(str::to_string)
+        });
+    *guard = Some((schema_id.to_string(), parser.clone(), family.clone()));
+    (parser, family)
 }

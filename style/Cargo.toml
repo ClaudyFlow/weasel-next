@@ -1,20 +1,27 @@
 [package]
 name = "weasel-style"
-version = "0.18.0"
+version = "0.18.5"
 edition = "2021"
-description = "官方 weasel.yaml 皮肤文件的解析与 UIStyle（照 fxliang/weasel 的 UIStyle 与 WeaselStyleKeys 对齐）"
+description = "官方 weasel.yaml 皮肤文件的解析与 UIStyle（照 fxliang/weasel 的 UIStyle 与 WeaselStyleKeys 对齐）；2026-10-27 起主题文件也是 YAML"
 
 [dependencies]
 weasel-common = { path = "../common" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "1"
+# 完整 YAML（`- key: value` 的**序列套映射**）——拼写数据用这个解析。
+# `weasel-common::yaml` 是极简实现，只支持映射与标量序列，写不了"列表里的对象"。
+serde_norway = "0.9"
+# YAML 解析走 `weasel-common::yaml`（与宿主其余配置同一个实现，不另引一个 crate）。
 
 [[bin]]
-name = "theme-toml"
-path = "src/bin/theme_toml.rs"
+name = "theme-yaml"
+path = "src/bin/theme_yaml.rs"
 
 [[bin]]
 name = "shuangpin-schema"
 path = "src/bin/shuangpin_schema.rs"
+
+[[bin]]
+name = "pinyin-schema"
+path = "src/bin/pinyin_schema.rs"
 

@@ -7,14 +7,23 @@ pub fn embed() {
         "Weasel-Next-Renderer" => ("Weasel-Next Candidate Renderer", "Weasel-Next-Renderer.exe", false),
         "Weasel-Next-Setting" => ("Weasel-Next Settings", "Weasel-Next-Setting.exe", false),
         "weasel-tip" => ("Weasel-Next Text Input Processor", "Weasel-Next.dll", true),
-        "weasel-theme-official" => ("Weasel-Next official Theme", "weasel_theme_official.dll", true),
+        "weasel-theme-official" => ("Weasel-Next official Theme", "weasel-next-theme.dll", true),
         _ => panic!("missing Windows file description for {package}"),
     };
-    let root = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("..");
-    let root = if package.starts_with("weasel-theme-") {
-        root.join("..")
-    } else {
-        root
+    // 向上搜索 workspace 根部的 `build_support`，不依赖 crate 所在目录深度
+    // （主题 crate 可能位于 `theme/` 或 `theme/api` 等不同层级）。
+    let manifest_dir = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let root = {
+        let mut dir = manifest_dir.as_path();
+        loop {
+            if dir.join("build_support/version.rc").exists() {
+                break dir.to_path_buf();
+            }
+            match dir.parent() {
+                Some(parent) => dir = parent,
+                None => break manifest_dir.join(".."),
+            }
+        }
     };
     let resource = root.join("build_support/version.rc");
     for path in [&resource, &root.join("build_support/version.rs")] {

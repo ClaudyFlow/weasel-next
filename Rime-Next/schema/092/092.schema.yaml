@@ -1,0 +1,803 @@
+#Rime schema settings
+# encode: utf-8
+# newline: lf
+# encoding: utf-8
+# 李诗歌魔改自小先生
+##★ 一、方案描述[schema:],通常包含：必须[name、schema_id]、可选[author、dependencies、description、version]字段 ★##
+height:
+  A: &VJGGG 205 #菜单助记单字根行高
+  C: &VJGG 68 #助记行高
+  E: &VVJGG 45 #菜单行高
+  D: &ZGH 20  #提醒栏
+
+schema:
+  id: "092"       #方案ID
+  name: "092(原版修订)"         #显示名
+  version: "2022.5.2"      #版本
+
+##★ 二、开关设置[switches:]支持与[filters]设定配置其他开关 ★##
+switches:                  ##★设置转换开关，可依需要增减★
+
+  - options: [_keyboard_lanbaoshidddd]
+    states: [ 菜单, 打开 ]
+
+  - name: 092_spelling    #候选显示拆分滤镜
+    reset: 0
+#    states: [ 碼, 拆 ]
+  - name: 092_spelling_rk    #反查显示拆分滤镜
+    reset: 1
+#    states: [ 編碼, 拆離 ]
+
+  - options: [ lbsjc_lua ]
+#    states: [ 詞, 加 ]
+
+  - name: simplification   #简繁转换开关，0为不开启转化，1为转化。
+    reset: 0
+    states: [ "简体", "繁体" ]
+
+  - name: jiayin
+    reset: 0
+    states: [ 拼音,显示 ]
+
+  - options: [ ZTWCZ ]
+#    states: [ 字統網, 查字 ]
+
+  - name: yitizi_segestion
+    reset: 0
+#    states: [ 关 , 异体字 ]    
+
+  - name: Unicode       #显示U码滤镜
+    reset: 0
+    states: [ U码, 显示 ]
+
+  - options: [ HDCZ ]
+#    states: [ 漢,典 ]
+
+  - name: ascii_punct
+#↓以下1條爲设置默认中英文标点状态（0为默认中标，1为默认英标）,默认英标某些功能会失效.
+    reset: 0
+#    states: [ 中標, 英標 ]
+  - name: zhuyin              #拼音滤镜
+    reset: 1
+  - name: fan2jian_segestion  #繁体显示简体
+    reset: 0
+#    states: [ no, yes ]    
+#  - name: _hide_comment       #输入码切换(同文适用)
+#    states: [示, 无]
+#  - name: charset_comment_filter  #字符范围滤镜 此功能通过lua实现
+#  - name: reverse_lookup_filter   #显示拼音 此功能通过lua实现
+
+
+  - name: full_shape
+    reset: 0   
+    states: [ 半角, 全角 ]   
+
+  - name: ascii_punct
+    states: ["。", "．"]
+    reset: 0
+
+##★ 三、引擎[engine]分四组：[processors、segmentors、translators、filters] ★##
+engine:        ##★输入引擎设定，即挂接组件的「处方」以下加粗项为可细配项，斜体为不常用项★
+  processors:  #这批组件处理各类按键消息,优先级依照[processors]列表顺序排定，接收按键对按健消息做处理，简称：消息处理器
+    - ascii_composer     #处理西文模式及中西文切换
+    - recognizer         #与[matcher]搭配，处理符合特定规则的输入码，如网址、反查等tags
+    - key_binder         #在特定条件下将按键绑定到其他按键，如重定义逗号、句号为候选翻页键、开关快捷键等
+#    - key_binder        #※ 传入第二候选内容
+    - speller            #拼写处理器，接受字符按键，编辑输入码
+    - punctuator         #句读处理器，将单个字符按键直接映射为文字符号
+    - selector           #选字处理器，处理数字选字键、上、下候选定位、换页键
+    - navigator          #处理输入栏内的光标移动键
+    - express_editor     #编辑器，处理空格、回车上屏、回退键等
+    #- fluency           #句式编辑器，用于以空格断词、回车上屏的[注音\语句流]等输入方案，替换[express_editor]也可写作[fluency_editor]
+  segmentors:            #这批组件识别不同内容类型，将输入码分段并加上tag，简称：分段处理器
+    - ascii_segmentor    #标识西文段落〔譬如在西文模式下〕字母直接上屛
+    - matcher            #配合[recognizer]标识符合特定规则的段落，如网址、反查等，加上特定tag
+    - affix_segmentor@abc               #关联自定义分段器标识
+    #- affix_segmentor@反查形码          #关联查拼音分段器
+    #- affix_segmentor@反查拼音          #关联查五笔分段器
+    - abc_segmentor                     #标识常规的文字段落，加上abc这个tag
+    - punct_segmentor                   #标识句读段落〔键入标点符号用〕加上[punct]这个tag
+    - fallback_segmentor                #标识其他未标识段落
+  translators:    #这批组件翻译特定类型的编码段为一组候选文字，简称：翻译器
+    #- table_translator@yonghu     #表示调用custom_phrase段编码
+    - punct_translator                  #配合[punct_segmentor]转换标点符号
+    - history_translator@history        #重复输入翻译器
+    - table_translator                  #主码表翻译器，用于基于码表的输入方案，可加载多个实例，后接@+翻译器名
+#    - script_translator                #脚本翻译器，用于拼音等基于音节表的输入方案，可加载多个实例，后接@+翻译器名
+    #- table_translator@反查形码    #反查拼音翻译器与table_translator@反查user拼音同时使用但优先级高于后者（目的是保证候选排序与主translator一致），对应affix_segmentor@反查拼音
+    #- table_translator@反查拼音    #反查形码的翻译器与table_translator@反查关联使用，对应affix_segmentor@反查形码
+    #- table_translator@反查user拼音    #反查拼音翻译器（含user_dict中的词语)与table_translator@反查拼音同时使用但优先级较低（目的是保证候选排序与主translator一致），对应affix_segmentor@反查拼音
+    #- table_translator@cloud_phrase   #副翻译器7（无障碍版云）
+    #- echo_translator                 #没有其他候选字时，回显输入码〔输入码可以Shift+Enter上屛〕
+    #- reverse_lookup_translator@反查     #反查形码的翻译器,被table_translator@反查形码关联调用(使用extra_tags进行了关联)
+    #- "lua_translator@date_translator"   #加载日期脚本
+    #- "lua_translator@number_translator" #加载数字脚本
+    #- "lua_translator@time_translator"   #加载时间脚本
+    #- "lua_translator@week_translator"   #加载星期脚本
+    #- "lua_translator@help_translator"   #加载帮助脚本
+  filters:                               #这批组件过滤翻译的结果，简称：过滤转换器
+    #- lua_filter@dz_ci              #词组LUA开关.
+    - charset_filter@gb2312              #字符集过滤0
+    - charset_filter@gbk                 #字符集过滤1
+    - charset_filter@utf8                #字符集过滤2
+    #- simplifier@emoji_suggestion        #emoji表情滤镜
+    #- reverse_lookup_filter@反查互通     #反查形码编码的过滤器
+    - simplifier                         #繁简用字转换
+    #- "simplifier@fan2jian_switch"
+    #- "simplifier@yitizi_switch"
+    #- simplifier@jiayin                  #与拼音滤镜对应
+    #- simplifier@zhuyin                  #与拼音滤镜对应
+    #- simplifier@zhuyin_char             #与拼音滤镜对应
+#    - simplifier@phrase_prediction      #与联想词组滤镜对应
+    #- simplifier@092_spelling        #与拆分滤镜对应
+    #- simplifier@092_spelling_rk     #与拆分滤镜对应
+    #- simplifier@Unicode     #与拆分滤镜对应
+    #- simplifier@dic_4w_en               #与英中编码滤镜对应
+    #- lua_filter@single_char_filter     #单字优先于词组single_char_filter
+    #- lua_filter@reverse_lookup_filter   #显示带调拼音
+    #- lua_filter@charset_comment_filter  #显示字符范围
+    - uniquifier                         #过滤重复的候选字，有可能来自繁简转换
+
+
+##★ 四、各功能细项配置,应以输入方案特点灵活运用 ★##
+speller:         ##★拼写运算处理★
+  alphabet: "abcdefghijklmnopqrstuvwxyz;"                  #定义本方案输入键
+  finals: ""                                               #定义仅作末码之键
+  delimiter: "`"                                           #上屛时的音节间分音符
+  auto_select: true                                        #自动上屛〔true或false〕
+  max_code_length: 4                                       #形码最大码长，超过则顶字上屛
+  #auto_select_pattern: ^;.$|^\w{4}$                       #自动上屏规则,当输入串可以被匹配时自动顶字上屏
+  #auto_select_pattern: ^;.$|^.{4}$
+  auto_clear: max_length      #自动清码参数：manual空码按下一键确认清屏、auto空码自动清、max_length达最长码时后码顶上清屏
+  algebra:                     #拼写运算规则，由之算出的拼写汇入prism中,演算包含：
+    #- derive/^.(.*)$/\`$1/             #万能拼运, 〔以下几条运算可实现`号作万能学习键，开启后影响运行速度〕
+    #- derive/^(.).(.*)$/$1\`$2/        #万能拼运
+    #- derive/^(..).(.*)$/$1\`$2/       #万能拼运
+    #- derive/^(...).(.*)$/$1\`$2/      #万能拼运
+    #- derive/^(...).$/$1\`/            #万能拼运
+
+##★ 以下为主翻译器[translator]配置 ★##
+translator:    ##★方案有且只有一个主[translator]在引擎列表中不以@+翻译器名定义，直接以[translator]命名★
+  dict: 092              #翻译器将调取此字典文件
+  db_class: tabledb                #设定用户词典类型，可设tabledb〔文本〕或userdb〔二进制〕
+  initial_quality: 1000            #设定此翻译器出字优先级, 数值越大, 候选排序越靠前
+  spelling_hints: 4                #设定n字内候选标注完整带调拼音〔仅script_translator有效〕
+  enable_charset_filter: false     #字符过滤 true
+  enable_sentence: false           #组词造句整句模式
+  enable_encoder: false            #造词开关
+  encode_commit_history: false     #对连续上屏字自动造词
+  min_phrase_length: 0            #允许自动造词的最小字数
+  max_phrase_length: 0            #允许自动造词的最大字数
+  enable_completion: false          #编码提示（用于table_translator）
+  always_show_comments: true       #新增[always_show_comments]选项，允许始终显示候选词注解
+  sentence_over_completion: false  #在无全码对应字而仅有逐键提示时也开启智能组句〔仅table_translator有效〕
+  strict_spelling: false           #配合[speller]中的fuzz规则，仅以略拼码组词〔仅table_translator有效〕
+  enable_user_dict: false          #用户词典开关，调频开关
+  disable_user_dict_for_patterns:  #当编码匹配以下格式时，用户词典无效
+    - "^z.$"
+  #enable_correction: true         #新增拼写纠错,当前仅限QWERTY键盘布局及使用[script_translator]的方案
+  comment_format:                   #去掉编码提示前的~号
+    - "xform/~//"
+
+##★ 以下为副翻译器 ★
+
+yonghu: 
+  dict: ""
+  user_dict: yonghu
+  db_class: stabledb   #固频 or 调频 db_class: tabledb
+  enable_completion: false      #编码提示
+  initial_quality: 1000     #设定此翻译器出字优先级, 数值越大, 候选排序越靠前
+
+反查拼音:                         #知形查音
+  __include: /translator          #挂在[translator]上，不影响该[translator]工作
+  initial_quality: 1000           #设定出字优先级
+  prefix: "~"                     #设定前缀引导符
+  tips: 〔知形查音〕              #设定此翻译器的输入前提示符，可不塡，不塡则无提示符
+  tag: 反查拼音                   #此翻译器分段标记，对应[affix_segmentor@反查拼音]
+
+反查user拼音:                     #反查拼音（含用户词库）
+  __include: /translator          #挂在[translator]上，不影响该[translator]工作
+  initial_quality: 100            #设定出字优先级
+  enable_user_dict: false          #开启用户词典
+  tag: 反查拼音                   #此翻译器分段标记，从属[反查拼音]
+
+
+Unicode:              #U码滤镜
+  opencc_config: Unicode.json
+  option_name: Unicode
+  show_in_comment: true
+  comment_format:
+    - 'xform/<br>/\r/'      #编码滤镜内容换行
+    - 'xform/<br>/\n/'      #编码滤镜内容换行
+    - "xform/&nbsp/ /"      #编码滤镜内容显示空格
+  tags:
+    - abc
+  tips: all
+
+反查:
+#  __include: /translator         #挂在[translator]上，不影响该[translator]工作
+  import_preset: pinyin_simp     #引入地球拼音配置
+  dict: pinyin_simp        #地球拼音词库
+  tag: 反查                       #此翻译器处理的分段标记，被[反查形码]翻译器用[extra_tags]关联
+
+反查形码:                  #知音查形
+  __include: /反查         #挂在反查上
+  initial_quality: 1000    #设定出字优先级
+  prefix: "`"              #设定前缀引导符
+  tips: 〔拼音〕       #设定此翻译器的输入前提示符，可不塡，不塡则无提示符
+  tag: 反查形码
+  extra_tags:
+   - 反查                  #关联标记反查
+
+反查互通:                  #串连各反查器
+  dict: 092
+  tags:
+    - 反查                 #此过滤器处理的分段标记
+
+history:                   #重复上屏记录器
+  input: 'z'               #引导符
+  size: 1                  #最后上屏记录个数
+  initial_quality: 10000
+
+emoji_suggestion:
+  opencc_config: emoji.json
+  option_name: emoji_suggestion
+  tips: all
+
+##★ 滤镜（simplifier）配置,可设多个 ★##
+dic_4w_en:                  #英中编码滤镜
+  opencc_config: dic_4w_en.json
+  option_name: dic_4w_en
+  show_in_comment: true     #开启在注释中显示编码滤镜
+  comment_format:           #编码滤镜正则处理 普通滤镜直接在行首用#号屏蔽,编码滤镜
+    - 'xform/<br>/\r/'      #编码滤镜内容换行
+    - 'xform/<br>/\n/'      #编码滤镜内容换行
+    - "xform/&nbsp/ /"      #编码滤镜内容显示空格
+  tags:
+    - abc
+  tips: all #none无注释,char单字注释,all全部注释
+
+
+092_spelling_rk:       #拆分滤镜
+  opencc_config: 092_spelling1.json
+  option_name: 092_spelling_rk
+  show_in_comment: true
+  comment_format:
+    - xform/_/ /
+    - xform/☯/ /
+  tags:
+    - 反查形码
+  tips: char
+
+092_spelling:         #拆分滤镜
+  __include: /092_spelling_rk
+  opencc_config: 092_spelling1.json
+  option_name: 092_spelling
+  tags:
+    - abc
+
+
+simplifier:                #简繁转换滤镜
+  option_name: simplification
+  opencc_config: s2t.json
+
+fan2jian_switch:
+  opencc_config: fan2jian.json
+  option_name: fan2jian_segestion
+  show_in_comment: true
+  tags:
+    - abc
+  tips: char
+
+yitizi_switch:
+  opencc_config: yitizi.json
+  option_name: yitizi_segestion
+  show_in_comment: true
+  tags:
+    - abc
+  tips: char
+  
+zhuyin_char:               #拼音滤镜
+  opencc_config: zhuyin_char.json
+  option_name: zhuyin
+  show_in_comment: true
+  comment_format:
+    - xform/&nbsp/ /
+  tags:
+    - 反查拼音
+  tips: char
+
+jiayin:
+  opencc_config: pinyin.json
+  option_name: jiayin
+  show_in_comment: true
+  comment_format:
+    - 'xform/<br>/\r/'
+    - "xform/&nbsp/ /"
+  tags:
+    - abc
+    - pinyin
+  tips: char
+#char(单字)，all，none……
+
+zhuyin:                    #拼音滤镜
+  __include: /zhuyin_char
+  opencc_config: pinyin.json
+  tips: all
+
+##★ 其它设定,包括[recognizer、key_binder、punctuator] 标点、快捷键、二三选重、特殊字符等均於此设置 ★##
+recognizer:                     #[recognizer]下设[patterns]
+  import_preset: default        #import_preset: 由外部统一文件导入
+  patterns:                     #[patterns]配合[segmentor]的[prefix]和[suffix]完成段落划分、tag分配
+    punct: "^/[0-9]*[A-Z|a-z]*$"
+#    uppercase: "^[A-Z][-_+.'0-9A-Za-z]*$"      #中文状态大写锁定直接上屏
+    反查拼音: "~[a-z]*?$"
+    反查形码: '`([A-z]+[;/,<>\\]?)*'
+    email: "^[A-Za-z][-_.0-9A-Za-z]*@.*$"
+    url: "^(www[.]|https?:|ftp[.:]|mailto:|file:).*$|^[a-z]+[.].+$"
+
+key_binder:                   #[key_binder]下设[bindings]设置功能性快捷键，如：翻页、二三选重等
+  import_preset: default      #import_preset: 由外部统一文件导入
+  bindings:     #每一条可能包含：accept实际所按之键、send输出效果、toggle切换开关和when作用范围〔send和toggle二选一〕
+    - { when: has_menu, accept: Left, send: Page_Up }     #左方向键(←)翻页
+    - { when: has_menu, accept: Right, send: Page_Down }  #右方向键(→)翻页
+    - { when: has_menu, accept: minus, send: Page_Up }    #减号(-)翻页
+    - { when: has_menu, accept: equal, send: Page_Down }  #等号(=)翻页
+    - { when: has_menu, accept: semicolon, send: 2 }      #分号(;)选2重
+#    - { when: has_menu, accept: apostrophe, send: 3 }     #撇号(’)选3重
+    - { when: has_menu, accept: "z", send: 2 }     #撇号(z)选2重
+    - { when: has_menu, accept: period, send: period }     #句号加一下看看
+#测试一下翻页
+    - { when: has_menu, accept: Up, send: Page_Up }     #向上箭头前翻
+    - { when: has_menu, accept: Down, send: Page_Down }     #向下箭头后翻
+#测试一下翻页
+    - { when: always, accept: Control+Shift+H, toggle: 092_spelling }  #候选提示拆分开关快捷键
+    - { when: always, accept: Control+Shift+J, toggle: 092_spelling_rk }   #反查提示候选拆分提示开关快捷键
+    - { when: always, accept: Control+Shift+A, toggle: yitizi_segestion }   #异体字滤镜
+    - { when: always, accept: Control+Shift+B, toggle: jiayin }   #拼音滤镜
+    - { when: always, accept: Control+Shift+C, toggle: Unicode }   #U码滤镜
+
+    - {accept: "Control+Shift+F", toggle: simplification, when: always}    #简繁转换
+    - {accept: "Control+Shift+U", toggle: utf8, when: always}              #字符集过滤2
+    - {accept: "Control+Shift+I", toggle: gbk, when: always}               #字符集过滤1
+    - {accept: "Control+Shift+O", toggle: gb2312, when: always}            #字符集过滤0
+
+punctuator:                      #[full_shape]和[half_shape]分别控制全角模式下的符号和半角模式下的符号
+  import_preset: symbols         #由外部统一文件导入
+
+##★ 其它附设,Rime还为每个方案提供选单和一定的外观订制能力 ★##
+#menu:    #通常情况下menu在[default.yaml]或[default.custom.yaml]中定义
+#  page_size: 10                                               #候选框每页显示个数
+#  alternative_select_labels: [ ㊀, ㊁, ㊂, ㊃, ㊄, ㊅, ㊆, ㊇, ㊈ ]  #自定义候选序号显示符
+#  alternative_select_keys: "ASDFGHJKL"                      #若编码字符占用数字键则需另设选字键
+
+style:                         #样式设置, 通常情况下在[weasel.yaml]或[weasel.custom.yaml]中定义
+  #color_scheme: Windows10      #选中的配色方案
+
+
+  keyboards: [.default, lanbaoshidddd, lanbaoshizhuji, defaultzhujiq, defaultzhujiw, defaultzhujie, defaultzhujir, defaultzhujit, defaultzhujiy, defaultzhujiu, defaultzhujii, defaultzhujio, defaultzhujip, defaultzhujia, defaultzhujis, defaultzhujid, defaultzhujif, defaultzhujig, defaultzhujih, defaultzhujij, defaultzhujik, defaultzhujil, defaultzhujix, defaultzhujic, defaultzhujiv, defaultzhujib, defaultzhujin, defaultzhujim]
+  reset_ascii_mode: true #不同进程中显示键盘时重置为中文状态（true:重置为中文；false:记忆中英状态）
+
+preset_keyboards:
+
+  lanbaoshizhuji:
+    height: *VJGG
+    keys:
+      - {height: 1, width: 100}      # ❶
+
+      - {click: "q_zhuujiq", key_text_color: 0x00, key_back_color: lanbaoshiq2.png}
+      - {click: "q_zhuujiw", key_text_color: 0x00, key_back_color: lanbaoshiw2.png}
+      - {click: "q_zhuujie", key_text_color: 0x00, key_back_color: lanbaoshie2.png}
+      - {click: "q_zhuujir", key_text_color: 0x00, key_back_color: lanbaoshir2.png}
+      - {click: "q_zhuujit", key_text_color: 0x00, key_back_color: lanbaoshit2.png}
+      - {click: "q_zhuujiy", key_text_color: 0x00, key_back_color: lanbaoshiy2.png}
+      - {click: "q_zhuujiu", key_text_color: 0x00, key_back_color: lanbaoshiu2.png}
+      - {click: "q_zhuujii", key_text_color: 0x00, key_back_color: lanbaoshii2.png}
+      - {click: "q_zhuujio", key_text_color: 0x00, key_back_color: lanbaoshio2.png}
+      - {click: "q_zhuujip", key_text_color: 0x00, key_back_color: lanbaoship2.png}
+      # ❷
+      - {width: 5}
+      - {click: "q_zhuujia", key_text_color: 0x00, key_back_color: lanbaoshia2.png}
+      - {click: "q_zhuujis", key_text_color: 0x00, key_back_color: lanbaoshis2.png}
+      - {click: "q_zhuujid", key_text_color: 0x00, key_back_color: lanbaoshid2.png}
+      - {click: "q_zhuujif", key_text_color: 0x00, key_back_color: lanbaoshif2.png}
+      - {click: "q_zhuujig", key_text_color: 0x00, key_back_color: lanbaoshig2.png}
+      - {click: "q_zhuujih", key_text_color: 0x00, key_back_color: lanbaoshih2.png}
+      - {click: "q_zhuujij", key_text_color: 0x00, key_back_color: lanbaoshij2.png}
+      - {click: "q_zhuujik", key_text_color: 0x00, key_back_color: lanbaoshik2.png}
+      - {click: "q_zhuujil", key_text_color: 0x00, key_back_color: lanbaoshil2.png}
+      - {width: 5}
+      # ❸
+      - {width: 10}
+      - {click: K_default, key_text_color: 0x00, key_back_color: lanbaoshiz2.png}
+      - {click: "q_zhuujix", key_text_color: 0x00, key_back_color: lanbaoshix2.png}
+      - {click: "q_zhuujic", key_text_color: 0x00, key_back_color: lanbaoshic2.png}
+      - {click: "q_zhuujiv", key_text_color: 0x00, key_back_color: lanbaoshiv2.png}
+      - {click: "q_zhuujib", key_text_color: 0x00, key_back_color: lanbaoshib2.png}
+      - {click: "q_zhuujin", key_text_color: 0x00, key_back_color: lanbaoshin2.png}
+      - {click: "q_zhuujim", key_text_color: 0x00, key_back_color: lanbaoshim2.png}
+      - {width: 20, click: K_default, label: 返回, key_text_color: TEX, key_back_color: 0x00}
+
+      - {height: *ZGH, width: 100, label: "单击可放大字根图", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+    name: "助记"
+    width: 10
+
+  defaultzhujiq:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshiq2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkq.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujiw:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshiw2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkw.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujie:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshie2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjke.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujir:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshir2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkr.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujit:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshit2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkt.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujiy:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshiy2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjky.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujiu:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshiu2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjku.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujii:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshii2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjki.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujio:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshio2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjko.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujip:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoship2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkp.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujia:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshia2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjka.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujis:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshis2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjks.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujid:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshid2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkd.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujif:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshif2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkf.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujig:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshig2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkg.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujih:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshih2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkh.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujij:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshij2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkj.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujik:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshik2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkk.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujil:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshil2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkl.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujix:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshix2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkx.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujic:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshic2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkc.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujiv:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshiv2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkv.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujib:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshib2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkb.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujin:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshin2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkn.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  defaultzhujim:
+    height: *VJGGG
+    keys:
+
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshim2.png}
+      - {width: 50, click: "K_defaultzhuji", key_text_color: 0x00, key_back_color: lanbaoshicjkm.png}
+
+      - {height: *ZGH, width: 100, label: "点击任意区域返回", click: "K_backk", hilited_key_back_color: zzh, key_back_color: zzh}
+
+  lanbaoshidddd:
+    height: *VVJGG
+    ascii_mode: 0
+    horizontal_gap: 1
+    vertical_gap: 1
+    round_corner: 0
+    key_hint_offset_y: -1
+    key_text_offset_y: -3
+    label_transform: uppercase # 中文 字母大写，none
+    keys:
+      - {height: 1, width: 100}      # ❶
+      # 第一行
+      - {click: "K_back", label: "🔙", hint: 返　回}
+      - {click: "q_sx", label: "🔄", hint: 刷　新}
+      - {width: 16, click: "Deploy", label: "♻️", hint: 部　署}
+      - {width: 16, click: "Menu", label: "💠", hint: 方　案}
+      - {click: "Hint_switch", hint: 提　示}
+      - {click: "Candidate_switch", hint: 候选栏}
+      # 第二行
+      - {click: "yjjc_lua", label: "➕", hint: 一键加词}
+      - {click: "fanjian", hint: 简转繁}
+      - {width: 16, click: "chai", hint: 092拆分}
+      - {width: 16, click: "ytz", hint: 异体滤镜}
+      - {click: "pinyin", hint: 拼音滤镜}
+      - {click: "uma", hint: U码滤镜}
+      # 第三行
+      - {click: "LLQSS", label: "🔍", hint: 浏览器}
+      - {click: "ZTWCZ", label: "📕", hint: 字统查字}
+      - {width: 16, click: "HDCZ", label: "📚", hint: 汉典查字}
+      - {width: 16, click: "M2T", label: "📂", hint: 打开 MT}
+      - {click: "Date1", label: "📅", hint: 日 期}
+      - {click: "IME_switch", label: "🌍", hint: 输入法}
+      # 第四行
+      - {click: "q_zhuuji", label: "9️⃣", hint: 内置字根}
+      - {click: "QQ", label: "🐧", hint: 打开QQ}
+      - {width: 16, click: "Weixin", label: "💬", hint: 打开微信}
+      - {width: 16, click: "lua_script_all", label: "🍀", hint: 脚本启动}
+      - {click: "Theme_settings", label: "🎨", hint: 主题配色}
+      - {click: "Settings", label: "🔧", hint: 设　置}
+      # 第五行
+      - {click: "qqdnyou", label: "💌", hint: 联系作者}
+      - {click: "float_mode", hint: 悬浮键盘}
+      - {click: "K_backk1", label: "🔄", hint: 长按获取新版, long_click: "xiaoxiansheng", width: 32}
+      - {click: "_Keyboard_phrase", label: "📑", hint: 短 语}
+      - {click: "K_backk1", label: "🔜", hint: 返　回}
+    name: "选单。"
+    width: 17
+
+preset_keys:
+  q_cd: {label: "菜单", send: Eisu_toggle, select: "lanbaoshidddd"}
+  K_backk1: {label: "返回", functional: false, send: Eisu_toggle, select: .default}
+  space22: {repeatable: true, preview: '␣', label: " ", functional: true, send: space}
+
+  LLQSS: {label: 搜索, functional: false, send: function, command: web_search, option: "%4$s"} # 直达光标前http开头的网址或搜索光标前内容
+  xiaoxiansheng: {label: " ", functional: false, send: function, command: web_search, option: "https://soxiaoxiansheng.lanzout.com/b00n9p3ij"}
+  ZTWCZ: {label: 字統網, functional: false, send: function, command: run, option: "https://zi.tools/zi/%4$s"}
+  HDCZ: {label: 漢典, functional: false, send: function, command: run, option: "https://www.zdic.net/hans/?q=%4$s"}
+  yjjc_lua: {label: 加词, functional: false, send: function, command: '一键加词.lua', option: "《《命令行》》【【yonghu.txt】】【【danzi.txt】】【【1】】"}#加词模式 1为弹出输入框，2为在第三方输入框添加，词库名称和单字码表名为自定义项，可以不是单字表，但是建议使用单字表，(PS：码表文件太大会卡死
+
+  chai: {toggle: 092_spelling, functional: false, send: Control+Shift+H, states: [ 📴, ✅]}
+  ytz: {toggle: yitizi_segestion, functional: false, send: Control+Shift+A, states: [ ️️📴, ✅]}
+  pinyin: {toggle: jiayin, functional: false, send: Control+Shift+B, states: [ ️️📴, ✅]}
+  uma: {toggle: Unicode, functional: false, send: Control+Shift+C, states: [ ️️📴, ✅]}
+  fanjian: {toggle: simplification, functional: false, send: Control+Shift+F, states: [ ️️🈚, 🈶]}
+
+  q_sx: {label: "⇋️", functional: false, text: "{Schema_switch}{Schema_switch}"}  #刷新
+  q_xd: {label: "菜單", send: Eisu_toggle, select: "menu"}
+  Menu: {label: ✡, functional: false, send: Menu} #方案选单
+  IME_switch: {label: ⌨, functional: false, send: LANGUAGE_SWITCH} #输入法
+  Full_Half: {toggle: full_shape, send: Mode_switch, states: [ ◖, ● ]}
+  Full_Half1: {toggle: full_shape, functional: false, text: "{Full_Half}{K_back}", send: Mode_switch, states: [ ◐, ● ]}
+#  Color_settings: {label: ❐, functional: false, send: SETTINGS, option: "color"} #配色
+#  Color_settings1: {label: 配色  主題, send: SETTINGS, option: "color"} #配色
+  Candidate_switch: {toggle: _hide_candidate, functional: false, send: Mode_switch, states: [ 📤️️, ️📥 ]}
+  Share: {label: 分享, functional: false, command: send, option: "%1$s"} #分享指定文本: %s或者%1$s爲當前字符
+
+  Candidate_switch1: {toggle: _hide_candidate, functional: false, text: "{Candidate_switch}{K_back}", send: Mode_switch, states: [ ☐, ─ ]}
+  Color_switch: {label: ◲, functional: false, send: PROG_RED} #配色
+  Hint_switch: {toggle: _hide_key_hint, functional: false, send: Mode_switch, states: [ ⭕️, 🚫]}
+  # trime设置
+  IME_switch1: {label: ●, functional: false, send: LANGUAGE_SWITCH}
+  K_back: {label: 返回, send: Eisu_toggle, select: .last_lock}
+  K_back1: {label: "返回", functional: false, send: Eisu_toggle, select: .last_lock}
+  Keyboard_default: {label: "返回", functional: false, send: Eisu_toggle, select: .last_lock}
+  K_default: {label: 中文, send: Eisu_toggle, select: .default}
+  K_defaultzhuji: {label: 助记, send: Eisu_toggle, select: lanbaoshizhuji}
+  K_backk: {label: " ", send: Eisu_toggle, select: .default}
+  Schema_switch: {label: ⇄, functional: false, send: Control+Shift+1}
+  Schema_Eng: {label: En, send: Control+Shift+0}
+  Settings: {label: ⚙, functional: false, send: SETTINGS}
+  Theme_settings: {label: 主题, functional: false, send: SETTINGS, option: "theme"} #主题
+  Schema_settings: {label: 方案, send: SETTINGS, option: "schema"}
+
+  # trime命令
+  Date: {label: "☀", send: function, command: date, option: "yy.MM.d"}
+  Date1: {label: "日期", functional: false, send: function, command: date, option: "yyyy.M.d E HH:mm"}
+  ChineseDate: {label: " ", send: function, command: date, option: "zh_CN@calendar=chinese"} #农历等日期(>=Android 7.0)：date 语言@calendar=历法 格式。具体參見https://developer.android.com/reference/android/icu/util/Calendar.html
+  EnglishDate: {label: " ", send: function, command: date, option: "en_US@calendar=english"}
+  Time: {label: " ", send: function, command: date, option: " HH:mm E"}
+  TrimeCmp: {label: 同文组件, send: function, command: run, option: "com.osfans.trime/ .Pref"} #运行程序指定组件：run包名/组件名
+  qqdnyou: {label: ️☯, functional: false, send: function, command: run, option: "mqqapi://card/show_pslcard?src_type=internal&amp;source=sharecard&amp;version=1&amp;uin=1244102480"} 
+  Deploy: {label: ⟲, functional: false, send: function, command: broadcast, option: "com.osfans.trime.deploy"}
+  M2T: {label: ⓂⓉ, functional: false, send: function, command: run, option: "bin.mt.plus"} #MT2app包名
+  XHZD: {label: ZD, functional: false, send: function, command: run, option: "cn.dictcn.android.digitize.swg_xhzd_21003"} #新华字典 app包名
+  TIM: {label: TIM, functional: false, send: function, command: run, option: "com.tencent.tim"} #TIMapp包名
+  QQ: {label: QQ, functional: false, send: function, command: run, option: "com.tencent.mobileqq"} #QQapp包名
+  Weixin: {label: 微信, functional: false, send: function, command: run, option: "com.tencent.mm"} #Weixinapp包名
+
+  #无障碍
+  clip_board: {label: 剪切板, send: Control+Shift+v}
+  _Keyboard_clip: {label: 剪切板, functional: false, send: Eisu_toggle, select: _clip_board}
+  _Keyboard_phrase: {label: 短语, functional: false, send: Eisu_toggle, select: _phrase_board}
+  _add_phrase: {label: 添加, functional: true, send: function, command: add_phrase}
+  float_mode: {when: always, toggle: float_mode, functional: false, send: Mode_switch, states: [ 🔒, 🔓 ]}
+
+  lua_script_all: {label: ☘, send: function, functional: false, command: '01 脚本启动器/脚本启动器.lua', option: "%1$s"}  
+  srf: {label: 输入法信息, functional: false, send: function, command: '01 脚本启动器/脚本库/输入法信息.lua', option: "%1$s"} #输入法信息.lua
+  _Keyboard_clip_script: {label: ⌨, functional: false, send: function, command: '01 脚本启动器/脚本库/剪切板.lua', option: "%1$s"} #自定义剪切板
+  _Keyboard_emoji: {label: 表情, send: function, command: '01 脚本启动器/脚本库/2 自定义短语/表情键盘.lua', option: "《《命令行&&查当前候选》》"}#根据当前候选查找对应城市天气信息
+  lua_tq2: {label: 当前天气, send: function, command: '01 脚本启动器/脚本库/天气/天气.lua', option: "《《命令行》》【【深圳】】"}#城市名称为自定义项,可替换为 武汉,北京,广州等常用城市名
+  VOICE_ASSIST0: {label: 🎙, send: function, command: '01 脚本启动器/脚本库/语音加提示.lua', option: "%1$s"}
+  SXZT: {label: 🔄, send: function, command: '01 脚本启动器/脚本库/刷新当前主题.lua', option: "%1$s"}
+  YSDM: {label: ◐, send: function, command: '01 脚本启动器/脚本库/颜色代码表.lua', option: "%1$s"}
+  _Keyboard_fuhao: {label: 符, functional: false, send: function, command: '符号键盘.lua', option: "%1$s"}
+  _Keyboard_Color: {label: 🥶, send: function, command: 'emoji键盘.lua'}
+
+
+  q_zhuuji: {label: 助記, functional: false, send: Eisu_toggle, select: "lanbaoshizhuji"} 
+  q_zhuujiq: {label: Q, functional: false, send: Eisu_toggle, select: "defaultzhujiq"} 
+  q_zhuujiw: {label: W, functional: false, send: Eisu_toggle, select: "defaultzhujiw"} 
+  q_zhuujie: {label: E, functional: false, send: Eisu_toggle, select: "defaultzhujie"} 
+  q_zhuujir: {label: R, functional: false, send: Eisu_toggle, select: "defaultzhujir"} 
+  q_zhuujit: {label: T, functional: false, send: Eisu_toggle, select: "defaultzhujit"} 
+  q_zhuujiy: {label: Y, functional: false, send: Eisu_toggle, select: "defaultzhujiy"} 
+  q_zhuujiu: {label: U, functional: false, send: Eisu_toggle, select: "defaultzhujiu"} 
+  q_zhuujii: {label: I, functional: false, send: Eisu_toggle, select: "defaultzhujii"} 
+  q_zhuujio: {label: O, functional: false, send: Eisu_toggle, select: "defaultzhujio"} 
+  q_zhuujip: {label: P, functional: false, send: Eisu_toggle, select: "defaultzhujip"} 
+  q_zhuujia: {label: A, functional: false, send: Eisu_toggle, select: "defaultzhujia"} 
+  q_zhuujis: {label: S, functional: false, send: Eisu_toggle, select: "defaultzhujis"} 
+  q_zhuujid: {label: D, functional: false, send: Eisu_toggle, select: "defaultzhujid"} 
+  q_zhuujif: {label: F, functional: false, send: Eisu_toggle, select: "defaultzhujif"} 
+  q_zhuujig: {label: G, functional: false, send: Eisu_toggle, select: "defaultzhujig"} 
+  q_zhuujih: {label: H, functional: false, send: Eisu_toggle, select: "defaultzhujih"} 
+  q_zhuujij: {label: J, functional: false, send: Eisu_toggle, select: "defaultzhujij"} 
+  q_zhuujik: {label: K, functional: false, send: Eisu_toggle, select: "defaultzhujik"} 
+  q_zhuujil: {label: L, functional: false, send: Eisu_toggle, select: "defaultzhujil"} 
+  q_zhuujix: {label: X, functional: false, send: Eisu_toggle, select: "defaultzhujix"} 
+  q_zhuujic: {label: C, functional: false, send: Eisu_toggle, select: "defaultzhujic"} 
+  q_zhuujiv: {label: V, functional: false, send: Eisu_toggle, select: "defaultzhujiv"} 
+  q_zhuujib: {label: B, functional: false, send: Eisu_toggle, select: "defaultzhujib"} 
+  q_zhuujin: {label: N, functional: false, send: Eisu_toggle, select: "defaultzhujin"} 
+  q_zhuujim: {label: M, functional: false, send: Eisu_toggle, select: "defaultzhujim"} 
+

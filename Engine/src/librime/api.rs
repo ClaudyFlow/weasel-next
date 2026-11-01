@@ -51,12 +51,17 @@ impl RimeLibraryApi {
         field!(get_commit);
         field!(free_commit);
         field!(get_context);
+        field!(get_current_schema);
         field!(get_input);
         field!(free_context);
         field!(get_status);
         field!(free_status);
         field!(get_option);
         field!(set_option);
+        // 2026-10-29 补：漏装这一项时 `Session::select_schema` 恒返回 false
+        // （函数指针是零值），引擎每个新会话都记一条"方案当前不可用，保留 librime 的选择"
+        // —— 用户**在设置里选的当前方案从来没生效过**（真机日志 2026-10-29 09:47 复现）。
+        field!(select_schema);
         field!(select_candidate_on_current_page);
         field!(change_page);
         macro_rules! required {
