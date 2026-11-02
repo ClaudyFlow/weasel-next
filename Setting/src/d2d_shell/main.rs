@@ -35,6 +35,28 @@ const WM_MOUSEWHEEL: u32 = 0x020A;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_NCCALCSIZE: u32 = 0x0083;
 const WM_CHAR: u32 = 0x0102;
+
+// ── 记住窗口尺寸(2026-11-01):%APPDATA%\Rime-Next\setting-window.json ──
+fn window_size_file() -> Option<std::path::PathBuf> {
+    weasel_common::process::user_data_dir().map(|dir| dir.join("setting-window.json"))
+}
+
+fn load_window_size() -> Option<(f32, f32)> {
+    let text = std::fs::read_to_string(window_size_file()?).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let w = value.get("w")?.as_f64()? as f32;
+    let h = value.get("h")?.as_f64()? as f32;
+    // 合理范围护栏
+    (w >= 640.0 && h >= 400.0 && w <= 3840.0 && h <= 2160.0).then_some((w, h))
+}
+
+fn save_window_size(w: f32, h: f32) {
+    if let Some(path) = window_size_file()
+        && let Ok(text) = serde_json::to_string(&serde_json::json!({ "w": w, "h": h }))
+    {
+        let _ = std::fs::write(path, text);
+    }
+}
 const WM_NCHITTEST: u32 = 0x0084;
 
 const WS_POPUP_: u32 = 0x8000_0000;
@@ -2274,6 +2296,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 LRESULT(0)
             }
             WM_DESTROY => {
+                // 记住窗口尺寸:客户区物理像素即 DIP(npixels 是 1:1 的?否——
+                // 这里统一换算回 DIP 存,下次按当前 DPI 重算)
+                if let Some(s) = shell() {
+                    let (w, h) = s.client_size();
+                    let scale = s.scale();
+                    save_window_size(w / scale, h / scale);
+                }
                 PostQuitMessage(0);
                 LRESULT(0)
             }
@@ -2309,6 +2338,10 @@ fn run() -> Result<(), String> {
             return Err("RegisterClassW 失败".into());
         }
 
+        // 记住窗口尺寸(2026-11-01):上次退出的大小优先,出厂常量兜底
+        let (stored_w, stored_h) = load_window_size().unwrap_or((WINDOW_W, WINDOW_H));
+        let window_w = npixels(stored_w);
+        let window_h = npixels(stored_h);
         let hwnd = CreateWindowExW(
             WS_EX_NOREDIRECTIONBITMAP_ | WS_EX_APPWINDOW_,
             class,
@@ -2316,8 +2349,8 @@ fn run() -> Result<(), String> {
             WS_POPUP_ | WS_THICKFRAME_ | WS_MINIMIZEBOX_ | WS_MAXIMIZEBOX_ | WS_SYSMENU_,
             CW_USEDEFAULT_,
             CW_USEDEFAULT_,
-            npixels(WINDOW_W),
-            npixels(WINDOW_H),
+            window_w,
+            window_h,
             None,
             None,
             Some(HINSTANCE(instance.0)),
