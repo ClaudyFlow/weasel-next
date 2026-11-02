@@ -389,6 +389,14 @@ fn touch_activity() {
 ///
 /// 静默部署模式不向继承句柄输出参数错误；普通模式将启动失败写入标准错误。
 fn main() -> std::process::ExitCode {
+    // 语法模型默认不加载(2026-11-03 实测:453MB octagram 对候选质量零贡献,
+    // gram 开/关 top1/top3 完全一致——组句靠词典权重,终审靠 4.4MB 神经模型)。
+    // 用户显式设 WEASEL_GRAM=on 可恢复。
+    unsafe {
+        if std::env::var("WEASEL_GRAM").is_err() {
+            std::env::set_var("WEASEL_GRAM", "off");
+        }
+    }
     let args = match weasel_common::service_owner::take_launch_args(std::env::args_os().skip(1)) {
         Ok(args) => args,
         Err(error) => {
