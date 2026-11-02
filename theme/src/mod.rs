@@ -43,6 +43,7 @@ const WDA_EXCLUDEFROMCAPTURE: u32 = 0x0000_0011;
 unsafe extern "system" {
     fn SetWindowDisplayAffinity(hwnd: HWND, affinity: u32) -> windows_core::BOOL;
 }
+
 #[link(name = "dwmapi")]
 unsafe extern "system" {
     fn DwmFlush() -> i32;
@@ -750,7 +751,7 @@ unsafe fn apply_taskbar_icon(hwnd: HWND, icon: HICON) {
 
 impl App {
     fn new(loaded: config::Loaded, dpi: f32, glass: bool) -> Result<Self, String> {
-        let metrics = config::metrics(&loaded.style, dpi, paint::material() == "plain")
+        let metrics = config::metrics(&loaded.style, dpi, paint::tier().flat())
             .with_colors(&loaded.scheme);
         crate::diagnostics::record(format_args!("主题配置: {}", loaded.source));
         crate::diagnostics::record(format_args!(
@@ -777,7 +778,7 @@ impl App {
 
     /// DPI 变了：按原始 style 重新缩放度量与字号。
     fn set_dpi(&mut self, dpi: u32) {
-        self.metrics = config::metrics(&self.raw_style, dpi.max(1) as f32, paint::material() == "plain")
+        self.metrics = config::metrics(&self.raw_style, dpi.max(1) as f32, paint::tier().flat())
             .with_colors(&self.scheme);
         let _ = self.graphics.refresh_formats(&self.metrics);
         if let Some(content) = &mut self.content {
@@ -813,7 +814,7 @@ impl App {
             Err(_) => self.raw_style.glass,
         };
         self.metrics =
-            config::metrics(&self.raw_style, dpi.max(1) as f32, paint::material() == "plain")
+            config::metrics(&self.raw_style, dpi.max(1) as f32, paint::tier().flat())
                 .with_colors(&self.scheme);
         let _ = self.graphics.refresh_formats(&self.metrics);
         if let Some(presenter) = self.graphics.target.as_ref() {
@@ -1100,7 +1101,20 @@ impl Window {
             }
         };
         if same {
-            self.position().map_err(|e| e.to_string())?;
+            {
+            // 有真实候选时撤掉模式提示的自毁计时器
+            let app = self.app.borrow();
+            let keep = app
+                .content
+                .as_ref()
+                .is_some_and(|c| c.snapshot.mode_indicator.is_none() || !c.snapshot.items.is_empty());
+            if keep {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd.get()), AUTOHIDE_TIMER);
+                }
+            }
+        }
+        self.position().map_err(|e| e.to_string())?;
             self.invalidate();
             return self.health();
         }
@@ -1168,6 +1182,11 @@ impl Window {
             if self.glass_self {
                 self.capture_backdrop();
             }
+            // ★ 重新打开 DWM 亚克力（hide 里关了）。必须在 ShowWindow 之前开，
+            // 否则第一帧没有亚克力、显示后 DWM 才补上 ⇒ 闪一下没模糊的面板。
+            if self.app.borrow().glass && !self.glass_self {
+                accent::sync_acrylic(self.hwnd.get(), true, self.app.borrow().scheme.back_color);
+            }
             // 隐藏期间窗口保留上一帧，先画一次再显示，避免闪出旧内容
             if let Err(error) = self.paint() {
                 self.graphics_error(error);
@@ -1180,6 +1199,7 @@ impl Window {
             );
         }
         self.shown.set(true);
+        // 真有候选/预编辑时撤掉模式提示的自毁计时器（不然 900ms 后会把面板隐藏）
         self.invalidate();
         self.health()
     }
@@ -1197,9 +1217,17 @@ impl Window {
                     timeEndPeriod(1);
                 }
             }
+            // ★ 关掉 DWM 亚克力：亚克力是 DWM 合成层特效，不随 SW_HIDE 立刻消失。
+            // D2D 内容清成透明后，DWM 仍保留那一帧模糊 ⇒ 打完字偶尔残留半透明界面。
+            // 先 disable_acrylic 再清内容 + SW_HIDE，DWM 合成层就没有模糊可残留。
+            // （render 的 was_hidden 分支会重新 sync_glass 打开，配对不漏。）
+            if self.app.borrow().glass && !self.glass_self {
+                accent::sync_acrylic(self.hwnd.get(), false, 0);
+            }
             // 隐藏前先把表面清成**全透明**再上屏一次：DWM 有时不会立刻把窗口
             // 撤出合成，残留的就会是上一帧那张模糊背景（用户 18:1x：「打完字有时
             // 候这个背景还是会显示」）。清成空气之后，就算晚一帧也看不见东西。
+            let presenter = self.app.borrow().graphics.target.is_some();
             if let Some(presenter) = self.app.borrow().graphics.target.as_ref() {
                 // ⚠️ D2D 的 `Clear` 必须在 `BeginDraw`/`EndDraw` 之间调，否则上下文进入
                 // 非法状态 —— 下一次 `EndDraw` 就报 `0x88990001 (D2DERR_WRONG_STATE)`，
@@ -1208,6 +1236,19 @@ impl Window {
                 presenter.begin_draw();
                 presenter.clear_transparent();
                 let _ = presenter.end_draw();
+            } else {
+                // 没画布可清：这一帧注定留在屏幕上，至少留个可查的痕迹。
+                crate::diagnostics::record(format_args!("hide 时没有绘制目标，无法清屏"));
+            }
+            // 2026-11-02 03:1x **修「打完字残留磨砂面板」**：
+            // 光清屏不够 —— `Present` 只是把帧排进队列，紧接着的 `SW_HIDE` 会让 DWM
+            // 直接按"窗口已隐藏"合成，**那一帧全透明的画面根本不会上屏**，屏幕上留着的
+            // 还是上一帧那块高斯模糊面板。实测（用户 03:1x 截图 + 外部枚举窗口）：
+            // 此时 `IsWindowVisible=false`，但屏幕 (1321,678)-(1920,885) 那块一直是糊的，
+            // 能停好几分钟不动。
+            // ⇒ 清屏之后必须 `DwmFlush()` 等这一帧真的被合成出去，再撤窗口。
+            if presenter {
+                let _ = DwmFlush();
             }
             let _ = ShowWindow(self.hwnd.get(), SW_HIDE);
         }
@@ -1234,19 +1275,28 @@ impl Window {
         };
         let target = presenter.render_target();
         let scheme = &*scheme;
-        // plain 档（纯白面板）要用浅底配色：steam 是深底浅字，白底上编码/候选/注释
+        // 抓屏模糊档（透明/亚克力）要用浅底配色：steam 是深底浅字，白底上编码/候选/注释
         // 全是白字 ⇒ 看不见（2026-11-01 用户截图）。其它材质保持配色表原样。
         let plain_palette;
-        let scheme = if paint::material() == "plain" {
+        let tier = paint::tier();
+        let scheme = if tier.flat() {
             // 面板不再铺白（直接透明），文字颜色要跟着**背景亮度**走：
             // 深色背景上用浅色字，否则黑字糊在黑背景里看不见。
-            let backdrop_is_dark = backdrop.as_ref().map(|b| b.luma < 128).unwrap_or(false);
+            // 亚克力例外：它在模糊底上再铺 50% 白 ⇒ 有效背景一定是浅的，
+            // 按原始背景明暗选字色会在深色壁纸上变成"白字压乳白"（看不见）。
+            let backdrop_is_dark = if tier == paint::Material::Acrylic {
+                false
+            } else {
+                backdrop.as_ref().map(|b| b.luma < 128).unwrap_or(false)
+            };
             plain_palette = paint::plain_scheme(scheme, backdrop_is_dark);
             &plain_palette
         } else {
             scheme
         };
         let metrics = &*metrics;
+        // 本帧是否画坏（画失败 / EndDraw 失败）。画坏只丢帧，不再让渲染器退出。
+        let mut frame_failed = false;
         unsafe {
             let brush = target.CreateSolidColorBrush(&d2d_color(scheme.back_color), None)?;
             presenter.begin_draw();
@@ -1350,33 +1400,64 @@ impl Window {
                     Some(Hit::Candidate(i)) => Some(*i),
                     _ => None,
                 };
-                if content.snapshot.mode_indicator.is_some() {
-                    let ascii = content.snapshot.ascii_mode.unwrap_or(false);
-                    if content.snapshot.items.is_empty() {
-                        draw_mode_indicator(
-                            &painter,
-                            &content.layout,
-                            &graphics.indicator,
-                            ascii,
-                        );
-                    } else {
+                let indicator = content.snapshot.mode_indicator.is_some();
+                // 提示窗有两种形态：**只有图标**（68×68 的小窗，无候选）
+                // 和 **组字中徽标**（候选窗还开着，在预编辑后面叠一个小「中/英」）。
+                let icon_only = indicator && content.snapshot.items.is_empty();
+                if indicator {
+                    // 防呆：模式提示那个小窗（68×68）如果因为任何原因没收到"过期"重绘，
+                    // 会一直停在屏幕上（用户 2026-11-01 22:5x：「打完字会出现半透明的界面，
+                    // 还关不掉」）。这里挂一个一次性自毁计时器兜底。
+                    unsafe {
+                        let _ = SetTimer(Some(self.hwnd.get()), AUTOHIDE_TIMER, 900, None);
+                    }
+                }
+                let ascii = content.snapshot.ascii_mode.unwrap_or(false);
+                // 这次提示是不是 CapsLock 造成的（引擎判定后带下来的）。
+                let caps_lock = content
+                    .snapshot
+                    .mode_indicator
+                    .as_ref()
+                    .is_some_and(|indicator| indicator.caps_lock);
+                if icon_only {
+                    draw_mode_indicator(
+                        &painter,
+                        &content.layout,
+                        &graphics.indicator,
+                        ascii,
+                        caps_lock,
+                    );
+                } else {
+                    // 2026-11-02 02:3x **修**：原来只要 `mode_indicator` 有值就整块改写，
+                    // 组字中切中英时**只画了那个小徽标、候选一个都没画** ——
+                    // 用户看到的就是"候选窗整个不见了"（不是崩，是压根没画）。
+                    // 现在：正常内容照画，徽标只是叠在上面的一层。
+                    let empty = empty_context(&content.snapshot);
+                    // 一帧画坏**不再上抛**。上抛会被渲染器当成致命错误
+                    // （UI 循环退出：渲染失败 灾难性故障 0x8000FFFF）。这里只记日志、丢掉这一帧。
+                    if let Err(message) = painter.draw(&content.layout, empty) {
+                        crate::diagnostics::record(format_args!("绘制失败（丢弃本帧）: {message}"));
+                        frame_failed = true;
+                    }
+                    if indicator {
                         // 组字中切中英（打一半拼音按 Shift）：候选窗不会消失，
                         // 所以在预编辑文字后面挂一个小徽标「中 / 英」。
-                        draw_mode_badge(&painter, &content.layout, &graphics.indicator, ascii);
+                        draw_mode_badge(&painter, &content.layout, &graphics.indicator, ascii, caps_lock);
                     }
-                } else {
-                    let empty = empty_context(&content.snapshot);
-                    painter
-                        .draw(&content.layout, empty)
-                        .map_err(|message| {
-                            crate::diagnostics::record(format_args!("绘制失败: {message}"));
-                            windows_core::Error::from_hresult(E_UNEXPECTED)
-                        })?;
                 }
             }
-            draw.finish()?;
+            if let Err(error) = draw.finish() {
+                // 同样的道理：EndDraw 失败（D2DERR_WRONG_STATE）只丢这一帧，
+                // 并把呈现层丢掉，下一帧 ensure_target 重建。别再让渲染器整个退出。
+                crate::diagnostics::record(format_args!("呈现失败（丢弃本帧、下帧重建目标）: {error}"));
+                frame_failed = true;
+            }
         }
         drop(app);
+        if frame_failed {
+            // 触碰呈现层放在 `app` 借用之外：重建是下一帧 ensure_target 的事。
+            self.app.borrow_mut().graphics.target = None;
+        }
         self.recovery.borrow_mut().succeeded();
         Ok(())
     }
@@ -1560,6 +1641,7 @@ fn draw_mode_badge(
     layout: &Layout,
     format: &IDWriteTextFormat,
     ascii: bool,
+    caps_lock: bool,
 ) {
     // 参考高度：有预编辑行就用预编辑行高，否则用候选行高。
     let row = if !layout.preedit.is_null() {
@@ -1589,7 +1671,7 @@ fn draw_mode_badge(
         painter.scheme.border_color,
         &layout::RoundInfo::default(),
     );
-    let text = if ascii { "英" } else { "中" };
+    let text = if caps_lock { "A" } else if ascii { "英" } else { "中" };
     let wide: Vec<u16> = text.encode_utf16().collect();
     unsafe {
         if let Ok(text_layout) = painter
@@ -1610,7 +1692,7 @@ fn draw_mode_badge(
             );
         }
     }
-    crate::diagnostics::record(format_args!("模式提示: 组字中徽标 {}", if ascii { "英" } else { "中" }));
+    crate::diagnostics::record(format_args!("模式提示: 组字中徽标 {}", if caps_lock { "A(大写)" } else if ascii { "英" } else { "中" }));
 }
 
 /// 模式提示（官方没有这个窗口：它用状态图标；我们按同一套配色画一个小提示）。
@@ -1619,6 +1701,7 @@ fn draw_mode_indicator(
     layout: &Layout,
     format: &IDWriteTextFormat,
     ascii: bool,
+    caps_lock: bool,
 ) {
     // 和候选窗同款的圆角底 + 描边（用户要的"边框"）：内容就是那个方形面板
     // 圆角：**面板边长 × 0.125**（用户要求）。
@@ -1644,6 +1727,48 @@ fn draw_mode_indicator(
     } else {
         layout.status_icon
     };
+    // 大写锁定点亮时画一个「A」，而不是中/英图标（用户 2026-11-02 03:0x：
+    // 「按大写的时候应该是一个大写 A 的图标」）。判据来自**引擎**（`mode_indicator.caps_lock`）：
+    // 主题进程不接收键盘输入，自己 `GetKeyState(VK_CAPITAL)` 读不到锁存状态。
+    if ascii && caps_lock {
+        let size = (layout.content.height() * 0.62).max(10.0);
+        let Ok(format) = Graphics::make_format(
+            &painter.write,
+            "Segoe UI",
+            size,
+            DWRITE_WORD_WRAPPING_NO_WRAP,
+            &painter.m,
+        ) else {
+            return;
+        };
+        let wide: Vec<u16> = "A".encode_utf16().collect();
+        unsafe {
+            if let Ok(text_layout) = painter.write.CreateTextLayout(
+                &wide,
+                &format,
+                layout.content.width(),
+                layout.content.height(),
+            ) {
+                let _ = text_layout.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                let _ = text_layout.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                let _ = painter.brush.SetColor(&d2d_color(painter.scheme.text_color));
+                painter.target.DrawTextLayout(
+                    windows_numerics::Vector2 {
+                        x: layout.content.left,
+                        y: layout.content.top,
+                    },
+                    &text_layout,
+                    painter.brush,
+                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                );
+            }
+        }
+        crate::diagnostics::record(format_args!(
+            "模式提示: 大写 A {:.1}pt · 面板 {:.1}x{:.1} DIP",
+            size, layout.content_size.cx, layout.content_size.cy
+        ));
+        return;
+    }
     let pixels = (icon.width() * painter.m.dpi_scale).round().max(1.0) as u32;
     let dark_background = is_dark_color(painter.scheme.back_color);
     if painter.draw_mode_icon(&icon, ascii, pixels, dark_background) {
@@ -1874,7 +1999,24 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                 }
                 0x0113 if wp.0 == AUTOHIDE_TIMER => {
                     let _ = KillTimer(Some(hwnd), AUTOHIDE_TIMER);
-                    window.hide();
+                    // 2026-11-02 02:4x：提示分两种。**纯提示窗**（没有候选）到期整窗隐藏；
+                    // **组字中徽标**到期只能擦掉徽标那一层 —— 整窗 hide 会把还在组字的
+                    // 候选窗一起收走（900ms 后候选突然消失，正是用户报过的现象）。
+                    let badge_on_candidates = {
+                        let mut app = window.app.borrow_mut();
+                        match app.content.as_mut() {
+                            Some(content) if !content.snapshot.items.is_empty() => {
+                                content.snapshot.mode_indicator = None;
+                                true
+                            }
+                            _ => false,
+                        }
+                    };
+                    if badge_on_candidates {
+                        window.invalidate();
+                    } else {
+                        window.hide();
+                    }
                     return LRESULT(0);
                 }
                 0x0113 => {

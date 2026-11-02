@@ -175,6 +175,25 @@ enum Material {
     Acrylic,
 }
 
+/// 候选窗三档材质（用户 2026-11-02）写进 `material.txt` 的值。
+const CANDIDATE_MATERIALS: [&str; 3] = ["glass", "acrylic", "opaque"];
+
+/// 三档在设置界面上的中文标签。
+const CANDIDATE_MATERIAL_LABELS: [&str; 3] = ["透明", "亚克力", "不透明"];
+
+/// 读候选窗当前材质档（0=透明 1=亚克力 2=不透明）；文件缺失或未知值都算透明档。
+///
+/// 老配置里的 `plain`（11-01 那套）在这里也归透明档 —— 与主题侧
+/// `theme/src/paint.rs::Material::parse` 同一套映射，别单独改一边。
+fn read_candidate_material(user: &std::path::Path) -> usize {
+    let text = std::fs::read_to_string(user.join("theme").join("material.txt")).unwrap_or_default();
+    match text.trim().to_ascii_lowercase().as_str() {
+        "acrylic" => 1,
+        "opaque" | "original" | "solid" => 2,
+        _ => 0,
+    }
+}
+
 /// 把 ARGB 的 RGB 分量按比例提亮（往白里混）。
 fn lighten(argb: u32, amount: f32) -> u32 {
     let mix = |channel: u32| {
@@ -331,6 +350,11 @@ struct Shell {
     /// 出厂数据目录与用户目录（读写 `schema/schema.yaml` 用）。
     /// 面板材质。
     material: Material,
+    /// 候选窗材质档（0=透明 1=亚克力 2=不透明）：「外观」页三个按钮的选中态。
+    ///
+    /// 与 `%APPDATA%\Rime-Next\theme\material.txt` 同步；渲染器自己会重读那个文件
+    /// （`theme/src/paint.rs::tier`），这里只管显示与落盘。
+    candidate_material: usize,
     /// 当前皮肤（steam）的主题色：面板底、正文。
     scheme_back: u32,
     scheme_text: u32,
@@ -521,7 +545,12 @@ impl Shell {
     fn list_viewport(&self) -> (f32, f32) {
         let s = self.scale();
         let (_, h) = self.client_size();
-        let top = LIST_TOP * s;
+        // 「外观」页顶部有一条三档材质按钮（y = content_top+56 ~ +86），列表要往下让 32。
+        let top = if self.page == PAGE_THEMES {
+            (LIST_TOP + 32.0) * s
+        } else {
+            LIST_TOP * s
+        };
         let bottom_reserve = if self.page == PAGE_SCHEMAS { 128.0 * s } else { 40.0 * s };
         (top, (h - top - bottom_reserve).max(40.0 * s))
     }
@@ -546,16 +575,65 @@ impl Shell {
             .collect()
     }
 
+    /// 「外观」页顶部画三档材质按钮（透明 / 亚克力 / 不透明），选中项带蓝条。
+    ///
+    /// 这块以前是死代码：`material_buttons()` 算了矩形却没人画、`Hover::Material`
+    /// 也没有任何地方产生 —— 所以界面上根本看不到开关（用户 2026-11-02 问「切换效果呢」）。
+    fn paint_material_buttons(
+        &self,
+        rt: &ID2D1RenderTarget,
+        brush: &ID2D1SolidColorBrush,
+        f: &Formats,
+        s: f32,
+    ) {
+        for (index, (bx, by, bw, bh)) in self.material_buttons().into_iter().enumerate() {
+            let active = self.candidate_material == index;
+            let hovered = matches!(self.hover, Hover::Material(i) if i == index);
+            let bg = if active {
+                0x244C8DFF
+            } else if hovered {
+                0x1AFFFFFF
+            } else {
+                0x0FFFFFFF
+            };
+            draw_fill_round(rt, brush, bx, by, bw, bh, 8.0 * s, bg);
+            if active {
+                draw_fill_round(rt, brush, bx, by, 3.0 * s, bh, 1.5 * s, 0xFF4C8DFF);
+            }
+            self.text(
+                rt,
+                brush,
+                CANDIDATE_MATERIAL_LABELS[index],
+                &f.label,
+                bx + 14.0 * s,
+                by + 5.0 * s,
+                bw - 18.0 * s,
+                bh - 8.0 * s,
+                if active { 0xFFF2F5FA } else { 0xFFB8C1CF },
+            );
+        }
+    }
+
     /// 把材质写进 `theme/material.txt`（渲染器下次画候选窗时读取）。
+    ///
+    /// 用户 2026-11-02：三档从"编译期三个 DLL"改成"一个 DLL 运行时切"，所以这里只管
+    /// 写文件；渲染器把 material.txt 也算进配置时间戳，下一次按键就重载度量与配色。
     fn set_material(&mut self, index: usize) {
-        let names = ["glass", "acrylic", "metal"];
-        let Some(name) = names.get(index) else { return };
+        let Some(name) = CANDIDATE_MATERIALS.get(index) else {
+            return;
+        };
         let path = self.user_dir.join("theme").join("material.txt");
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         match std::fs::write(&path, name) {
-            Ok(()) => self.status = format!("候选窗材质 → {name}（打一次字生效）"),
+            Ok(()) => {
+                self.candidate_material = index;
+                self.status = format!(
+                    "候选窗材质 → {}（打一次字生效）",
+                    CANDIDATE_MATERIAL_LABELS[index]
+                );
+            }
             Err(error) => self.status = format!("写材质失败：{error}"),
         }
         self.repaint();
@@ -619,6 +697,14 @@ impl Shell {
             let index = ((y - 76.0 * s) / (44.0 * s)) as usize;
             if index < PAGES.len() {
                 return Hover::Page(index);
+            }
+        }
+        if self.page == PAGE_THEMES {
+            // 「外观」页顶部的三档材质按钮（先于列表命中，按钮在列表上方）。
+            for (index, rect) in self.material_buttons().into_iter().enumerate() {
+                if x >= rect.0 && x <= rect.0 + rect.2 && y >= rect.1 && y <= rect.1 + rect.3 {
+                    return Hover::Material(index);
+                }
             }
         }
         if self.page == PAGE_THEMES || self.page == PAGE_SETTINGS || self.page == PAGE_SCHEMAS {
@@ -1413,6 +1499,8 @@ impl Shell {
         s: f32,
     ) {
         let (top, viewport_h) = self.list_viewport();
+        // 材质按钮先画（列表已为它们让出顶部这一条：见 `list_viewport`）。
+        self.paint_material_buttons(rt, brush, f, s);
         if self.rows.is_empty() {
             self.text(
                 rt,
@@ -2326,6 +2414,7 @@ fn run() -> Result<(), String> {
             collapsed: std::collections::BTreeSet::new(),
             schema_status: String::new(),
             material,
+            candidate_material: read_candidate_material(&user),
             scheme_back: 0x001B_1F27,
             scheme_text: 0x00E9_EEF7,
             scheme_hilite: 0x004C_8DFF,

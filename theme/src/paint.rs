@@ -33,6 +33,48 @@ pub fn material() -> String {
         .unwrap_or_default()
 }
 
+/// 候选窗材质档位（2026-11-02 用户定：**只出一个 DLL，三档在设置里切**）。
+///
+/// 以前这三档是编译期 `--features`，安装目录里并排放着 `theme-glass.dll` /
+/// `theme-acrylic.dll` / `theme-original.dll` 三个产物，换档得换文件。现在统一成
+/// 运行时读 [`material`]，一个 DLL 全包；老值 `plain` 仍然当透明档（兼容旧配置）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Material {
+    /// 透明：抓屏 + 自绘高斯模糊，白 tint 全透明（底下只剩糊过的那张）。
+    Glass,
+    /// 亚克力：同样抓屏模糊，但再铺 50% 白（比玻璃"实"）。
+    Acrylic,
+    /// 不透明：用 yaml 的 `back_color` 铺满，不抓屏、不模糊、不留投影边。
+    Opaque,
+    /// 金属（老档，只为兼容旧的 `material.txt`）：不透明哑光 + 上白下黑渐变。
+    Metal,
+}
+
+impl Material {
+    /// 是否走「抓屏 + 自绘模糊」那一套（= 老代码里的 `plain` 档）。
+    ///
+    /// 影响三件事：窗口度量要不要收掉投影边、配色要不要换成浅底版本、面板底铺什么。
+    pub fn flat(self) -> bool {
+        matches!(self, Material::Glass | Material::Acrylic)
+    }
+
+    /// 从 `material.txt` 的原始值解析档位；未知值一律当透明档。
+    pub fn parse(text: &str) -> Self {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "acrylic" => Material::Acrylic,
+            "opaque" | "original" | "solid" => Material::Opaque,
+            "metal" => Material::Metal,
+            // "glass" / "plain" / 空 / 垃圾值 —— 都是透明档
+            _ => Material::Glass,
+        }
+    }
+}
+
+/// 当前材质档位（读 `material.txt` → 解析）。绘制/度量都用它。
+pub fn tier() -> Material {
+    Material::parse(&material())
+}
+
 /// `plain` 档（纯白面板）的浅底配色 —— 逐项照抄 `C:\Code\_shots\cand_preview.html`。
 ///
 /// 配色里的 `steam` 是**深底浅字**：面板一换成纯白，编码/候选/注释全变成
@@ -94,10 +136,26 @@ pub fn plain_scheme(base: &ColorScheme, backdrop_is_dark: bool) -> ColorScheme {
     scheme.candidate_back_color = 0;
     scheme.candidate_border_color = 0;
     scheme.candidate_shadow_color = 0;
-    scheme.hilited_candidate_back_color = HILITE_BG;
-    scheme.hilited_candidate_text_color = 0xFF_FF_FF_FF;
-    scheme.hilited_label_color = 0xFF_FF_FF_FF;
-    scheme.hilited_comment_text_color = 0xFF_FF_FF_FF;
+    // **高亮（小候选窗）用 theme.yaml 里的颜色**（用户 2026-11-02：「按 yaml 文件里的颜色
+    // 做小候选窗的颜色」）。主题给了不透明的 hilited_candidate_back_color 就用它，
+    // 没给（或全透明）才退回内置的 #3b4a63。
+    let theme_hilite = base.hilited_candidate_back_color;
+    let hilite_bg = if (theme_hilite >> 24) >= 0x40 {
+        (0xFF00_0000 | (theme_hilite & 0x00FF_FFFF)) as u32
+    } else {
+        HILITE_BG
+    };
+    scheme.hilited_candidate_back_color = hilite_bg;
+    // 高亮块上的字也用主题的（没给就用白色，保证可读）
+    let theme_hilite_text = base.hilited_candidate_text_color;
+    let hilite_text = if (theme_hilite_text >> 24) >= 0x40 {
+        theme_hilite_text
+    } else {
+        0xFF_FF_FF_FF
+    };
+    scheme.hilited_candidate_text_color = hilite_text;
+    scheme.hilited_label_color = hilite_text;
+    scheme.hilited_comment_text_color = hilite_text;
     scheme.hilited_candidate_border_color = 0;
     scheme.hilited_candidate_shadow_color = 0;
     scheme.prevpage_color = pager;
@@ -532,58 +590,45 @@ impl Painter<'_> {
             let draw_background = (!empty_context && !style.inline_preedit)
                 || (style.inline_preedit && (has_candidates || !layout.aux.is_empty()));
             if draw_background {
-                // 材质三档（用户 21:0x 定名）：glass / acrylic / metal，走环境变量
-                // `WEASEL_MATERIAL`（默认 glass，即自绘模糊那一档）。
-                // 材质由设置界面写进 `%APPDATA%\Rime-Next	heme\material.txt`；
-                // 文件不存在时退回环境变量，再退回 glass（用户 21:0x：要在设置里切）。
-                let material = material();
-                let plain = material == "plain";
-                let back_color = match material.as_str() {
-                    // plain：**不要白色**（用户 18:1x「不要白色了，直接透明」）：
-                    // 面板底 = 抓屏 + 高斯模糊那一张，白色 tint 设成全透明。
+                // 材质三档（用户 2026-11-02 定名）：glass / acrylic / opaque，
+                // **运行时**读 `%APPDATA%\Rime-Next\theme\material.txt`（设置界面「外观」页写），
+                // 不再是编译期 feature。老值 `plain` = glass，`metal` = 老金属档。
+                let tier = tier();
+                let flat = tier.flat();
+                let back_color = match tier {
+                    // 不透明：yaml 的 back_color 铺满（原来编译期 `--features original` 那一档）。
+                    Material::Opaque => {
+                        (0xFF00_0000 | (self.scheme.back_color & 0x00FF_FFFF)) as u32
+                    }
+                    // 金属：不透明哑光，下面再叠上白下黑的渐变。
+                    Material::Metal => {
+                        0xFF00_0000 | (darken_color(self.scheme.back_color, 0.78) & 0x00FF_FFFF)
+                    }
+                    // 亚克力：模糊底上再铺 50% 白（原 `--features acrylic` 那一档）。
+                    Material::Acrylic => 0x80FF_FFFF,
+                    // 玻璃：**不要白色**（用户 18:1x「不要白色了，直接透明」）。
                     // 抓不到背景（没抓屏权限/老系统）时才退回 50% 白，否则面板会整个消失。
-                    "plain" => {
-                        // 两档：
-                        //  • 默认（`--features` 不带 acrylic）= **glass**：面板全透明，
-                        //    底下只剩抓屏 + 高斯模糊那一张（用户 18:1x「不要白色了，直接透明」）。
-                        //  • `--features acrylic` = **亚克力**：模糊底上再铺 50% 白。
-                        // 抓不到背景时一律退回 50% 白，否则窗体整个消失。
-                        const TINT: u32 = if cfg!(feature = "acrylic") {
-                            0x80FF_FFFF
-                        } else {
-                            0x0000_0000
-                        };
+                    Material::Glass => {
                         if self.backdrop.is_some() {
-                            TINT
-                        } else {
-                            0x80FF_FFFF
-                        }
-                    }
-                    // 亚克力：乳白半透（不模糊，比玻璃"实"）
-                    "acrylic" => {
-                        let base = lighten_color(self.scheme.back_color, 0.22);
-                        (0xB4u32 << 24) | (base & 0x00FF_FFFF)
-                    }
-                    // 金属：不透明哑光
-                    "metal" => 0xFF00_0000 | (darken_color(self.scheme.back_color, 0.78) & 0x00FF_FFFF),
-                    // 玻璃：手绘底 + 20% 染色。glass_self 时 `self.glass` 为 false（关了 DWM 亚克力），
-                    // 但面板仍要 20% alpha，否则 DComp 逐像素透明被不透明 back_color 盖死（用户 12:1x：为什么不透明）。
-                    _ => {
-                        if self.glass || self.glass_self {
+                            // 自绘模糊：底下就是那张糊过的图，白色 tint 全透明
+                            0x0000_0000
+                        } else if self.glass || self.glass_self {
+                            // DWM 亚克力模式：面板仍要 20% 染色，否则 DComp 逐像素透明
+                            // 被不透明 back_color 盖死（用户 12:1x：为什么不透明）
                             glassify(self.scheme.back_color)
                         } else {
-                            self.scheme.back_color
+                            0x80FF_FFFF
                         }
                     }
                 };
                 // 玻璃态：面板画满**整个窗口矩形**，而不是内缩 `offset` 的内框。
                 // 否则窗口比面板大一圈，那圈被 DWM 亚克力填满 ⇒ 边框外面多出一层灰（用户 13:4x 报的"还有一层"）。
                 // 代价：投影没有落脚处（`offset` 那圈就是给投影的），玻璃态干脆不要投影。
-                // plain / 玻璃档：面板画满**整个窗口矩形**。
-                // 以前 plain 用 `layout.content`（比窗口小一圈 offset），那一圈没东西可画
+                // 抓屏模糊档（透明/亚克力）：面板画满**整个窗口矩形**。
+                // 以前用 `layout.content`（比窗口小一圈 offset），那一圈没东西可画
                 // ⇒ 露出**没糊的桌面**，跟面板里糊过的背景在边界上形成一道"黑框"
-                // （用户 17:5x）。`Metrics` 里 plain 已经把投影留边收成 0，这里画满即可。
-                let back_rect = if plain || self.glass {
+                // （用户 17:5x）。`Metrics` 里 flat 已经把投影留边收成 0，这里画满即可。
+                let back_rect = if flat || self.glass {
                     Rect::new(
                         0.0,
                         0.0,
@@ -593,18 +638,18 @@ impl Painter<'_> {
                 } else {
                     layout.content
                 };
-                // plain 档：把**抓屏 + 高斯模糊**的位图铺在面板底下，再叠 50% 白 —— 毛玻璃。
+                // 抓屏模糊档：把**抓屏 + 高斯模糊**的位图铺在面板底下，再叠白 tint —— 毛玻璃。
                 // 2026-11-01 17:0x 之前这张位图抓了却从没被画过（`draw_backdrop` 是死代码），
                 // 所以面板底下透出来的是**没糊的桌面**（用户："做高斯模糊"）。
-                if plain {
+                if flat {
                     self.draw_backdrop(&back_rect, self.backdrop);
                 }
-                if self.glass_self && !plain {
+                if self.glass_self && !flat {
                     self.draw_hand_backdrop(&back_rect, style.round_corner_ex);
                 }
                 // 亮度层：先铺深色压住背景纹理，再叠皮肤色 tint。
                 // 少了这层，20% 的面板叠在什么背景上都是一片浑浊的灰。
-                if (self.glass || self.glass_self) && !plain {
+                if (self.glass || self.glass_self) && !flat {
                     self.fill_geometry(
                         &back_rect,
                         glass_scrim(),
@@ -620,14 +665,14 @@ impl Painter<'_> {
                     back_color,
                     // 自绘模糊这档**不画投影**：投影画在 offset 那圈里，而窗口就是面板本身，
                     // 投影会从圆角外侧顶出一圈深色方框（20:5x 用户截图里的"黑边"）。
-                    if (self.glass || plain) { 0 } else { self.scheme.shadow_color }, // plain 不要投影，否则面板外一圈黑
+                    if (self.glass || flat) { 0 } else { self.scheme.shadow_color }, // 模糊档不要投影，否则面板外一圈黑
                     // 玻璃档的描边用白色高光：原来用配色的 border_color
                     // （steam 是深灰 #353638）压在蓝色模糊上就是一圈脏黑边（21:2x 用户截图）。
                     // 但 25% 白太淡 ⇒ 窗口边界糊在背景里（"smeared"），提到 55% 才收得住边。
-                    if (self.glass || self.glass_self) && !plain { 0x8CFF_FFFF } else { self.scheme.border_color },
+                    if (self.glass || self.glass_self) && !flat { 0x8CFF_FFFF } else { self.scheme.border_color },
                     &RoundInfo::default(),
                 );
-                if material == "metal" {
+                if tier == Material::Metal {
                     // 金属：**分段渐变**（用户 23:1x：4:2:3:1 的黑白黑白，但每一段之间要有过渡）。
                     // 做法：给出若干控制点，段内线性插值 ⇒ 既保留 4:2:3:1 的比例，又不再是刀切边。
                     let h = back_rect.height().max(1.0);
