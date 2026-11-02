@@ -13,6 +13,7 @@ pub mod config;
 pub mod dict;
 pub mod download;
 pub mod form;
+pub mod material;
 pub mod metadata;
 pub mod session;
 pub mod stats;

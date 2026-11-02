@@ -816,6 +816,29 @@ fn wire_skins(ui: &SettingsWindow) {
             push_skins(&ui, &skins.borrow());
         });
     }
+
+    // 候选窗材质三档（2026-11-02 用户：一个 DLL、在设置里切）。
+    // 只写 `theme/material.txt`：主题侧 `theme/src/paint.rs::tier` 运行时读它，
+    // 而且 material.txt 进了配置时间戳 ⇒ 打完下一次按键就重载，不用重启输入法。
+    ui.set_candidate_material(weasel_settings::material::current(&user).min(2) as i32);
+    {
+        let ui_weak = ui.as_weak();
+        let user = user.clone();
+        ui.on_material_picked(move |index| {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            let index = (index.max(0) as usize).min(weasel_settings::material::LABELS.len() - 1);
+            match weasel_settings::material::set(&user, index) {
+                Ok(_) => ui.set_material_status(
+                    format!(
+                        "候选窗材质 → {}（打一次字生效）",
+                        weasel_settings::material::LABELS[index]
+                    )
+                    .into(),
+                ),
+                Err(error) => ui.set_material_status(format!("写材质失败：{error}").into()),
+            }
+        });
+    }
 }
 
 /// 把数据层的状态推给界面：行模型、当前配色、状态栏、预览颜色。
@@ -1198,6 +1221,109 @@ fn format_percent(x10: u32) -> String {
 ///
 /// 用户 2026-10-30：「常用字做成词云」——原来 20 个等大方块看不出「哪个最常用」，
 /// 现在一眼就是大小差别；次数只留给最大的三个（词云里再标 20 个数字就成表格了）。
+
+/// 词云：最常用的字在**正中**，其余按频率降序沿「黄金角向日葵螺旋」向外散开。
+///
+/// - 第 0 个字（出现次数最高）固定钉在画布正中心，字号最大最显眼；
+/// - 其余字按黄金角螺旋（每步转 137.5°）从中心向外找空位，带 AABB 碰撞检测，
+///   碰到已落位的字就继续往外螺旋，直到不重叠且落在画布内；
+/// - 水平方向轻微拉抜（SX）让宽画布（1084×230）用得更饱满，竖直方向不压缩，
+///   整体是一个以中心为核、向外均匀发散的「云」，**不套环、不连线、不重叠**。
+/// 坐标原点是画布左上角（Slint 侧绝对定位），落点按字中心算、再转左上角。
+fn cloud_layout(words: &[(String, u64)]) -> Vec<CloudWord> {
+    const CANVAS_W: f32 = 1064.0;
+    const CANVAS_H: f32 = 230.0;
+    const CX: f32 = CANVAS_W / 2.0;
+    const CY: f32 = CANVAS_H / 2.0;
+    const SX: f32 = 2.8; // 水平轻微拉伸，让宽画布用得更饱满（非同心环）
+    const SY: f32 = 1.0;
+    const GOLDEN: f32 = 2.39996323; // 黄金角（弧度）
+    const DR: f32 = 2.0; // 每步螺旋外扩半径
+    const DA: f32 = 0.35; // 每步角增量（让螺旋平滑转向）
+    const MAX_R: f32 = 108.0; // 半径上限：保证竖直方向不出 230 高
+
+    struct Box {
+        l: f32,
+        r: f32,
+        t: f32,
+        b: f32,
+    }
+    let mut out = Vec::new();
+    let mut boxes: Vec<Box> = Vec::new();
+
+    let Some((_, max)) = words.first() else {
+        return out;
+    };
+    let max = (*max).max(1) as f64;
+
+    let size_of = |index: usize, count: u64| -> f32 {
+        if index == 0 {
+            44.0
+        } else {
+            let ratio = (count as f64 / max).sqrt() as f32;
+            (14.0f32 + 26.0f32 * ratio).round()
+        }
+    };
+
+    for (index, (ch, count)) in words.iter().take(90).enumerate() {
+        let s = size_of(index, *count);
+        let tint = (index % 4) as i32;
+
+        // 第 0 个：正中固定
+        let (cxw, cyw) = if index == 0 {
+            (CX, CY)
+        } else {
+            // 从中心向外螺旋搜索无碰撞落点
+            let mut r = (s / 2.0 + 4.0).max(6.0);
+            let mut a = index as f32 * GOLDEN;
+            let mut found = None;
+            for _ in 0..400 {
+                let x = CX + (r * a.cos()) * SX;
+                let y = CY + (r * a.sin()) * SY;
+                let l = x - s / 2.0;
+                let rr = x + s / 2.0;
+                let t = y - s / 2.0;
+                let b = y + s / 2.0;
+                let in_bounds = l >= 0.0 && rr <= CANVAS_W && t >= 0.0 && b <= CANVAS_H;
+                let hit = boxes
+                    .iter()
+                    .any(|p| l < p.r && rr > p.l && t < p.b && b > p.t);
+                if in_bounds && !hit {
+                    found = Some((x, y));
+                    break;
+                }
+                r += DR;
+                a += DA;
+                if r > MAX_R {
+                    break;
+                }
+            }
+            match found {
+                Some(p) => p,
+                // 实在放不下就放弃这个字（长尾小字极少触发，避免重叠）
+                None => continue,
+            }
+        };
+
+        let l = cxw - s / 2.0;
+        let t = cyw - s / 2.0;
+        out.push(CloudWord {
+            word: ch.as_str().into(),
+            size: s as i32,
+            x: l.round() as i32,
+            y: t.round() as i32,
+            tint,
+        });
+        boxes.push(Box {
+            l,
+            r: l + s,
+            t,
+            b: t + s,
+        });
+    }
+    out
+}
+
 fn split_words(words: &[(String, u64)]) -> (Vec<StatWord>, Vec<StatWord>, Vec<StatWord>) {
     let peak = words
         .first()
@@ -1289,9 +1415,42 @@ fn apply_stats_to_settings(window: &SettingsWindow) -> weasel_settings::stats::S
         .collect();
     window.set_stat_days(slint::ModelRc::new(slint::VecModel::from(day_cells)));
 
+    // 年度活跃记录（12 月 × 7 天）：聚合在 `stats.rs` 里做（DayCell 没有月份字段）。
+    let month_cells: Vec<StatDay> = snapshot
+        .month_days
+        .iter()
+        .map(|cell| StatDay {
+            count: cell.count as i32,
+            tip: cell.tip.as_str().into(),
+            today: cell.today,
+        })
+        .collect();
+    window.set_stat_month_days(slint::ModelRc::new(slint::VecModel::from(month_cells)));
+    window.set_stat_active_days(snapshot.active_days as i32);
+    window.set_stat_active_rate(snapshot.active_rate as i32);
+    let cal_cells: Vec<StatDay> = snapshot
+        .calendar
+        .iter()
+        .map(|cell| StatDay {
+            count: cell.count as i32,
+            tip: cell.tip.as_str().into(),
+            today: cell.today,
+        })
+        .collect();
+    window.set_stat_calendar(slint::ModelRc::new(slint::VecModel::from(cal_cells)));
+    window.set_stat_calendar_cols(slint::ModelRc::new(slint::VecModel::from(snapshot.calendar_cols.clone())));
+    window.set_stat_calendar_offsets(slint::ModelRc::new(slint::VecModel::from(snapshot.calendar_offsets.clone())));
+    window.set_stat_calendar_mask(slint::ModelRc::new(slint::VecModel::from(snapshot.calendar_mask.clone())));
+    window.set_stat_calendar_cols_total(snapshot.calendar_cols_total);
+    window.set_stat_month_week(slint::ModelRc::new(slint::VecModel::from(
+        snapshot.month_week.iter().map(|w| *w).collect::<Vec<i32>>(),
+    )));
+
     // 常用字排两行（用户 2026-10-25：做成两行）：前 10 个一行，其余一行。
     let (words_big, words_mid, words_small) = split_words(&snapshot.words);
     window.set_stat_words(slint::ModelRc::new(slint::VecModel::from(words_big)));
+    // 词云：排版在 Rust 侧算（字号 + 坐标），Slint 只按坐标绝对定位画
+    window.set_stat_cloud(slint::ModelRc::new(slint::VecModel::from(cloud_layout(&snapshot.words))));
     window.set_stat_words2(slint::ModelRc::new(slint::VecModel::from(words_mid)));
     window.set_stat_words3(slint::ModelRc::new(slint::VecModel::from(words_small)));
 

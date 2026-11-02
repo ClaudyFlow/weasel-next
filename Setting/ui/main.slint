@@ -6,10 +6,10 @@ import { ColorEditor } from "color-editor.slint";
 import { WasmModules, WasmEntry } from "wasm-modules.slint";
 import { ColorSchemesPage, SchemeRow } from "color-schemes.slint";
 import { SchemaPicker, SchemaRow, SeriesNav } from "schemas.slint";
-import { StatsPage, StatDay, StatWord } from "stats.slint";
+import { StatsPage, StatDay, StatWord, CloudWord } from "stats.slint";
 import { DictPage, DictRow } from "dicts.slint";
 import { DownloadPage, RepoRow } from "download.slint";
-export { StatsWindow, StatDay, StatWord } from "stats.slint";
+export { StatsWindow, StatDay, StatWord, CloudWord } from "stats.slint";
 export { DeployProgressWindow } from "progress.slint";
 export { ColorCodec } from "color-editor.slint";
 export struct SettingField { source-index: int, category: int, section: string, shown: bool, title: string, key: string, description: string, choices: [string], selected: int, checked: bool, text: string, text-input: bool, boolean: bool, overridden: bool, enum-number: bool, color-input: bool, allow-system-color: bool, adaptive-color: bool, multiline: bool }
@@ -23,9 +23,10 @@ export component SettingsWindow inherits Window {
     background: mica-enabled ? #ffffffdd : #ffffff;
     // 白底必须配浅色主题，否则 Palette.foreground 还是深色主题的白色 → 白底白字。
     icon: @image-url("../../Rime-Next/icon/weasel.ico");
+    // 用户 2026-11-01 21:3x：定 1280×720（标准 16:9）
     preferred-width: 1280px;
     // 高度贴着内容收：再少一点统计页就装不下，再多一点底部又会多出一条空灰边。
-    preferred-height: 682px;
+    preferred-height: 720px;
     min-width: 1000px;
     min-height: 500px;
     in property <string> status;
@@ -57,6 +58,12 @@ export component SettingsWindow inherits Window {
     in property <color> scheme-preview-comment: #888888;
     callback scheme-picked(string);
     callback scheme-refresh();
+    // 候选窗材质三档（2026-11-02）：0=透明 1=亚克力 2=不透明。
+    // 界面只负责显示与回调，写文件在 Rust 侧（`weasel_settings::material`）；
+    // 主题运行时读同一个文件（`theme/src/paint.rs::tier`），切完下一次按键生效。
+    in-out property <int> candidate-material: 0;
+    in property <string> material-status: "";
+    callback material-picked(int);
     // 方案选单页（Rust 侧读 `weasel_style::switcher`，与官方对话框同一份数据）
     in property <[SchemaRow]> schema-rows;
     in property <[SeriesNav]> series-nav;
@@ -132,7 +139,21 @@ export component SettingsWindow inherits Window {
     in property <int> stat-total-keys: 0;
     in property <int> stat-streak-days: 0;
     in property <[StatDay]> stat-days: [];
+    // 年度活跃记录（12 月 × 7 天，Rust 侧聚合好）
+    in property <[StatDay]> stat-month-days: [];
+    in property <int> stat-active-days: 0;
+    in property <int> stat-active-rate: 0;
+    // 12 个月各自起始周（列索引），给月份标签定位
+    in property <[int]> stat-month-week: [];
+    in property <[StatDay]> stat-calendar: [];
+    in property <[int]> stat-calendar-cols: [];
+    in property <[int]> stat-calendar-offsets: [];
+    in property <[int]> stat-calendar-mask: [];
+    // 网格总列数（各月周数之和）：格子边长按它精确算，别再用估的分母
+    in property <int> stat-calendar-cols-total: 53;
     in property <[StatWord]> stat-words: [];
+    // 词云排版（Rust 侧算好坐标）
+    in property <[CloudWord]> stat-cloud: [];
     in property <[StatWord]> stat-words2: [];
     in property <[StatWord]> stat-words3: [];
     // 键盘热力图 / 码长直方图（stat.bin 尾部扩展；老文件为空）
@@ -181,8 +202,10 @@ export component SettingsWindow inherits Window {
     // 底色全部写死浅色（#ffffff 卡片 / #f5f7fa 页面），调色板必须一起钉在浅色。
     // 系统是深色时 Palette.foreground 会是白的，设置页整片白底白字、看着像空白页
     // （2026-10-19 实测）。
-    init => { self.stats-heat-cell = (self.width - 212px) / 53; Palette.color-scheme = ColorScheme.light; }
-    changed width => { self.stats-heat-cell = (self.width - 212px) / 53; }
+    init => { self.stats-heat-cell = (self.width - 340px) / Math.max(self.stat-calendar-cols-total, 40); Palette.color-scheme = ColorScheme.light; }
+    changed width => { self.stats-heat-cell = (self.width - 340px) / Math.max(self.stat-calendar-cols-total, 40); }
+    // 数据晚到：总列数变了要重算格子边长（不然 init 时用的还是默认 53）
+    changed stat-calendar-cols-total => { self.stats-heat-cell = (self.width - 340px) / Math.max(self.stat-calendar-cols-total, 40); }
     callback open-switcher();
     callback open-style();
     VerticalBox {
@@ -351,7 +374,16 @@ export component SettingsWindow inherits Window {
             total-keys: root.stat-total-keys;
             streak-days: root.stat-streak-days;
             days: root.stat-days;
+            month-days: root.stat-month-days;
+            active-days: root.stat-active-days;
+            active-rate: root.stat-active-rate;
+            month-week: root.stat-month-week;
+            calendar: root.stat-calendar;
+            calendar-cols: root.stat-calendar-cols;
+            calendar-offsets: root.stat-calendar-offsets;
+            calendar-mask: root.stat-calendar-mask;
             words: root.stat-words;
+            cloud: root.stat-cloud;
             words2: root.stat-words2;
             words3: root.stat-words3;
             key-counts: root.stat-key-counts;
@@ -380,6 +412,42 @@ export component SettingsWindow inherits Window {
             padding: 12px;
             padding-top: 0px;
             spacing: 8px;
+            // ── 候选窗材质三档（2026-11-02）────────────────────────────────
+            // 写 `%APPDATA%\Rime-Next\theme\material.txt`；主题运行时读它，
+            // 所以不需要重装/换 DLL ——「一个 DLL 三档全包」。
+            HorizontalLayout {
+                height: 34px;
+                spacing: 8px;
+                alignment: start;
+                Text {
+                    text: "候选窗材质";
+                    font-size: 13px;
+                    color: #374151;
+                    width: 84px;
+                    vertical-alignment: center;
+                }
+                for tier in [
+                    { label: "透明", idx: 0 },
+                    { label: "亚克力", idx: 1 },
+                    { label: "不透明", idx: 2 }
+                ] : Button {
+                    width: 92px;
+                    height: 30px;
+                    text: tier.label;
+                    primary: root.candidate-material == tier.idx;
+                    clicked => {
+                        root.candidate-material = tier.idx;
+                        root.material-picked(tier.idx);
+                    }
+                }
+                Text {
+                    text: root.material-status;
+                    font-size: 12px;
+                    color: #6b7280;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+            }
             if root.schemes.length > 0 : ColorSchemesPage {
                 schemes: root.schemes;
                 active-id: root.active-scheme;

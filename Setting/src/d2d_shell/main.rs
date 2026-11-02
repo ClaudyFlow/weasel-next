@@ -175,24 +175,8 @@ enum Material {
     Acrylic,
 }
 
-/// 候选窗三档材质（用户 2026-11-02）写进 `material.txt` 的值。
-const CANDIDATE_MATERIALS: [&str; 3] = ["glass", "acrylic", "opaque"];
-
-/// 三档在设置界面上的中文标签。
-const CANDIDATE_MATERIAL_LABELS: [&str; 3] = ["透明", "亚克力", "不透明"];
-
-/// 读候选窗当前材质档（0=透明 1=亚克力 2=不透明）；文件缺失或未知值都算透明档。
-///
-/// 老配置里的 `plain`（11-01 那套）在这里也归透明档 —— 与主题侧
-/// `theme/src/paint.rs::Material::parse` 同一套映射，别单独改一边。
-fn read_candidate_material(user: &std::path::Path) -> usize {
-    let text = std::fs::read_to_string(user.join("theme").join("material.txt")).unwrap_or_default();
-    match text.trim().to_ascii_lowercase().as_str() {
-        "acrylic" => 1,
-        "opaque" | "original" | "solid" => 2,
-        _ => 0,
-    }
-}
+/// 候选窗三档材质的读写都走 `weasel_settings::material`（与 Slint 版共用一份，
+/// 字面值/顺序/兜底规则只在一个地方维护）。
 
 /// 把 ARGB 的 RGB 分量按比例提亮（往白里混）。
 fn lighten(argb: u32, amount: f32) -> u32 {
@@ -603,7 +587,7 @@ impl Shell {
             self.text(
                 rt,
                 brush,
-                CANDIDATE_MATERIAL_LABELS[index],
+                weasel_settings::material::LABELS[index],
                 &f.label,
                 bx + 14.0 * s,
                 by + 5.0 * s,
@@ -619,19 +603,12 @@ impl Shell {
     /// 用户 2026-11-02：三档从"编译期三个 DLL"改成"一个 DLL 运行时切"，所以这里只管
     /// 写文件；渲染器把 material.txt 也算进配置时间戳，下一次按键就重载度量与配色。
     fn set_material(&mut self, index: usize) {
-        let Some(name) = CANDIDATE_MATERIALS.get(index) else {
-            return;
-        };
-        let path = self.user_dir.join("theme").join("material.txt");
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match std::fs::write(&path, name) {
-            Ok(()) => {
+        match weasel_settings::material::set(&self.user_dir, index) {
+            Ok(_) => {
                 self.candidate_material = index;
                 self.status = format!(
                     "候选窗材质 → {}（打一次字生效）",
-                    CANDIDATE_MATERIAL_LABELS[index]
+                    weasel_settings::material::LABELS[index]
                 );
             }
             Err(error) => self.status = format!("写材质失败：{error}"),
@@ -2414,7 +2391,7 @@ fn run() -> Result<(), String> {
             collapsed: std::collections::BTreeSet::new(),
             schema_status: String::new(),
             material,
-            candidate_material: read_candidate_material(&user),
+            candidate_material: weasel_settings::material::current(&user),
             scheme_back: 0x001B_1F27,
             scheme_text: 0x00E9_EEF7,
             scheme_hilite: 0x004C_8DFF,
