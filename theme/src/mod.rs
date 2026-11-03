@@ -692,8 +692,12 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
                 core::mem::size_of::<u32>() as u32,
             );
         }
-        if glass {
+        // 亚克力只给玻璃/亚克力档（`flat`）。不透明/金属档窗口外面那圈（offset ≈ 10px）
+        // 没有面板盖住，开了亚克力就是"面板外多一层浅色"（用户 2026-11-04 00:5x）。
+        if glass && paint::tier().flat() {
             accent::sync_acrylic(hwnd, true, tint);
+        }
+        if glass {
             // Win11：让 DWM 把**窗口本身**裁成圆角。亚克力铺满窗口矩形，
             // 不裁的话圆角外侧会露出 4 个方角色块（用户 13:4x：「圆角外面是有角的」）。
             unsafe extern "system" {
@@ -933,9 +937,23 @@ impl Window {
             return;
         }
         let app = self.app.borrow();
-        let glass = app.glass && !self.glass_self;
+        let glass = self.acrylic_on();
         let tint = app.scheme.back_color;
         accent::sync_acrylic(hwnd, glass, tint);
+    }
+
+    /// 现在该不该开 DWM 亚克力。
+    ///
+    /// 三个条件缺一不可：`style/glass` 开着、不是自绘模糊（`glass_blur: self`）、
+    /// 而且**材质档位必须是玻璃/亚克力**（[`paint::Material::flat`]）。
+    ///
+    /// 最后这条是 2026-11-04 00:5x 补的：窗口比面板大一圈（[`config::Metrics::offset`]
+    /// ≈ `border*2 + 投影` ≈ 10px），那一圈没有任何东西盖住。不透明档还开着亚克力时，
+    /// 它就直接露成"面板外面多一层浅色"——和同一次截图里那道白描边一起，看着就是
+    /// "外面一圈白的"。不透明/金属档底色本来就不透，亚克力没有任何东西可透，关掉也
+    /// 不损失效果，还省一次 DWM 合成。
+    fn acrylic_on(&self) -> bool {
+        paint::tier().flat() && self.app.borrow().glass && !self.glass_self
     }
 
     /// 抓屏 + 高斯模糊 + 建 D2D 位图，存进 [`App::backdrop`]。
@@ -1184,7 +1202,7 @@ impl Window {
             }
             // ★ 重新打开 DWM 亚克力（hide 里关了）。必须在 ShowWindow 之前开，
             // 否则第一帧没有亚克力、显示后 DWM 才补上 ⇒ 闪一下没模糊的面板。
-            if self.app.borrow().glass && !self.glass_self {
+            if self.acrylic_on() {
                 accent::sync_acrylic(self.hwnd.get(), true, self.app.borrow().scheme.back_color);
             }
             // 隐藏期间窗口保留上一帧，先画一次再显示，避免闪出旧内容
@@ -1221,7 +1239,7 @@ impl Window {
             // D2D 内容清成透明后，DWM 仍保留那一帧模糊 ⇒ 打完字偶尔残留半透明界面。
             // 先 disable_acrylic 再清内容 + SW_HIDE，DWM 合成层就没有模糊可残留。
             // （render 的 was_hidden 分支会重新 sync_glass 打开，配对不漏。）
-            if self.app.borrow().glass && !self.glass_self {
+            if self.acrylic_on() {
                 accent::sync_acrylic(self.hwnd.get(), false, 0);
             }
             // 隐藏前先把表面清成**全透明**再上屏一次：DWM 有时不会立刻把窗口

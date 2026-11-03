@@ -122,11 +122,11 @@ pub fn plain_scheme(base: &ColorScheme, backdrop_is_dark: bool) -> ColorScheme {
         if !mismatch {
             return c;
         }
-        if luma(c) < 128.0 {
-            INK
-        } else {
-            INK_LIGHT
-        }
+        // 面板底是「全透明（玻璃）」或「半透明白（亚克力）」，字色必须跟着**背景明暗**走。
+        // 2026-11-02 实测：原来按"原配色自己的明暗"挑（白字→INK_LIGHT），亚克力档
+        // 变成 #939393 底 + #F2F3F5 字，对比度 ≈2.4:1（几乎看不清）。`ink` 已按
+        // backdrop_is_dark 选好对比色，直接用它。
+        ink
     };
     scheme.text_color = pick(base.text_color);
     scheme.hilited_text_color = pick(base.hilited_text_color);
@@ -666,10 +666,17 @@ impl Painter<'_> {
                     // 自绘模糊这档**不画投影**：投影画在 offset 那圈里，而窗口就是面板本身，
                     // 投影会从圆角外侧顶出一圈深色方框（20:5x 用户截图里的"黑边"）。
                     if (self.glass || flat) { 0 } else { self.scheme.shadow_color }, // 模糊档不要投影，否则面板外一圈黑
-                    // 玻璃档的描边用白色高光：原来用配色的 border_color
-                    // （steam 是深灰 #353638）压在蓝色模糊上就是一圈脏黑边（21:2x 用户截图）。
-                    // 但 25% 白太淡 ⇒ 窗口边界糊在背景里（"smeared"），提到 55% 才收得住边。
-                    if (self.glass || self.glass_self) && !flat { 0x8CFF_FFFF } else { self.scheme.border_color },
+                    // 描边一律用**配色自己的** border_color。
+                    //
+                    // 这里原来是玻璃白高光 `if (self.glass || self.glass_self) && !flat
+                    // { 0x8CFF_FFFF }`，但 `self.glass` 读的是 theme.yaml 的 `style/glass`
+                    // （默认 true）——**不透明档它也是 true**，于是 3px 的 55% 白描边照样
+                    // 画在不透明面板外面，就是用户 2026-11-04 00:5x 截图里的"外面一圈白的"。
+                    //
+                    // 而 `!flat` 这个条件已经把玻璃/亚克力两档整档排除了，白高光根本没有
+                    // 落在哪个档位上的机会（玻璃档走 `plain_scheme`，那里 border_color 已被
+                    // 清成 0：HTML 基准的面板本来就没有描边）。所以直接退回配色，别留死分支。
+                    self.scheme.border_color,
                     &RoundInfo::default(),
                 );
                 if tier == Material::Metal {
