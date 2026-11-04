@@ -519,11 +519,23 @@ const GLASS_SIGMA: f32 = 3.0;
 const ACRYLIC_SIGMA: f32 = 6.0;
 
 /// 当前档位的抓屏模糊强度（σ，降采样后像素）。
+///
+/// 可以用 `%APPDATA%\Rime-Next\theme\blur.txt`（一个数字）**实时覆盖** —— 和
+/// `material.txt` 一样是每次用时现读，改完下一次显示候选窗就生效，不用重编译、
+/// 不用重装 DLL。想"再模糊一些"就写个更大的数（6 → 9），觉得糊过了就写小。
+/// 留空/没有这个文件时按档位默认值。
 pub fn blur_sigma(tier: Material) -> f32 {
-    match tier {
+    let tuned = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .map(|base| base.join("Rime-Next").join("theme").join("blur.txt"))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| text.trim().parse::<f32>().ok())
+        // 0 或负数会让"模糊"退化成原图，太大则是几百次卷积 —— 都当没写。
+        .filter(|sigma| *sigma > 0.0 && *sigma <= 48.0);
+    tuned.unwrap_or(match tier {
         Material::Acrylic => ACRYLIC_SIGMA,
         _ => GLASS_SIGMA,
-    }
+    })
 }
 
 /// 亚克力蒙版：把**整个配色**揉成一个代表色 + [`VEIL_ALPHA`]。
