@@ -18,12 +18,6 @@ use std::ffi::c_void;
 
 /// 降采样倍数（1/2）。越大越快、越糊。
 const DOWNSCALE: i32 = 2;
-/// 高斯模糊的标准差（**降采样后**的像素单位）。
-///
-/// 1/2 降采样之后再按 σ 糊，等效屏幕像素上的 σ 要乘 `DOWNSCALE`：
-/// σ=3 ⇒ 屏幕 σ≈6px、视觉半径 ≈18px（3σ），正好是"毛玻璃"该有的糊度。
-/// 想调强度改这里；环境变量 `WEASEL_BLUR_SIGMA` 可临时覆盖（排查用）。
-const BLUR_SIGMA: f32 = 3.0;
 
 /// 定点数的缩放位数：核权重统一换成 1/2^14 的整数，卷积全程整数运算。
 const FIX_BITS: u32 = 14;
@@ -97,11 +91,14 @@ unsafe extern "system" {
     ) -> i32;
 }
 
-/// 抓取屏幕矩形 `(x, y, w, h)`（物理像素），降采样 + 箱式模糊，返回 (RGBA, 宽, 高)。
+/// 抓取屏幕矩形 `(x, y, w, h)`（物理像素），降采样 + 高斯模糊，返回 (BGRA, 宽, 高)。
+///
+/// `sigma` 是**降采样后**像素单位的高斯标准差 —— 档位不同强度不同（透明档
+/// [`crate::paint::blur_sigma`] 给 3，亚克力档给 6）。`WEASEL_BLUR_SIGMA` 可临时覆盖。
 ///
 /// 返回的宽高是**降采样之后**的尺寸。失败（没有屏幕 DC / DIB 分配失败）返回 `None`，
 /// 调用方应回退到 DWM 毛玻璃。
-pub fn capture_blurred(x: i32, y: i32, w: i32, h: i32) -> Option<(Vec<u8>, u32, u32)> {
+pub fn capture_blurred(x: i32, y: i32, w: i32, h: i32, sigma: f32) -> Option<(Vec<u8>, u32, u32)> {
     if w <= 0 || h <= 0 {
         return None;
     }
@@ -159,7 +156,7 @@ pub fn capture_blurred(x: i32, y: i32, w: i32, h: i32) -> Option<(Vec<u8>, u32, 
             let sigma = std::env::var("WEASEL_BLUR_SIGMA")
                 .ok()
                 .and_then(|v| v.trim().parse::<f32>().ok())
-                .unwrap_or(BLUR_SIGMA);
+                .unwrap_or(sigma);
             let started = std::time::Instant::now();
             gaussian_blur(&mut bgra, dw as usize, dh as usize, sigma);
             crate::diagnostics::record(format_args!(

@@ -9,7 +9,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$InstallDir = 'C:\Program Files\Rime-Next\Weasel-Next-0.18.5',
+    [string]$InstallDir = 'C:\Program Files\Rime-Next\Weasel-Next-0.18.6',
     [string]$TargetDir  = 'C:\Code\Weasel-Next\target\release',
     # 编译产物名 → 安装目录里的名字。安装布局在 2026-11 改过：渲染器按
     # `weasel-next-theme.dll` 加载（LoadLibrary），而 cargo 产物是

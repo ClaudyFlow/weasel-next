@@ -580,25 +580,42 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
     // 互不相干的开关。`dwm` = DWM 亚克力，本身就取背景色 + 叠 20% 白 tint ⇒
     // **选「透明」出来的是亚克力**，名不符实。
     //
-    // 现在的对应关系：
-    // - [`Material::Glass`]（透明）  → 自绘高斯模糊（抓屏 + 箱式模糊，面板底全透明）
+    // 现在是**两档都自绘**（用户 2026-11-04 09:4x：「亚克力怎么是透明的，再模糊一些」）：
+    //
+    // 对应关系：
+    // - [`Material::Glass`]（透明）  → 自绘高斯模糊 σ=3，面板底**全透明**
     //                                  ⇒ 真玻璃：磨砂但**不染色**
-    // - [`Material::Acrylic`]（亚克力）→ DWM 亚克力（取系统背景色 + tint）
-    //                                  ⇒ 磨砂 + 有色
+    // - [`Material::Acrylic`]（亚克力）→ 自绘高斯模糊 σ=6（更糊）+ 整配色混出的蒙版 75%
+    //                                  ⇒ 磨砂 + 有色 + 看得出是磨砂而不是透明
     // - 不透明 / 金属            → 两者都不用，压根没有模糊
     //
-    // `WEASEL_GLASS_BLUR=self|dwm` 仍可强制覆盖，只作排查用；`style/glass_blur`
-    // 从此只是兼容旧配置的残留键，不再参与决策（值仍打进诊断日志，便于对账）。
+    // 亚克力为什么不再用 DWM：`SetWindowCompositionAttribute` 的模糊半径是系统写死的，
+    // 「再模糊一些」根本调不动；而且 Win11 上那一档常常退化成普通模糊、tint 还被吃掉了，
+    // 出来就是"透明"。自绘之后半径/强度/染色全在自己手里。
+    //
+    // `WEASEL_GLASS_BLUR=self|dwm` 仍可强制覆盖，只作排查用（`dwm` = 亚克力档走回 DWM，
+    // 也是"抓屏权限被系统禁掉"时的退路）；`style/glass_blur` 从此只是兼容旧配置的残留键。
     let tier_now = paint::tier();
     let glass_self = match std::env::var("WEASEL_GLASS_BLUR") {
         Ok(value) => value.trim().eq_ignore_ascii_case("self"),
-        Err(_) => tier_now == paint::Material::Glass,
+        Err(_) => tier_now.flat(),
+    };
+    let how = if glass_self {
+        format!(
+            "抓屏模糊 σ={:.1} · 蒙版 {:?}",
+            paint::blur_sigma(tier_now),
+            if tier_now == paint::Material::Acrylic {
+                format!("整配色混色 alpha={:#04X}", paint::VEIL_ALPHA)
+            } else {
+                "无（全透明）".to_string()
+            }
+        )
+    } else {
+        "DWM 亚克力·取背景色".to_string()
     };
     crate::diagnostics::record(format_args!(
-        "材质 {:?} + glass={glass} + glass_blur(残留配置)={:?} → glass_self={glass_self}（{}）",
-        tier_now,
-        loaded.style.glass_blur,
-        if glass_self { "抓屏模糊·不染色" } else { "DWM 亚克力·取背景色" }
+        "材质 {:?} + glass={glass} + glass_blur(残留配置)={:?} → glass_self={glass_self}（{how}）",
+        tier_now, loaded.style.glass_blur
     ));
     // 毛玻璃染色用配色背景色；`loaded` 之后会被 `App::new` 吞掉，先取出来。
     let tint = loaded.scheme.back_color;
@@ -1054,7 +1071,9 @@ impl Window {
             if w < MIN_CAPTURE || h < MIN_CAPTURE {
                 return;
             }
-            let Some((mut rgba, bw, bh)) = backdrop::capture_blurred(wr.left, wr.top, w, h)
+            // 模糊强度按档位给：透明档 σ=3（毛玻璃），亚克力档 σ=6（糊一行多）。
+            let sigma = paint::blur_sigma(paint::tier());
+            let Some((mut rgba, bw, bh)) = backdrop::capture_blurred(wr.left, wr.top, w, h, sigma)
             else {
                 return;
             };
@@ -1332,6 +1351,9 @@ impl Window {
         // 其它材质（不透明/金属）底色是自己铺的，配色表原样即可。
         let plain_palette;
         let tier = paint::tier();
+        // 亚克力蒙版色：拿**原始配色**（`plain_scheme` 之前）算，plain_scheme 内部算
+        // 字色时用的也是这一个值，画的时候直接铺它 —— 算的和画的是同一个颜色。
+        let veil = paint::theme_veil(scheme);
         let scheme = if tier.flat() {
             // 玻璃档：抓到的背景平均亮度就是"有效背景"；
             // 亚克力档：DWM 模糊 + 50% 配色底，`plain_scheme` 会按"桌面纯黑/纯白"
@@ -1445,6 +1467,7 @@ impl Window {
                 );
                 painter.hwnd = self.hwnd.get().0 as isize;
                 painter.glass_self = self.glass_self;
+                painter.veil = veil;
                 painter.backdrop = backdrop_ref;
                 painter.hilite_anim = hilite_anim;
                 painter.hover_index = match hovered {
