@@ -208,16 +208,31 @@ if ($WithRenderer) {
 }
 
 # 重启输入法
+#
+# ⚠️ 必须用 `explorer.exe <exe>` 间接拉起，**不能**直接 Start-Process：
+# 本脚本经 gsudo 提权运行，直接起来的进程是提权会话（job object）的子进程，
+# gsudo 一退出就被全家带走 —— 2026-11-04 11:1x 就是这么把 Server/Engine/Renderer
+# 全都弄没了，用户当场"怎么界面又没了"（打字没候选窗）。
+# 交给已存在的 explorer 拉起，进程挂在用户会话下，才活得下去。
 $server = Join-Path $InstallDir 'Weasel-Next-Server.exe'
 if (Test-Path -LiteralPath $server) {
     Write-Host "重启输入法服务..."
-    Start-Process -FilePath $server -WorkingDirectory $InstallDir | Out-Null
-    Start-Sleep -Seconds 2
+    Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$server`"" | Out-Null
+    Start-Sleep -Seconds 3
     $alive = Get-Process -Name 'Weasel-Next-Server','Weasel-Next-Engine','Weasel-Next-Renderer' -ErrorAction SilentlyContinue
     if ($alive) {
         $alive | ForEach-Object { Write-Host "  已启动: $($_.Name) (pid=$($_.Id))" }
     } else {
-        Write-Warning "服务未起来，请手动运行 Weasel-Next-Server.exe 或重新切换输入法"
+        # 老系统/explorer 不接参数时的兜底：直启至少当下能用，会话结束再手动重开。
+        Write-Warning "explorer 拉起失败，改为直启（退出后可能被一起结束）"
+        Start-Process -FilePath $server -WorkingDirectory $InstallDir | Out-Null
+        Start-Sleep -Seconds 2
+        $alive = Get-Process -Name 'Weasel-Next-Server','Weasel-Next-Engine','Weasel-Next-Renderer' -ErrorAction SilentlyContinue
+        if ($alive) {
+            $alive | ForEach-Object { Write-Host "  已启动: $($_.Name) (pid=$($_.Id))" }
+        } else {
+            Write-Warning "服务未起来，请手动运行 Weasel-Next-Server.exe 或重新切换输入法"
+        }
     }
 }
 
