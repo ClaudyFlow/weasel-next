@@ -10,7 +10,7 @@
 
 2. 主题是否加载
    - 打字后看 `%LOCALAPPDATA%\Rime-Next\Logs\renderer.<日期>.log`，应出现
-     `using renderer theme official`；
+     `using renderer theme default`；
    - 首帧绘制时还应出现 `皮肤已加载: <路径>\Rime-Next\theme\default.theme.yaml · 配色 aqua（碧水／Aqua）· 底色 #eceeee · 文字 #000000`。
 
 3. 候选窗外观
@@ -19,8 +19,8 @@
 
 4. 如果主题没加载
    - 先看 renderer 日志里的 `theme notice`；
-   - 再确认 `C:\Program Files\Weasel-Next\weasel.yaml` 里 `theme` 是 `official`（宿主配置 2026-10-23 起只有 YAML）；
-   - 确认 `weasel_theme_official.dll` 在程序文件夹根目录。
+   - 再确认 `C:\Program Files\Weasel-Next\weasel.yaml` 里 `theme` 是 `default`（宿主配置 2026-10-23 起只有 YAML）；
+   - 确认 `weasel-next-theme.dll` 在程序文件夹根目录。
 
 未做的两件事（与本次安装无关）：
 - librime 重建（`.theme.yaml → theme/` 规则要重建 rime.dll 才生效，上次卡在 leveldb）；

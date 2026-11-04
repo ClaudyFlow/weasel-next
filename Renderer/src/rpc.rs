@@ -22,8 +22,15 @@ use weasel_common::{
 };
 
 /// 判断 broker 返回的主题名称是否受当前 renderer 支持。
+///
+/// `default` 是出厂主题的**对外名字**（2026-11-02 定名，不再叫 official）；
+/// `official` 作为老配置的别名继续接受 —— 少了这一项，`weasel.yaml` 写 `default`
+/// 的机器每次启动都会弹「渲染配置无效」并退回内嵌默认值（preview 也因此起不来）。
 fn supports_theme(name: &str) -> bool {
-    ["official", "seven", "test", "eleven", "ten", "abc", "void", "wasm"].contains(&name)
+    [
+        "default", "official", "seven", "test", "eleven", "ten", "abc", "void", "wasm",
+    ]
+    .contains(&name)
 }
 
 /// 启动渲染器运行时、读取主题配置并运行 UI 与 RPC 服务。

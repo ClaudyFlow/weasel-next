@@ -42,7 +42,7 @@ pub fn embed(binary: &str, manifest: &Path, disable_msvc_default_uac: bool) {
     // 无条件 `fs::write` 会把这个 .rc 的 mtime 刷成"现在"，而它比 cargo 记录的
     // build script `output` 文件新 ⇒ cargo 判定 build script 过期 ⇒ 该 crate 重编
     // ⇒ 每个 exe crate（Setting/Server/Renderer/Engine）**每次构建都重编**。
-    // `Tip`/`theme-official` 是 dll、不走这段，所以从不重编 —— 这也是当初难定位的原因。
+    // `Tip`/`theme-default` 是 dll、不走这段，所以从不重编 —— 这也是当初难定位的原因。
     // 判据来自 `CARGO_LOG=cargo::core::compiler::fingerprint=info`：
     //   `stale: changed "...\out\<crate>-manifest.rc"`
     let unchanged = std::fs::read_to_string(&resource).is_ok_and(|old| old == desired);

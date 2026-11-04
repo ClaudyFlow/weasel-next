@@ -31,7 +31,7 @@ use std::{
 use weasel_style::ColorScheme;
 use windows_strings::w;
 
-const CLASS: windows_strings::PCWSTR = w!("Weasel.ThemeOfficial.Official");
+const CLASS: windows_strings::PCWSTR = w!("Weasel.NextTheme.Default");
 const RETRY_TIMER: usize = 1;
 
 /// 抓屏亲和性：`WDA_NONE` = 正常（会被截进画面里）；
@@ -2291,12 +2291,15 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     }
 }
 
-/// 官方皮肤主题的工厂入口。
+/// 出厂皮肤主题的工厂入口。
 pub struct Factory;
 
 impl crate::theme_api::ThemeFactory for Factory {
     fn name(&self) -> &'static str {
-        "official"
+        // 2026-11-02 用户定名：对外叫 **default**（不再叫 official）。
+        // 这个 id 要跟 `weasel.yaml` 的 `theme:`、renderer 的 `supports_theme` 列表、
+        // `themeSettings.<id>` 三处同名，改名必须一起改。
+        "default"
     }
     /// 候选栏 + 预编辑（官方会把未行内显示的组字串画在候选窗里）+ 模式提示。
     fn capabilities(&self) -> crate::theme_api::ThemeCapabilities {
@@ -2312,7 +2315,7 @@ impl crate::theme_api::ThemeFactory for Factory {
         settings: &weasel_common::settings::ConfigSnapshot,
     ) -> crate::theme_api::ThemeCreation {
         (|| -> Result<Box<dyn ThemeBackend>, String> {
-            let _: serde_json::Map<String, serde_json::Value> = settings.theme_settings("official")?;
+            let _: serde_json::Map<String, serde_json::Value> = settings.theme_settings("default")?;
             create(mode)
         })()
         .into()

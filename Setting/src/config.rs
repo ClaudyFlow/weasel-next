@@ -163,7 +163,7 @@ mod tests {
         .unwrap();
 
         let doc = Document::load(&paths).unwrap();
-        assert_eq!(doc.base["theme"], "official", "旧 TOML 不该被读，用出厂默认值");
+        assert_eq!(doc.base["theme"], "default", "旧 TOML 不该被读，用出厂默认值");
         assert_eq!(
             doc.base["input_mode_indicator_duration_ms"], 800,
             "TOML 里的 1234 不该生效"

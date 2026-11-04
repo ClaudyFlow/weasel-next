@@ -8,7 +8,7 @@
 ```
 C:\Program Files\Weasel-Next\
   Weasel-Next-Renderer.exe            渲染器宿主：进程、消息循环、设置下发
-  weasel_theme_official.dll           本主题（渲染器从**自身目录**加载；也兼容 theme\ 子目录）
+  weasel-next-theme.dll           本主题（渲染器从**自身目录**加载；也兼容 theme\ 子目录）
   Rime-Next\theme\default\default.theme.toml   出厂皮肤（36 套配色）
 %APPDATA%\Rime-Next\theme\theme.toml  用户布局 + `color_scheme`（用哪套皮肤；可选）
 ```
@@ -57,7 +57,7 @@ C:\Program Files\Weasel-Next\
 # 编译
 $env:LIBCLANG_PATH='C:\Program Files\llvm-mingw\bin'; cargo build --release
 # 单元测试（颜色语义、默认值/夹取、布局手算值、定位数学）
-cargo test --release -p weasel-style -p weasel-theme-official
+cargo test --release -p weasel-style -p weasel-theme-default
 
 # 打包 + 安装（安装要提权；装完只有程序文件夹是运行目录）
 powershell -File script\build-installer.ps1

@@ -31,7 +31,8 @@ $mingw = 'C:\Program Files\llvm-mingw'
 $target = 'aarch64-pc-windows-gnullvm'
 $rel = Join-Path $root "target\$target\release"
 $stage = Join-Path $root 'target\arm64-release'
-$outputDirectory = Join-Path $root 'artifact\installer'
+# 2026-11-02 与 x64 对齐：安装包统一放仓库根 `install\`（原 `artifact\installer` 已弃用）。
+$outputDirectory = Join-Path $root 'install'
 
 $env:LIBCLANG_PATH = Join-Path $mingw 'bin'
 $env:PATH = (Join-Path $mingw 'bin') + ';' + $env:PATH
@@ -62,6 +63,13 @@ if (-not $SkipX64) {
 Step '组装 arm64 发布目录'
 if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 $null = New-Item -ItemType Directory -Path $stage -Force
+# 安装器要的是 `weasel-next-theme.dll` 这个名字；cargo 产物叫 `weasel_theme_default.dll`，
+# x64 由 build-installer.ps1 改名，arm64 这里自己补一份（缺了 makensis 会直接报错）。
+$themeSrc = Join-Path $rel 'weasel_theme_default.dll'
+$themeDst = Join-Path $rel 'weasel-next-theme.dll'
+if ((Test-Path -LiteralPath $themeSrc) -and -not (Test-Path -LiteralPath $themeDst)) {
+    Copy-Item -LiteralPath $themeSrc -Destination $themeDst -Force
+}
 $copy = {
     param($from, $to)
     if (-not (Test-Path -LiteralPath $from)) { throw "缺文件：$from" }

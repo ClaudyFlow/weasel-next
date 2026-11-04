@@ -89,12 +89,12 @@ fn files_follow_precedence_and_missing_files_are_optional() {
     };
     paths.ensure().unwrap();
     let mut warnings = Vec::new();
-    // 没有任何配置文件时用内嵌默认值（出厂 `weasel.yaml` 里的 theme = "official"）
+    // 没有任何配置文件时用内嵌默认值（出厂 `weasel.yaml` 里的 theme = "default"）
     assert_eq!(
         load(&paths, |w| warnings.push(w))
             .required::<String>(".theme")
             .unwrap(),
-        "official"
+        "default"
     );
     // 程序文件夹那份是 `weasel.yaml`（2026-10-23 起宿主配置只有 YAML 一种格式）。
     std::fs::write(
@@ -183,7 +183,7 @@ fn legacy_toml_only_program_config_falls_back_to_defaults() {
     let settings = load(&paths, |w| warnings.push(w));
     assert_eq!(
         settings.required::<String>(".theme").unwrap(),
-        "official",
+        "default",
         "旧 TOML/JSON 不该被读：走内嵌出厂默认值"
     );
     assert_eq!(

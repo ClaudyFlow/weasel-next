@@ -7,7 +7,7 @@ pub fn embed() {
         "Weasel-Next-Renderer" => ("Weasel-Next Candidate Renderer", "Weasel-Next-Renderer.exe", false),
         "Weasel-Next-Setting" => ("Weasel-Next Settings", "Weasel-Next-Setting.exe", false),
         "weasel-tip" => ("Weasel-Next Text Input Processor", "Weasel-Next.dll", true),
-        "weasel-theme-official" => ("Weasel-Next official Theme", "weasel-next-theme.dll", true),
+        "weasel-theme-default" => ("Weasel-Next Default Theme", "weasel-next-theme.dll", true),
         _ => panic!("missing Windows file description for {package}"),
     };
     // 向上搜索 workspace 根部的 `build_support`，不依赖 crate 所在目录深度

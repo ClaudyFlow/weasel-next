@@ -24,7 +24,7 @@ const WM_RENDERER_THEME: u32 = WM_APP as u32 + 12;
 ///
 /// DLL 先从 renderer 所在目录找，找不到再看同目录的 `theme` 子目录；成功或失败结果均缓存到进程退出。
 fn theme_candidates(preferred: &str) -> Vec<&'static dyn ThemeFactory> {
-    static OFFICIAL: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
+    static DEFAULT: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
 static ELEVEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
     static TEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
     static ABC: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
@@ -33,7 +33,11 @@ static ELEVEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::n
 static SEVEN: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
 static TEST: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new();
     let preferred = match preferred {
-        "official" => "official",
+        // 2026-11-02 用户定名：对外叫 **default**（不再叫 official）。
+        // DLL 文件名仍是 `weasel-next-theme.dll`（用户明确：档位不要体现在 DLL 名字上）。
+        // 老配置/老安装里的 `official` 继续当**别名**接受，一律归一成 `default` ——
+        // 这样只改一半（配置改了、DLL 还是 old build）也不会黑屏。
+        "default" | "official" => "default",
         "eleven" => "eleven",
             "seven" => "seven",
             "test" => "test",
@@ -41,13 +45,13 @@ static TEST: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new
         "abc" => "abc",
         "void" => "void",
         "wasm" => "wasm",
-        // 任何未知/已删除的名字一律落到官方主题（旧的 ten、eleven 等 DLL 已不再分发）
-        _ => "official",
+        // 任何未知/已删除的名字一律落回出厂主题（旧的 ten、eleven 等 DLL 已不再分发）
+        _ => "default",
     };
     std::iter::once(preferred)
         .filter_map(|name| {
             let slot = match name {
-                "official" => &OFFICIAL,
+                "default" => &DEFAULT,
         "eleven" => &ELEVEN,
                 "ten" => &TEN,
                 "abc" => &ABC,
@@ -64,10 +68,10 @@ static TEST: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new
                     .map(std::path::Path::to_path_buf)
                     .ok_or("renderer executable has no directory")?;
                 // 主题 DLL 直接放在 renderer 所在目录（程序文件夹根）；兼容旧的 theme\ 子目录。
-                // 官方主题改名叫 `weasel-next-theme.dll`（用户 2026-10-31 要求）；
-                // 其它主题（eleven/ten/abc/void/wasm/seven/test）仍是 `weasel_theme_<name>.dll`。
-                // 兼容：新名不存在时回退旧名，避免旧安装包直接加载不到主题而黑屏。
-                let file = if name == "official" {
+                // 出厂主题对外文件名是 `weasel-next-theme.dll`（用户 2026-10-31 要求：
+                // 不带档位/代号）；其它主题（eleven/ten/abc/void/wasm/seven/test）仍是
+                // `weasel_theme_<name>.dll`。
+                let file = if name == "default" {
                     "weasel-next-theme.dll".to_string()
                 } else {
                     format!("weasel_theme_{name}.dll")
@@ -78,7 +82,15 @@ static TEST: OnceLock<Result<crate::theme_dll::Factory, String>> = OnceLock::new
                 } else {
                     directory.join("theme").join(&file)
                 };
-                crate::theme_dll::Factory::load(name, &path)
+                crate::theme_dll::Factory::load(name, &path).or_else(|error| {
+                    // 旧 build 的 DLL 自报 `official`：同一份文件再用旧 id 试一次。
+                    // 只改了配置、没重装主题 DLL 的机器（升级半路）就不至于黑屏。
+                    if name == "default" {
+                        crate::theme_dll::Factory::load("official", &path).map_err(|_| error)
+                    } else {
+                        Err(error)
+                    }
+                })
             });
             match loaded {
                 Ok(factory) => Some(factory as &'static dyn ThemeFactory),
@@ -463,11 +475,12 @@ impl Presentation {
 
     /// 按主题能力、候选优先级和本地截止时间规范化新快照中的提示。
     fn update_indicator(&mut self, snapshot: &mut RenderSnapshot) {
-        if !self.capabilities.mode_indicator
-            || snapshot.visible
-            || !snapshot.items.is_empty()
-            || snapshot.preedit.is_some()
-        {
+        // 2026-11-02 02:4x：01:5x 那条"组字中不保留提示"的回滚是基于**误判**。
+        // 当时"候选窗完全不显示"的真因是主题里 `mode_indicator` 一有值就只画徽标、
+        // 候选一个都没画（已修，见 theme/src/mod.rs 的 `icon_only` 分支），
+        // 外加 `--preview-indicator` 自测台自己无限递归栈溢出，看起来像"画提示必崩"。
+        // 实测（`--preview-badge`）：候选 + 「英」徽标同屏正常，渲染器不退出。
+        if !self.capabilities.mode_indicator {
             snapshot.mode_indicator = None;
         }
         let Some(indicator) = snapshot.mode_indicator.as_mut() else {
@@ -655,7 +668,9 @@ fn run_ui(
             let mut snapshot = crate::preview::synthetic_snapshot();
             // 预览是"这主题能画成什么样"的展示面：只要主题声明支持预编辑就带上一条，
             // 这样 `inline_preedit` 的两种配法都能在预览里看到（实时路径仍按配置来）。
-            if registration.capabilities().preedit {
+            // 2026-11-02 02:2x：模式提示样本不能带预编辑 —— `update_indicator` 里
+            // "组字中不保留提示"的门会把它丢掉，`--preview-indicator` 就永远只能看到空白。
+            if registration.capabilities().preedit && !snapshot.items.is_empty() {
                 snapshot.preedit = Some(weasel_common::message::RenderPreedit {
                     text: "jie m".into(),
                     cursor_utf16: 5,
@@ -1003,6 +1018,7 @@ mod tests {
                 id: 1,
                 ascii_mode: true,
                 reason: weasel_common::message::ModeIndicatorReason::UserSwitch as i32,
+                caps_lock: false,
             }),
             ..Default::default()
         };

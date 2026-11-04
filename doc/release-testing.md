@@ -21,7 +21,7 @@
 ## 建议的测试顺序
 
 1. **安装**：装完检查 `C:\Program Files\Weasel-Next\` 是否存在，
-   里面应有四个 exe、rime.dll、weasel_tip.dll、weasel_theme_official.dll、
+   里面应有四个 exe、rime.dll、weasel_tip.dll、weasel-next-theme.dll、
    六个 lib*.dll、Uninstall.exe，以及 `Rime-Next\` 数据目录。
 2. **输入法出现**：任务栏输入法列表里应出现「小狼毫Next」。
 3. **打字**（重点）：切换到小狼毫Next，随便打几个字母，

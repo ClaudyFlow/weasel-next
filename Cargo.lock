@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Weasel-Next-Engine"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "bindgen",
  "embed-resource",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "Weasel-Next-Renderer"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "embed-resource",
  "serde",
@@ -42,7 +42,7 @@ dependencies = [
 
 [[package]]
 name = "Weasel-Next-Server"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "embed-resource",
  "libloading",
@@ -58,13 +58,14 @@ dependencies = [
 
 [[package]]
 name = "Weasel-Next-Setting"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "embed-resource",
  "libloading",
  "plum-next",
  "raw-window-handle",
  "regex",
+ "rusty-leveldb",
  "serde",
  "serde_json",
  "slint",
@@ -782,6 +783,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bstr"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bb31b46c14244e20ee9984b11bf5c992b91fb6939fea616e3512c8baecdbe5f"
+dependencies = [
+ "memchr",
+ "serde_core",
+]
+
+[[package]]
 name = "built"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1475,6 +1486,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "env_home"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7f84e12ccf0a7ddc17a6c41c93326024c42920d7ee630d04950e6926645c0fe"
 
 [[package]]
 name = "equator"
@@ -3193,11 +3210,13 @@ version = "0.1.0"
 dependencies = [
  "fancy-regex",
  "indexmap",
+ "mlua",
  "rsmarisa",
  "rusty-leveldb",
  "serde",
  "serde_json",
  "serde_norway",
+ "windows",
 ]
 
 [[package]]
@@ -3268,6 +3287,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
+name = "lock_api"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3287,6 +3315,25 @@ name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
+
+[[package]]
+name = "lua-src"
+version = "547.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1edaf29e3517b49b8b746701e5648ccb5785cde1c119062cbabbc5d5cd115e42"
+dependencies = [
+ "cc",
+]
+
+[[package]]
+name = "luajit-src"
+version = "210.5.12+a4f56a4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3a8e7962a5368d5f264d045a5a255e90f9aa3fc1941ae15a8d2940d42cac671"
+dependencies = [
+ "cc",
+ "which",
+]
 
 [[package]]
 name = "lyon_algorithms"
@@ -3398,6 +3445,34 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mlua"
+version = "0.10.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1f5f8fbebc7db5f671671134b9321c4b9aa9adeafccfd9a8c020ae45c6a35d0"
+dependencies = [
+ "bstr",
+ "either",
+ "mlua-sys",
+ "num-traits",
+ "parking_lot",
+ "rustc-hash 2.1.3",
+ "rustversion",
+]
+
+[[package]]
+name = "mlua-sys"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "380c1f7e2099cafcf40e51d3a9f20a346977587aa4d012eae1f043149a728a93"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "lua-src",
+ "luajit-src",
+ "pkg-config",
 ]
 
 [[package]]
@@ -4109,6 +4184,29 @@ name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
+
+[[package]]
+name = "parking_lot"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
+dependencies = [
+ "lock_api",
+ "parking_lot_core",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.9.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "redox_syscall 0.5.18",
+ "smallvec",
+ "windows-link 0.2.1",
+]
 
 [[package]]
 name = "parlance"
@@ -6797,7 +6895,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-common"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "prost",
  "prost-build",
@@ -6820,7 +6918,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-renderer-vk"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "ash",
  "windows",
@@ -6828,7 +6926,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-setting-vk"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "Weasel-Next-Setting",
  "ash",
@@ -6837,7 +6935,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-style"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -6847,7 +6945,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-theme-api"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -6855,8 +6953,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "weasel-theme-official"
-version = "0.18.5"
+name = "weasel-theme-default"
+version = "0.18.6"
 dependencies = [
  "embed-resource",
  "serde_json",
@@ -6871,7 +6969,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-theme-support"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "weasel-theme-api",
  "windows-bindgen",
@@ -6887,7 +6985,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-tip"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "embed-resource",
  "tokio",
@@ -6949,6 +7047,18 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "which"
+version = "7.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24d643ce3fd3e5b54854602a080f34fb10ab75e0b813ee32d00ca2b44fa74762"
+dependencies = [
+ "either",
+ "env_home",
+ "rustix 1.1.5",
+ "winsafe",
+]
 
 [[package]]
 name = "wide"
@@ -7501,6 +7611,12 @@ dependencies = [
  "cfg-if",
  "windows-sys 0.59.0",
 ]
+
+[[package]]
+name = "winsafe"
+version = "0.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wit-bindgen"

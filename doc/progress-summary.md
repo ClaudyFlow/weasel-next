@@ -22,7 +22,7 @@ SHA256：`0ae29a29c8722f8d8dfa36f734d74850b5385f23204da0abb46c00e2a2902ee4`
 装完实测（退出码 3010 = 成功、需重启）：
 
 - 程序文件夹 104 个文件：四个 exe、`Weasel-Next.dll` 5.08 MB、`rime.dll` 9.62 MB、
-  `weasel_theme_official.dll`、六个 MinGW 运行时、`Uninstall.exe`
+  `weasel-next-theme.dll`、六个 MinGW 运行时、`Uninstall.exe`
 - 数据目录 `Rime-Next\`：eassy / icon / opencc / plugin / schema / sound / theme 七个分类，75 个文件
 - TIP 注册：`HKLM\SOFTWARE\Classes\CLSID\{16A7AEA9-9EE6-4540-8020-E384C0489BB1}\InprocServer32`
   → `C:\Program Files\Weasel-Next\Weasel-Next.dll`，CTF TIP 项也在

@@ -48,8 +48,8 @@
 
 ## 每次改动的固定动作（今天验证有效）
 
-1. 改**一处** → `cargo build --release -p weasel-theme-official`
-2. 提权复制到 `C:\Program Files\Weasel-Next\weasel_theme_official.dll`
+1. 改**一处** → `cargo build --release -p weasel-theme-default`
+2. 提权复制到 `C:\Program Files\Weasel-Next\weasel-next-theme.dll`
 3. **比对 SHA256**（源与目标一致才算装上 —— 只看字节数会被骗，今天上过一次当）
 4. 重启 Server → 读 `%LOCALAPPDATA%\Rime-Next\Logs\theme.log` 与 `renderer.*.log`
 5. 打字验收 → `git commit`

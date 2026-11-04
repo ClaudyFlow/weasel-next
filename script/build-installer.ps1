@@ -68,7 +68,7 @@ try {
         'installer\weasel-next.nsi',
         'script\launch-broker.ps1'
     )
-    foreach ($theme in @('official')) {   # ★ 只打我们现在构建的主题 ✓ 旧主题已归档 ✓
+    foreach ($theme in @('default')) {   # ★ 只打我们现在构建的主题 ✓ 旧主题已归档 ✓
         foreach ($extension in @('dll')) {   # ★ GNU 构建不产 pdb ✓ 只列 dll ✓
             $requiredFiles += "target\release\weasel_theme_$theme.$extension"
         }
@@ -94,7 +94,8 @@ try {
         }
     }
 
-    $outputDirectory = Join-Path $projectRoot 'artifact\installer'
+    # 2026-11-02 用户要求：安装包产物统一放到仓库根的 `install\`（不再用 artifact\installer）。
+    $outputDirectory = Join-Path $projectRoot 'install'
     $null = New-Item -ItemType Directory -Path $outputDirectory -Force
     # Expand recursive payloads at build time, never scan the installed directory.
     # Install and removal macros are generated from the same file set so nested
@@ -122,6 +123,15 @@ try {
                 throw "Payload contains a reparse point: $sourceDirectory"
             }
             $files = @(Get-ChildItem -LiteralPath $sourceDirectory -Recurse -File | Sort-Object FullName)
+            # 2026-11-02 用户要求：**软件进 setup.exe、模型单独做压缩包，且不删模型**。
+            # `Rime-Next\neural\`（神经重排 .safetensors）与 `Rime-Next\model\`/`models\`
+            # （octagram .gram、tiger .bin）一律不进安装包；源文件留在仓库里不动，
+            # 由 `install\Weasel-Next-<版本>-models.7z` 单独分发（解压到数据根即可命中，
+            # 见 `c_api.rs::data_roots()`：用户目录优先、共享目录其次）。
+            $files = @($files | Where-Object {
+                $candidate = $_.FullName.Substring($sourceDirectory.Length + 1)
+                $candidate -notmatch '^(neural|models?)[\\/]'
+            })
             foreach ($file in $files) {
                 if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Payload contains a reparse point: $($file.FullName)" }
                 $relative = $file.FullName.Substring($sourceDirectory.Length + 1)

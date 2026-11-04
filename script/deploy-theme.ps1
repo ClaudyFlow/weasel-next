@@ -5,7 +5,7 @@
 #   powershell -ExecutionPolicy Bypass -File script\deploy-theme.ps1
 #
 # 覆盖内容：
-#   - weasel_theme_official.dll  (候选窗主题：渐变底 / 圆角遮罩 / 字高绑定间距)
+#   - weasel_theme_default.dll  (候选窗主题：渐变底 / 圆角遮罩 / 字高绑定间距)
 
 [CmdletBinding()]
 param(
@@ -13,9 +13,13 @@ param(
     [string]$TargetDir  = 'C:\Code\Weasel-Next\target\release',
     # 编译产物名 → 安装目录里的名字。安装布局在 2026-11 改过：渲染器按
     # `weasel-next-theme.dll` 加载（LoadLibrary），而 cargo 产物是
-    # `weasel_theme_official.dll`，所以两边名字不同，不能硬编码同一个。
-    [string]$SourceName = 'weasel_theme_official.dll',
+    # `weasel_theme_default.dll`（2026-11-02 定名，不再叫 official），
+    # 所以两边名字不同，不能硬编码同一个。
+    [string]$SourceName = 'weasel_theme_default.dll',
     [string]$DllName    = 'weasel-next-theme.dll',
+    # 主题 id 改名（official → default）这类**契约变更**必须连渲染器一起换：
+    # 老渲染器只认 `official`，新 DLL 自报 `default`，只换一个会加载失败（候选窗不出来）。
+    [switch]$WithRenderer,
     # 部署完成后在右下角弹通知（和输入法自己的"配置加载失败"同一条 Toast 通道）。
     # 批处理/CI 里不想要弹窗时加 -NoToast。
     [switch]$NoToast
@@ -130,7 +134,7 @@ Assert-Admin
 $src = Join-Path $TargetDir $SourceName
 $dst = Join-Path $InstallDir $DllName
 
-if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { throw "找不到编译产物: $src（请先 cargo build --release -p weasel-theme-official）" }
+if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { throw "找不到编译产物: $src（请先 cargo build --release -p weasel-theme-default）" }
 if (-not (Test-Path -LiteralPath $dst -PathType Leaf)) { throw "找不到安装目录里的 dll: $dst" }
 
 $srcHash = (Get-FileHash -LiteralPath $src -Algorithm SHA256).Hash
@@ -172,6 +176,36 @@ try {
 # 校验
 $after = (Get-FileHash -LiteralPath (Join-Path $InstallDir $DllName) -Algorithm SHA256).Hash
 if ($after -eq $srcHash) { Write-Host "校验通过（哈希一致）" } else { Write-Warning "校验不一致，可能待重启替换生效" }
+
+# 顺带换渲染器（`-WithRenderer`）：DLL 与 exe 之间是"主题 id"契约，改名时不能只换一半。
+if ($WithRenderer) {
+    $rsrc = Join-Path $TargetDir 'Weasel-Next-Renderer.exe'
+    $rdst = Join-Path $InstallDir 'Weasel-Next-Renderer.exe'
+    if (-not (Test-Path -LiteralPath $rsrc -PathType Leaf)) { throw "找不到渲染器产物: $rsrc" }
+    if (-not (Test-Path -LiteralPath $rdst -PathType Leaf)) {
+        Write-Warning "安装目录没有渲染器: $rdst（跳过）"
+    } elseif ((Get-FileHash -LiteralPath $rdst -Algorithm SHA256).Hash -eq
+              (Get-FileHash -LiteralPath $rsrc -Algorithm SHA256).Hash) {
+        Write-Host "渲染器已是最新: $rdst"
+    } else {
+        $rbak = "$rdst.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+        try {
+            Copy-Item -LiteralPath $rdst -Destination $rbak -Force -ErrorAction Stop
+            Write-Host "已备份渲染器 -> $rbak"
+        } catch {
+            Write-Warning "渲染器备份失败（继续覆盖）: $_"
+        }
+        try {
+            Copy-Item -LiteralPath $rsrc -Destination $rdst -Force -ErrorAction Stop
+            Write-Host "OK 已覆盖: $rdst"
+        } catch {
+            Write-Host "渲染器直接覆盖失败 ($_)，改为登记重启替换"
+            $staged = "$rdst.pending-$([Guid]::NewGuid().ToString('N').Substring(0,8)).new"
+            Copy-Item -LiteralPath $rsrc -Destination $staged -Force
+            Register-PendingRename -Staged $staged -Dest $rdst
+        }
+    }
+}
 
 # 重启输入法
 $server = Join-Path $InstallDir 'Weasel-Next-Server.exe'

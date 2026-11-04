@@ -20,7 +20,7 @@
 # 是**官方原版皮肤**（fxliang/weasel 的数据文件，逐字节同一份），与本文件无关。
 
 # 用哪个主题（对应 weasel_theme_<名字>.dll）
-theme: official
+theme: default
 # 新会话默认中英状态；global_ascii_status 为 true 时全局共享同一个状态
 ascii_mode: false
 global_ascii_status: false
