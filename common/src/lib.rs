@@ -17,6 +17,7 @@ pub mod message;
 pub use message::{ENGINE_IDLE_EXIT_CODE, ENGINE_IDLE_MINUTES};
 #[cfg(windows)]
 pub mod clipboard;
+pub mod sync;
 pub mod process;
 pub mod rpc;
 #[cfg(windows)]

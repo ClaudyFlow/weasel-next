@@ -61,6 +61,9 @@ message ModeIndicator {
   // false 为中文模式，true 为英文模式
   bool ascii_mode = 2;
   ModeIndicatorReason reason = 3;
+  // 这次切换是不是 CapsLock（大写锁定）造成的。主题据此画「A」而不是中/英两枚图标
+  // （主题进程不接收键盘输入，自己读 `GetKeyState(VK_CAPITAL)` 不可靠，所以由引擎说）。
+  bool caps_lock = 4;
 }
 
 // 显示在候选窗中的 preedit 文本
