@@ -49,6 +49,23 @@ unsafe extern "system" {
     fn DwmFlush() -> i32;
 }
 
+#[link(name = "gdi32")]
+unsafe extern "system" {
+    fn CreateRoundRectRgn(
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+        w_ellipse: i32,
+        h_ellipse: i32,
+    ) -> isize;
+}
+
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn SetWindowRgn(hwnd: HWND, hrgn: isize, b_redraw: i32) -> i32;
+}
+
 /// 抓屏期间临时把窗口排除出画面，离开作用域立刻还原（含早退/panic 路径）。
 struct CaptureAffinity {
     hwnd: HWND,
@@ -1645,7 +1662,45 @@ impl Window {
             }
         }
         self.resize()?;
+        // 把窗口物理裁成圆角矩形，彻底消除「圆角外侧还有方角」。
+        // `DWMWA_WINDOW_CORNER_PREFERENCE` 在无边框 popup 上常被忽略（见 `new()`），
+        // 光靠它窗口仍是方的、四角露出方块；`SetWindowRgn` 直接裁窗口区域，
+        // 无论材质档、无论 DWM 是否配合，方角都不会再出现。
+        // 尺寸用 `SetWindowPos` 设的全窗尺寸（含 WS_THICKFRAME 边框），不能用
+        // `GetClientRect`（那只量客户区，会漏掉边框那圈方角）。半径 = 面板圆角
+        // **加上 offset**：面板是内缩 offset 画的，不补上会把面板自己的角也裁掉
+        // （同心圆问题）。窗口每 resize（每次 `position`）就重裁一次。
+        let (w_px, h_px, rad) = {
+            let app = self.app.borrow();
+            let Some(content) = app.content.as_ref() else {
+                return Ok(());
+            };
+            let dpi = self.dpi.get();
+            let w = pixels(content.layout.content_size.cx, dpi);
+            let h = pixels(content.layout.content_size.cy, dpi);
+            // 面板把 `round_corner_ex` 当 D2D 坐标用（D2D 目标已 SetDpi），所以面板角的
+            // 设备像素半径 = `pixels(round_corner_ex, dpi)`。窗口角半径一致取这个值，
+            // 再叠加 offset 的像素——这样窗口圆角与面板圆角**同心同半径**外扩 offset，
+            // 面板角正好嵌在里面，offset 环里的阴影也跟着被圆角裁掉，方角不再出现。
+            let rad = (pixels(app.metrics.round_corner_ex, dpi) as f32
+                + pixels(app.metrics.offset().0, dpi) as f32)
+                .max(0.0) as i32;
+            (w, h, rad)
+        };
+        self.apply_round_region(w_px, h_px, rad);
         Ok(())
+    }
+
+    /// 用圆角矩形区域裁切窗口，覆盖掉矩形窗口本身的四个直角。
+    /// `w`/`h` 是 `SetWindowPos` 设的全窗尺寸（设备像素），`radius` 已是设备像素。
+    fn apply_round_region(&self, w: i32, h: i32, radius: i32) {
+        unsafe {
+            // `CreateRoundRectRgn` 的椭圆参数是**直径**，乘 2 才等价于圆角半径。
+            let hrgn = CreateRoundRectRgn(0, 0, w, h, radius * 2, radius * 2);
+            if hrgn != 0 {
+                let _ = SetWindowRgn(self.hwnd.get(), hrgn, 1);
+            }
+        }
     }
 
     /// 把鼠标坐标换算成 DIP 并命中。
