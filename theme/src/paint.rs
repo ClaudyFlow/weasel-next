@@ -509,30 +509,31 @@ pub(crate) const GLASS_ALPHA: u32 = 0x33;
 
 /// 亚克力档面板上那层**配色蒙版**的不透明度（0..255）。
 ///
-/// 2026-11-04 09:4x 用户：「亚克力怎么是透明的」—— 原来是 `0x80`（50%），一半桌面直接透
-/// 上来，糊得再狠看着也像玻璃；先提到 `0xC0`（75%），结果 10:2x 用户还是说
-/// 「这是玻璃的效果啊」—— 因为背后那道亮带 25% 透上来照样一眼能看见，于是提到 `0xD8`（85%）。
-/// 10:41 用户再回调一档，10:50 定在 **`0xCC`（80%）**：背景的明暗起伏能看见了
-/// （这才是磨砂该有的"透光不透影"），但因为糊到 σ=8、且被配色染过，仍旧看不出是什么。
-/// 这个比例正好对齐 Windows Fluent 亚克力的 tint opacity 0.8（即"透出 20%"）。
+/// 这段百分比调过三轮，根因值得记下来：09:4x 用户说「亚克力怎么是透明的」时它**就是**
+/// `0x80`（50%），于是一路往上加到 `0xD8`（85%）；10:2x 用户仍说「这是玻璃的效果啊」——
+/// 真凶其实是**颜色被面积加权平均洗成了中性灰**，跟不透明度关系不大。改完
+/// [`theme_veil`] 的"借色相不借明度"（10:5x）后，10:41 回调到 `0xCC`（80%）。
+///
+/// 11:10 用户：「亚克力做成 50 透明」⇒ 回到 **`0x80`（50%）**。有配色染色 + σ=8 打底，
+/// 50% 已经是"透光不透影"：背景的明暗起伏明显能感知，但认不出内容，也不再像玻璃那样清透。
 ///
 /// 三档的"透明度"口径（面板底的不透明占比）：
 /// 透明档 **0%**（面板底全透明，只剩抓屏模糊图；抓不到屏幕才退回 50% 白）
-/// · 亚克力 **80%** · 默认（原"不透明"）**100%**（yaml 的 `back_color` 铺满）。
+/// · 亚克力 **50%** · 默认（原"不透明"）**100%**（yaml 的 `back_color` 铺满）。
 ///
 /// `plain_scheme` 用它算"有效背景亮度"（决定字色），`Painter::draw` 用它铺面板 ——
 /// 两处必须是同一个值，否则字色按 A 算、底按 B 画，看着就会"算得挺好却看不清"。
 /// 运行时可用 [`veil_alpha`]（`veil.txt`）覆盖。
-pub(crate) const VEIL_ALPHA: u32 = 0xCC;
+pub(crate) const VEIL_ALPHA: u32 = 0x80;
 
 /// 蒙版不透明度的**实际生效值**：`VEIL_ALPHA` 可被
-/// `%APPDATA%\Rime-Next\theme\veil.txt`（一个 60..95 的百分数）实时覆盖。
+/// `%APPDATA%\Rime-Next\theme\veil.txt`（一个 30..95 的百分数）实时覆盖。
 ///
 /// 和 `material.txt` / `blur.txt` 同一套机制：每次用时现读，改完下一次显示候选窗就生效，
 /// 不用重编译、不用重装 DLL。调"亚克力多透"这种主观手感，用户自己滑比来回改代码快：
-/// 写 `70` 更透（偏玻璃）、写 `92` 更实（接近不透明）。
+/// 写 `40` 更透（偏玻璃）、写 `80` 更实（接近不透明）。
 ///
-/// 60 以下就真成玻璃了（背后什么都看得见）；95 以上磨砂感消失、跟不透明没区别 ——
+/// 30 以下就真成玻璃了（背后什么都看得见）；95 以上磨砂感消失、跟不透明没区别 ——
 /// 两头都当"没写"，用档位默认值。
 pub fn veil_alpha() -> u32 {
     let tuned = std::env::var_os("APPDATA")
@@ -543,13 +544,13 @@ pub fn veil_alpha() -> u32 {
     tuned.unwrap_or(VEIL_ALPHA)
 }
 
-/// `veil.txt` 的内容 → alpha。容忍结尾的 `%` 和空白；超出 60..95 的当没写。
+/// `veil.txt` 的内容 → alpha。容忍结尾的 `%` 和空白；超出 30..95 的当没写。
 fn parse_veil_pct(text: &str) -> Option<u32> {
     text.trim()
         .trim_end_matches('%')
         .parse::<f32>()
         .ok()
-        .filter(|pct| (60.0..=95.0).contains(pct))
+        .filter(|pct| (30.0..=95.0).contains(pct))
         .map(|pct| (pct / 100.0 * 255.0).round() as u32)
 }
 
@@ -1674,12 +1675,13 @@ mod tests {
 
     #[test]
     fn veil_txt_overrides_opacity() {
-        // `veil.txt` 写百分数：70 更透、95 更实；带 % 和空白都认。
-        assert_eq!(super::parse_veil_pct("70"), Some(179)); // 70%  → 0xB3
+        // `veil.txt` 写百分数：40 更透、95 更实；带 % 和空白都认。档位默认 50 也在范围内。
+        assert_eq!(super::parse_veil_pct("50"), Some(128)); // 50%  → 0x80（档位默认值）
+        assert_eq!(super::parse_veil_pct("40"), Some(102));
         assert_eq!(super::parse_veil_pct(" 78% "), Some(199)); // 78%  → 0xC7
         assert_eq!(super::parse_veil_pct("95"), Some(242));
-        // 两头越界（低于 60 变玻璃 / 高于 95 没磨砂）与乱写一律当"没写"。
-        assert_eq!(super::parse_veil_pct("50"), None);
+        // 两头越界（低于 30 变玻璃 / 高于 95 没磨砂）与乱写一律当"没写"。
+        assert_eq!(super::parse_veil_pct("25"), None);
         assert_eq!(super::parse_veil_pct("99"), None);
         assert_eq!(super::parse_veil_pct("abc"), None);
         assert_eq!(super::parse_veil_pct(""), None);
@@ -1700,15 +1702,15 @@ mod tests {
     }
 
     #[test]
-    fn acrylic_veil_is_opaque_enough() {
-        // 「不那么透明」：蒙版必须占大头（≥70%），否则背后那道亮带照样一眼看见 ——
-        // 0xC0（75%）时用户仍说「这是玻璃的效果啊」（根因是当时颜色被平均成灰）。
-        // 现在颜色已经跟配色走了，75~85% 之间是"磨砂"的可调范围，低于 70% 就变玻璃。
+    fn acrylic_veil_is_firmly_wedged_between_glass_and_solid() {
+        // 11:10 用户定档「50 透明」⇒ 蒙版不透明度 50%（0x80）。
+        // 底线：必须比透明档（0x33）实一大截，否则又退回玻璃；上限留出余量。
         assert!(
-            VEIL_ALPHA >= 0xB3,
-            "蒙版只有 {:.0}%，看着还是透明的",
+            (0x80..0xB3).contains(&VEIL_ALPHA),
+            "蒙版 {:.0}% 不在「半透但仍是磨砂面」的区间",
             VEIL_ALPHA as f32 / 255.0 * 100.0
         );
+        assert!(VEIL_ALPHA > super::GLASS_ALPHA * 2);
         // 深色皮肤 + 任意壁纸（纯黑/纯白）都得用浅色字。
         for backdrop in [None, Some(0.0), Some(255.0)] {
             let out = plain_scheme(&steam(), Material::Acrylic, backdrop);
