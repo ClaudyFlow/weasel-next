@@ -828,13 +828,9 @@ fn wire_skins(ui: &SettingsWindow) {
             let Some(ui) = ui_weak.upgrade() else { return };
             let index = (index.max(0) as usize).min(weasel_settings::material::LABELS.len() - 1);
             match weasel_settings::material::set(&user, index) {
-                Ok(_) => ui.set_material_status(
-                    format!(
-                        "候选窗材质 → {}（打一次字生效）",
-                        weasel_settings::material::LABELS[index]
-                    )
-                    .into(),
-                ),
+                // 成功不弹提示（用户 2026-11-04 10:25：「这个提示删掉」）——
+                // 换档下一次按键就生效，不需要告诉用户"打一次字生效"。
+                Ok(_) => ui.set_material_status("".into()),
                 Err(error) => ui.set_material_status(format!("写材质失败：{error}").into()),
             }
         });

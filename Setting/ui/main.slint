@@ -154,6 +154,8 @@ export component SettingsWindow inherits Window {
     in property <[StatWord]> stat-words: [];
     // 词云排版（Rust 侧算好坐标）
     in property <[CloudWord]> stat-cloud: [];
+    // 词云来源说明（"1260 个学词 · 来自 2 个方案的用户词典"）
+    in property <string> stat-cloud-note: "";
     in property <[StatWord]> stat-words2: [];
     in property <[StatWord]> stat-words3: [];
     // 键盘热力图 / 码长直方图（stat.bin 尾部扩展；老文件为空）
@@ -384,6 +386,7 @@ export component SettingsWindow inherits Window {
             calendar-mask: root.stat-calendar-mask;
             words: root.stat-words;
             cloud: root.stat-cloud;
+            cloud-note: root.stat-cloud-note;
             words2: root.stat-words2;
             words3: root.stat-words3;
             key-counts: root.stat-key-counts;
@@ -440,10 +443,13 @@ export component SettingsWindow inherits Window {
                         root.material-picked(tier.idx);
                     }
                 }
-                Text {
+                // 「材质 → 透明（打一次字生效）」那条提示已去掉（用户 2026-11-04 10:25）：
+                // 换档本来下一次按键就生效，没什么好提示的。这里只保留**写文件失败**
+                // 这类真错误，正常情况一个字都不显示。
+                if root.material-status != "" : Text {
                     text: root.material-status;
                     font-size: 12px;
-                    color: #6b7280;
+                    color: #b91c1c;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                 }

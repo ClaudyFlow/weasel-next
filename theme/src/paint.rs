@@ -42,7 +42,8 @@ pub fn material() -> String {
 pub enum Material {
     /// 透明：抓屏 + 自绘高斯模糊，面板底**全透明**（底下只剩糊过的那张，不染色）。
     Glass,
-    /// 亚克力：同样抓屏模糊，但糊得更狠，再铺一层**整个配色混出来的**蒙版（比玻璃「实」得多）。
+    /// 亚克力：同样抓屏模糊（糊得更狠），再铺一层 85% 的**配色蒙版** —— 一眼看得出有颜色、
+    /// 比玻璃「实」得多，`back_color` 的明暗 + 配色个性色的色相（见 [`theme_veil`]）。
     Acrylic,
     /// 不透明：用 yaml 的 `back_color` 铺满，不抓屏、不模糊、不留投影边。
     Opaque,
@@ -83,9 +84,9 @@ pub fn tier() -> Material {
 /// * **玻璃**：面板全透明，背后就是抓屏 + 高斯模糊的那张图 ⇒ 直接用它算出来的
 ///   平均亮度；抓不到背景（没有抓屏权限/老系统）时 `Painter::draw` 会退回 50% 白，
 ///   这里也按白底估。
-/// * **亚克力**：背后是自绘高斯模糊（比玻璃糊一倍，见 [`blur_sigma`]），面板再压一层
-///   **整个配色混出来的**蒙版（[`VEIL_ALPHA`] 不透明，见 [`theme_veil`]）。桌面亮度事先
-///   不知道，就取"桌面纯黑 / 纯白"两种极端，要求两种情况下对比度都够 —— 否则深色壁纸上
+/// * **亚克力**：背后是自绘高斯模糊（比玻璃糊一倍多，见 [`blur_sigma`]），面板再压一层
+///   **配色蒙版**（[`VEIL_ALPHA`] 不透明，色相取配色的个性色、明度跟 `back_color`，
+///   见 [`theme_veil`]）。桌面亮度事先不知道，就取"桌面纯黑 / 纯白"两种极端，要求两种情况下对比度都够 —— 否则深色壁纸上
 ///   是"深字压深底"，浅色壁纸上是"白字压白底"，总有一边看不清。
 ///
 /// 主题自己的颜色**优先**：只有对比度掉到门槛以下才翻成兜底墨色，绝不无条件强制白/黑
@@ -158,7 +159,7 @@ pub fn plain_scheme(
 
     let veil = VEIL_ALPHA as f32 / 255.0;
     let backgrounds: [f32; 2] = match tier {
-        // 亚克力：整配色混出的蒙版（它的亮度，不是 back_color 的）+ 桌面两端。
+        // 亚克力：配色蒙版（它的亮度，不是 back_color 的）+ 桌面两端。
         Material::Acrylic => {
             let veil_luma = luma(theme_veil(base));
             [veil_luma * veil, veil_luma * veil + 255.0 * (1.0 - veil)]
@@ -175,7 +176,7 @@ pub fn plain_scheme(
     let muted = if ink == INK { MUTED } else { MUTED_LIGHT };
 
     let mut scheme = base.clone();
-    // 面板底保留**配色自己的底色**：亚克力档要拿它做 50% 蒙版（「亚克力识别配色」），
+    // 面板底保留**配色自己的底色**：亚克力档要拿它做蒙版的明度基准（「颜色按 theme 走」），
     // 玻璃档虽然全透明，模式提示之类的小窗也还要用它染色。
     // HTML 的面板没有描边、没有投影；边框和阴影全透明（透明就不画）。
     scheme.border_color = 0;
@@ -503,20 +504,23 @@ pub(crate) const GLASS_ALPHA: u32 = 0x33;
 /// 亚克力档面板上那层**配色蒙版**的不透明度（0..255）。
 ///
 /// 2026-11-04 09:4x 用户：「亚克力怎么是透明的」—— 原来是 `0x80`（50%），一半桌面直接透
-/// 上来，糊得再狠看着也像玻璃。Fluent 亚克力（Win10 那套）的 tint opacity 就是 **0.8**，
-/// 这里取 `0xC0`（75%）：蒙版占大头，背后那 25% 只剩一团色块，不再看得出"是什么"。
+/// 上来，糊得再狠看着也像玻璃；先提到 `0xC0`（75%），结果 10:2x 用户还是说
+/// 「这是玻璃的效果啊」—— 因为背后那道亮带 25% 透上来照样一眼能看见。
+/// 现在 **`0xD8`（85%）**：背后只剩一圈很淡的明暗起伏，看得出"有东西在后面"，
+/// 但看不出"是什么"，跟透明档一眼能分开。
 ///
 /// `plain_scheme` 用它算"有效背景亮度"（决定字色），`Painter::draw` 用它铺面板 ——
 /// 两处必须是同一个值，否则字色按 A 算、底按 B 画，看着就会"算得挺好却看不清"。
-pub(crate) const VEIL_ALPHA: u32 = 0xC0;
+pub(crate) const VEIL_ALPHA: u32 = 0xD8;
 
 /// 玻璃档的抓屏模糊强度（**降采样后**的像素标准差；1/2 降采样 ⇒ 屏幕 σ 翻倍）。
 const GLASS_SIGMA: f32 = 3.0;
-/// 亚克力档的抓屏模糊强度：同一个屏幕区域糊得比玻璃狠一倍。
+/// 亚克力档的抓屏模糊强度：同一个屏幕区域糊得比玻璃狠一倍多。
 ///
 /// 用户 2026-11-04 09:4x：「再模糊一些」。DWM 的亚克力模糊半径是系统写死的（不能调），
 /// 所以亚克力档也改走自绘高斯 —— 半径、强度、染色全在自己手里。
-const ACRYLIC_SIGMA: f32 = 6.0;
+/// σ=8 ⇒ 屏幕 σ≈16px（1/2 降采样），3σ 半径接近 50px：背后再大的色块也只剩一片渐变。
+const ACRYLIC_SIGMA: f32 = 8.0;
 
 /// 当前档位的抓屏模糊强度（σ，降采样后像素）。
 ///
@@ -538,49 +542,127 @@ pub fn blur_sigma(tier: Material) -> f32 {
     })
 }
 
-/// 亚克力蒙版：把**整个配色**揉成一个代表色 + [`VEIL_ALPHA`]。
+/// 亚克力蒙版：**底色打底 + 配色的个性色**（[`VEIL_ALPHA`] 不透明）。
 ///
-/// 用户 2026-11-04 09:4x：「要识别整个 theme 的颜色的」。只取 `back_color` 不算"整个
-/// theme"：皮肤真正的调子常常不在底色上（棕底 + 青高亮、深底 + 粉高亮……）。这里按
-/// **面积**加权平均，权重是"这种颜色在面板上占多大一块"：
+/// 用户 2026-11-04 10:2x：「亚克力是这个效果，不那么透明，然后颜色按 theme 走」。
 ///
-/// | 颜色 | 权重 | 在面板上占多少 |
-/// |---|---|---|
-/// | `back_color` | 8 | 底色铺满整块（权重占比 >60%，深色皮肤糊出来还是深的） |
-/// | `hilited_candidate_back_color` | 1.5 | 高亮块一条 |
-/// | `hilited_back_color` / `candidate_back_color` | 1 | 半条 |
-/// | `border_color` | 0.5 | 一圈描边 |
-/// | `text_color` / `candidate_text_color` | 0.25 | 只占像素零头 |
+/// 上一版是按"面积"加权平均整套配色 —— 问题在于**平均必然把颜色洗掉**：steam 的底色
+/// `#141617` 权重 8、橙色文字 `#CD8C52` 只有 0.25，混出来 `RGB(34,35,40)` 跟中性灰没差别，
+/// 于是亚克力看着跟透明档一模一样（用户：「这是玻璃的效果啊」）。
 ///
-/// 等权平均会把深底浅字糊成一团灰，所以底色必须压过其余全部；
-/// 半透明/没设颜色的项没有"面积"，跳过。
+/// 现在改成**借色不借亮**：
+///
+/// 1. 从整套配色里挑**饱和度最高**的那个当"个性色"（steam = 文字橙 `#CD8C52`）；
+///    整套都是中性灰（纯黑白皮肤）就挑不出来 ⇒ 蒙版 = 底色，绝不凭空造色；
+/// 2. 取它的**色相**，饱和度打对折、封顶 0.35（免得像糖果）；
+/// 3. **明度用底色自己的**（再抬 0.06，让面板像一块"面"而不是一个"洞"）。
+///
+/// 这样深色皮肤糊出来还是深的（明度跟底色走），但一定带上皮肤自己的色偏 ——
+/// "颜色按 theme 走"，而不会把深底压成浅底。
+///
+/// ⚠️ 这里的"个性色"取的是**内部 ARGB**（`weasel_style` 已经把官方 `abgr` 字节序
+/// 翻译过了）。所以 yaml 里写着 `0xcd8c52`（看着像橙）的 steam，进到这里的字色其实是
+/// `0xFF528CCD`（蓝）—— 蒙版自然跟着蓝走，跟屏幕上文字的实际颜色一致，这才是对的。
 pub fn theme_veil(base: &ColorScheme) -> u32 {
-    let samples = [
-        (base.back_color, 8.0),
-        (base.hilited_candidate_back_color, 1.5),
-        (base.hilited_back_color, 1.0),
-        (base.candidate_back_color, 1.0),
-        (base.border_color, 0.5),
-        (base.text_color, 0.25),
-        (base.candidate_text_color, 0.25),
+    let back = base.back_color & 0x00FF_FFFF;
+    let (_, _, back_l) = hsl(back);
+    // 挑不出个性色（无彩配色）：蒙版就是底色本身。半透明底色取不到就退回纯黑，
+    // 蒙版至少还是一块实色，不会让面板整个消失。
+    let Some((hue, sat)) = accent_hue(base) else {
+        return (VEIL_ALPHA << 24) | back;
+    };
+    let light = if back_l < 0.5 {
+        (back_l + 0.06).min(0.42)
+    } else {
+        (back_l - 0.04).max(0.58)
+    };
+    let tint = from_hsl(hue, (sat * 0.5).min(0.35), light);
+    (VEIL_ALPHA << 24) | tint
+}
+
+/// 配色里的"个性色"：饱和度最高、且明度不在两端的那个（返回 `(色相°, 饱和度)`）。
+///
+/// 只有**不透明**（alpha ≥ 0x40）的项参与：没设颜色的键是 `0x00000000`，
+/// 拿它算色相会得到"黑色"，白白把整块蒙版拉黑。
+fn accent_hue(base: &ColorScheme) -> Option<(f32, f32)> {
+    let palette = [
+        base.text_color,
+        base.candidate_text_color,
+        base.hilited_text_color,
+        base.hilited_candidate_text_color,
+        base.label_color,
+        base.hilited_label_color,
+        base.comment_text_color,
+        base.hilited_comment_text_color,
+        base.nextpage_color,
+        base.prevpage_color,
+        base.hilited_candidate_back_color,
+        base.hilited_back_color,
+        base.candidate_back_color,
+        base.border_color,
+        base.hilited_border_color,
+        base.hilited_mark_color,
     ];
-    let (mut r, mut g, mut b, mut total) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-    for (color, weight) in samples {
+    let mut best: Option<(f32, f32)> = None;
+    for color in palette {
         if (color >> 24) < 0x40 {
             continue;
         }
-        r += ((color >> 16) & 0xFF) as f32 * weight;
-        g += ((color >> 8) & 0xFF) as f32 * weight;
-        b += (color & 0xFF) as f32 * weight;
-        total += weight;
+        let (hue, sat, light) = hsl(color & 0x00FF_FFFF);
+        // 灰阶（含纯黑/纯白）没有"色"可借；明度贴到两端的也不算，缩放后看不出来。
+        if sat < 0.15 || !(0.12..=0.92).contains(&light) {
+            continue;
+        }
+        if best.map_or(true, |(_, best_sat)| sat > best_sat) {
+            best = Some((hue, sat));
+        }
     }
-    // 全透明配色（正常 yaml 不会出现）：退回纯黑，蒙版至少还是一块实色。
-    let mix = if total <= 0.0 {
-        0
+    best
+}
+
+/// `0xRRGGBB` → `(色相 0..360, 饱和度 0..1, 明度 0..1)`。
+fn hsl(rgb: u32) -> (f32, f32, f32) {
+    let r = ((rgb >> 16) & 0xFF) as f32 / 255.0;
+    let g = ((rgb >> 8) & 0xFF) as f32 / 255.0;
+    let b = (rgb & 0xFF) as f32 / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let light = (max + min) / 2.0;
+    let delta = max - min;
+    if delta <= f32::EPSILON {
+        return (0.0, 0.0, light);
+    }
+    let sat = if light > 0.5 {
+        delta / (2.0 - max - min)
     } else {
-        (((r / total) as u32 & 0xFF) << 16) | (((g / total) as u32 & 0xFF) << 8) | ((b / total) as u32 & 0xFF)
+        delta / (max + min)
     };
-    (VEIL_ALPHA << 24) | mix
+    let hue = if max == r {
+        ((g - b) / delta + if g < b { 6.0 } else { 0.0 }) * 60.0
+    } else if max == g {
+        ((b - r) / delta + 2.0) * 60.0
+    } else {
+        ((r - g) / delta + 4.0) * 60.0
+    };
+    (hue, sat, light)
+}
+
+/// `(色相 0..360, 饱和度 0..1, 明度 0..1)` → `0xRRGGBB`。
+fn from_hsl(hue: f32, sat: f32, light: f32) -> u32 {
+    let h = hue.rem_euclid(360.0) / 60.0;
+    let chroma = (1.0 - (2.0 * light - 1.0).abs()) * sat;
+    let second = chroma * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (chroma, second, 0.0),
+        1 => (second, chroma, 0.0),
+        2 => (0.0, chroma, second),
+        3 => (0.0, second, chroma),
+        4 => (second, 0.0, chroma),
+        _ => (chroma, 0.0, second),
+    };
+    let base = light - chroma / 2.0;
+    let channel = |value: f32| ((value + base).clamp(0.0, 1.0) * 255.0).round() as u32;
+    (channel(r) << 16) | (channel(g) << 8) | channel(b)
 }
 
 /// 玻璃态的**亮度层**（scrim）：铺在 tint 之下，压住背景穿透。
@@ -753,10 +835,12 @@ impl Painter<'_> {
                     Material::Metal => {
                         0xFF00_0000 | (darken_color(self.scheme.back_color, 0.78) & 0x00FF_FFFF)
                     }
-                    // 亚克力：模糊底上再铺**整个配色混出来的**蒙版（`VEIL_ALPHA` 不透明）。
+                    // 亚克力：模糊底上再铺**配色蒙版**（`VEIL_ALPHA` 不透明）。
                     // 演变：写死白 0x80FF_FFFF → 配色底 back_color（「亚克力识别配色」）
-                    // → 整配色加权混色 + 提到 0xC0（用户 2026-11-04 09:4x：
-                    // 「亚克力怎么是透明的，再模糊一些，然后要识别整个 theme 的颜色的」）。
+                    // → 整配色加权平均 + 0xC0（09:4x「要识别整个 theme 的颜色」，
+                    //   但平均把颜色洗成中性灰 ⇒ 看着还是玻璃）
+                    // → **底色明度 + 个性色色相 + 0xD8**（10:2x「不那么透明，
+                    //   然后颜色按 theme 走」）。
                     Material::Acrylic => {
                         if self.veil != 0 {
                             self.veil
@@ -1506,43 +1590,53 @@ mod tests {
     }
 
     #[test]
-    fn acrylic_veil_uses_whole_palette() {
-        // 「亚克力识别整个 theme 的颜色」：蒙版不是纯白，也不是单一 back_color，
-        // 而是整套配色的面积加权平均 —— 高亮色必须能把它染偏。
-        let plain = steam();
-        let mut accented = steam();
-        accented.hilited_candidate_back_color = 0xFF_FF_2D_55; // 高亮块换成热粉
-        let plain_veil = theme_veil(&plain);
-        let accented_veil = theme_veil(&accented);
-        assert_ne!(
-            plain_veil, accented_veil,
-            "高亮色没参与混色：{plain_veil:#010X} / {accented_veil:#010X}"
-        );
-        // 粉高亮把红通道顶起来（红 > 蓝），但底色仍压得住：整体还是深的。
-        let r = (accented_veil >> 16) & 0xFF;
-        let b = accented_veil & 0xFF;
-        assert!(r > b + 10, "高亮色没染上去：r={r} b={b}");
-        assert!(r < 0x80, "底色被高亮色压过了，蒙版变亮：r={r}");
-        // alpha 就是 VEIL_ALPHA（字色判定与绘制共用同一个值）。
-        assert_eq!(plain_veil >> 24, VEIL_ALPHA);
+    fn acrylic_veil_takes_palette_hue() {
+        // 「颜色按 theme 走」：真实 steam（#141617 底 + #CD8C52 橙字 + #594231 棕高亮）
+        // 的蒙版必须**偏暖**（红 > 蓝），而不是上一版面积平均糊出来的中性灰。
+        let mut real = scheme(0xFF_14_16_17, 0xFF_CD_8C_52);
+        real.hilited_candidate_back_color = 0xFF_59_42_31;
+        real.comment_text_color = 0xFF_A7_A7_A9;
+        let veil = theme_veil(&real);
+        let (r, g, b) = ((veil >> 16) & 0xFF, (veil >> 8) & 0xFF, veil & 0xFF);
+        assert!(r > b + 12, "蒙版没带上橙色偏：r={r} g={g} b={b}");
+        assert!(r > g && g > b, "色相不对（应偏橙）：r={r} g={g} b={b}");
+        // 用的是**底色自己的明度**：深底不能被文字色提亮成浅底。
+        assert!(r < 0x50, "蒙版被文字色提亮了：r={r}");
+        assert_eq!(veil >> 24, VEIL_ALPHA);
     }
 
     #[test]
-    fn acrylic_veil_skips_transparent_entries() {
-        // 只有底色是不透明的：蒙版就退化成"底色 + VEIL_ALPHA"，不会被没设的颜色稀释。
-        let mut only_back = scheme(0xFF_1B_1D_22, 0xFF_F2_F3_F5);
-        only_back.border_color = 0;
-        only_back.hilited_back_color = 0;
-        only_back.text_color = 0;
-        only_back.candidate_text_color = 0;
-        assert_eq!(theme_veil(&only_back), (VEIL_ALPHA << 24) | 0x00_1B_1D_22);
+    fn acrylic_veil_keeps_back_color_lightness() {
+        // 深浅两种底 + 同一个橙字：明度各自跟底色走，只换色相。
+        let dark = theme_veil(&scheme(0xFF_14_16_17, 0xFF_CD_8C_52));
+        let light = theme_veil(&scheme(0xFF_F5_F6_F8, 0xFF_CD_8C_52));
+        let luma = |argb: u32| {
+            let (r, g, b) = (
+                ((argb >> 16) & 0xFF) as f32,
+                ((argb >> 8) & 0xFF) as f32,
+                (argb & 0xFF) as f32,
+            );
+            0.299 * r + 0.587 * g + 0.114 * b
+        };
+        assert!(luma(dark) < 120.0, "深底的蒙版变亮了：{:#010X}", dark);
+        assert!(luma(light) > 180.0, "浅底的蒙版变暗了：{:#010X}", light);
+        // 两边都要带上橙（红 > 蓝），只是明暗不同。
+        assert!((dark >> 16) & 0xFF > dark & 0xFF);
+        assert!((light >> 16) & 0xFF > light & 0xFF);
+    }
+
+    #[test]
+    fn acrylic_veil_monochrome_palette_stays_neutral() {
+        // 无彩配色（纯黑白皮肤）没有"Hue"可借 ⇒ 蒙版就是底色，绝不凭空造色。
+        assert_eq!(theme_veil(&steam()), (VEIL_ALPHA << 24) | 0x00_1B_1D_22);
     }
 
     #[test]
     fn acrylic_veil_is_opaque_enough() {
-        // 「亚克力怎么是透明的」：蒙版必须占大头（≥70%），否则背后的桌面纹理会整片透上来。
+        // 「不那么透明」：蒙版必须占大头（≥80%），否则背后那道亮带照样一眼看见 ——
+        // 90:4x 提到 0xC0（75%）时用户仍然说「这是玻璃的效果啊」。
         assert!(
-            VEIL_ALPHA >= 0xB3,
+            VEIL_ALPHA >= 0xCC,
             "蒙版只有 {:.0}%，看着还是透明的",
             VEIL_ALPHA as f32 / 255.0 * 100.0
         );

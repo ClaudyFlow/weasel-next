@@ -585,8 +585,8 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
     // 对应关系：
     // - [`Material::Glass`]（透明）  → 自绘高斯模糊 σ=3，面板底**全透明**
     //                                  ⇒ 真玻璃：磨砂但**不染色**
-    // - [`Material::Acrylic`]（亚克力）→ 自绘高斯模糊 σ=6（更糊）+ 整配色混出的蒙版 75%
-    //                                  ⇒ 磨砂 + 有色 + 看得出是磨砂而不是透明
+    // - [`Material::Acrylic`]（亚克力）→ 自绘高斯模糊 σ=8（更糊）+ 配色蒙版 85%
+    //                                  ⇒ 磨砂 + 有色：色相取配色个性色、明度跟 back_color
     // - 不透明 / 金属            → 两者都不用，压根没有模糊
     //
     // 亚克力为什么不再用 DWM：`SetWindowCompositionAttribute` 的模糊半径是系统写死的，
@@ -605,7 +605,13 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
             "抓屏模糊 σ={:.1} · 蒙版 {:?}",
             paint::blur_sigma(tier_now),
             if tier_now == paint::Material::Acrylic {
-                format!("整配色混色 alpha={:#04X}", paint::VEIL_ALPHA)
+                // 实际色打出来：配色文件是官方 ABGR 字节序，肉眼以为的"橙字"到内部是
+                // `0xFF528CCD`（蓝）—— 蒙版跟的是**内部 ARGB**，对账时一眼就能看出差在哪。
+                format!(
+                    "配色蒙版 alpha={:#04X} · 实际色 {:#010X}",
+                    paint::VEIL_ALPHA,
+                    paint::theme_veil(&loaded.scheme)
+                )
             } else {
                 "无（全透明）".to_string()
             }

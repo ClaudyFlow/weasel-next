@@ -626,12 +626,10 @@ impl Shell {
     /// 写文件；渲染器把 material.txt 也算进配置时间戳，下一次按键就重载度量与配色。
     fn set_material(&mut self, index: usize) {
         match weasel_settings::material::set(&self.user_dir, index) {
+            // 成功不写状态栏（用户 2026-11-04 10:25：「这个提示删掉」）。
             Ok(_) => {
                 self.candidate_material = index;
-                self.status = format!(
-                    "候选窗材质 → {}（打一次字生效）",
-                    weasel_settings::material::LABELS[index]
-                );
+                self.status.clear();
             }
             Err(error) => self.status = format!("写材质失败：{error}"),
         }
