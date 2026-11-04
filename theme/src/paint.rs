@@ -157,11 +157,14 @@ pub fn plain_scheme(
         }
     }
 
-    let veil = VEIL_ALPHA as f32 / 255.0;
     let backgrounds: [f32; 2] = match tier {
         // 亚克力：配色蒙版（它的亮度，不是 back_color 的）+ 桌面两端。
+        // alpha 直接从**蒙版颜色自身**取 —— 它已经含了 `veil.txt` 的覆盖值，
+        // 这样"算字色用的不透明度"和"绘制时真正铺上去的"永远是同一个数字。
         Material::Acrylic => {
-            let veil_luma = luma(theme_veil(base));
+            let veil_color = theme_veil(base);
+            let veil_luma = luma(veil_color);
+            let veil = ((veil_color >> 24) & 0xFF) as f32 / 255.0;
             [veil_luma * veil, veil_luma * veil + 255.0 * (1.0 - veil)]
         }
         // 玻璃：真的有一张糊过的背景图就当它准；没有就按视觉上的白底估。
@@ -505,13 +508,44 @@ pub(crate) const GLASS_ALPHA: u32 = 0x33;
 ///
 /// 2026-11-04 09:4x 用户：「亚克力怎么是透明的」—— 原来是 `0x80`（50%），一半桌面直接透
 /// 上来，糊得再狠看着也像玻璃；先提到 `0xC0`（75%），结果 10:2x 用户还是说
-/// 「这是玻璃的效果啊」—— 因为背后那道亮带 25% 透上来照样一眼能看见。
-/// 现在 **`0xD8`（85%）**：背后只剩一圈很淡的明暗起伏，看得出"有东西在后面"，
-/// 但看不出"是什么"，跟透明档一眼能分开。
+/// 「这是玻璃的效果啊」—— 因为背后那道亮带 25% 透上来照样一眼能看见，于是提到 `0xD8`（85%）。
+/// 10:41 用户再回调一档：「亚克力再透明一点就好」—— 85% 时背景几乎只剩"有没有东西"，
+/// 磨砂感在暗色桌面上看不出来。现在 **`0xD1`（82%）**：背景的明暗起伏能看见了
+/// （这才是磨砂该有的"透光不透影"），但因为糊到 σ=8、且被配色染过，仍旧看不出是什么。
+/// 这个比例正好对齐 Windows Fluent 亚克力的 tint opacity 0.8。
 ///
 /// `plain_scheme` 用它算"有效背景亮度"（决定字色），`Painter::draw` 用它铺面板 ——
 /// 两处必须是同一个值，否则字色按 A 算、底按 B 画，看着就会"算得挺好却看不清"。
-pub(crate) const VEIL_ALPHA: u32 = 0xD8;
+/// 运行时可用 [`veil_alpha`]（`veil.txt`）覆盖。
+pub(crate) const VEIL_ALPHA: u32 = 0xD1;
+
+/// 蒙版不透明度的**实际生效值**：`VEIL_ALPHA` 可被
+/// `%APPDATA%\Rime-Next\theme\veil.txt`（一个 60..95 的百分数）实时覆盖。
+///
+/// 和 `material.txt` / `blur.txt` 同一套机制：每次用时现读，改完下一次显示候选窗就生效，
+/// 不用重编译、不用重装 DLL。调"亚克力多透"这种主观手感，用户自己滑比来回改代码快：
+/// 写 `70` 更透（偏玻璃）、写 `92` 更实（接近不透明）。
+///
+/// 60 以下就真成玻璃了（背后什么都看得见）；95 以上磨砂感消失、跟不透明没区别 ——
+/// 两头都当"没写"，用档位默认值。
+pub fn veil_alpha() -> u32 {
+    let tuned = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .map(|base| base.join("Rime-Next").join("theme").join("veil.txt"))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| parse_veil_pct(&text));
+    tuned.unwrap_or(VEIL_ALPHA)
+}
+
+/// `veil.txt` 的内容 → alpha。容忍结尾的 `%` 和空白；超出 60..95 的当没写。
+fn parse_veil_pct(text: &str) -> Option<u32> {
+    text.trim()
+        .trim_end_matches('%')
+        .parse::<f32>()
+        .ok()
+        .filter(|pct| (60.0..=95.0).contains(pct))
+        .map(|pct| (pct / 100.0 * 255.0).round() as u32)
+}
 
 /// 玻璃档的抓屏模糊强度（**降采样后**的像素标准差；1/2 降采样 ⇒ 屏幕 σ 翻倍）。
 const GLASS_SIGMA: f32 = 3.0;
@@ -564,12 +598,13 @@ pub fn blur_sigma(tier: Material) -> f32 {
 /// 翻译过了）。所以 yaml 里写着 `0xcd8c52`（看着像橙）的 steam，进到这里的字色其实是
 /// `0xFF528CCD`（蓝）—— 蒙版自然跟着蓝走，跟屏幕上文字的实际颜色一致，这才是对的。
 pub fn theme_veil(base: &ColorScheme) -> u32 {
+    let alpha = veil_alpha();
     let back = base.back_color & 0x00FF_FFFF;
     let (_, _, back_l) = hsl(back);
     // 挑不出个性色（无彩配色）：蒙版就是底色本身。半透明底色取不到就退回纯黑，
     // 蒙版至少还是一块实色，不会让面板整个消失。
     let Some((hue, sat)) = accent_hue(base) else {
-        return (VEIL_ALPHA << 24) | back;
+        return (alpha << 24) | back;
     };
     let light = if back_l < 0.5 {
         (back_l + 0.06).min(0.42)
@@ -577,7 +612,7 @@ pub fn theme_veil(base: &ColorScheme) -> u32 {
         (back_l - 0.04).max(0.58)
     };
     let tint = from_hsl(hue, (sat * 0.5).min(0.35), light);
-    (VEIL_ALPHA << 24) | tint
+    (alpha << 24) | tint
 }
 
 /// 配色里的"个性色"：饱和度最高、且明度不在两端的那个（返回 `(色相°, 饱和度)`）。
@@ -1522,7 +1557,7 @@ impl Painter<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{plain_scheme, theme_veil, Material, VEIL_ALPHA};
+    use super::{plain_scheme, theme_veil, veil_alpha, Material, VEIL_ALPHA};
     use weasel_style::ColorScheme;
 
     /// 只关心 back/text 的配色；其余按 `resolve` 的缺省关系填成同色，
@@ -1602,7 +1637,7 @@ mod tests {
         assert!(r > g && g > b, "色相不对（应偏橙）：r={r} g={g} b={b}");
         // 用的是**底色自己的明度**：深底不能被文字色提亮成浅底。
         assert!(r < 0x50, "蒙版被文字色提亮了：r={r}");
-        assert_eq!(veil >> 24, VEIL_ALPHA);
+        assert_eq!(veil >> 24, veil_alpha());
     }
 
     #[test]
@@ -1628,15 +1663,29 @@ mod tests {
     #[test]
     fn acrylic_veil_monochrome_palette_stays_neutral() {
         // 无彩配色（纯黑白皮肤）没有"Hue"可借 ⇒ 蒙版就是底色，绝不凭空造色。
-        assert_eq!(theme_veil(&steam()), (VEIL_ALPHA << 24) | 0x00_1B_1D_22);
+        assert_eq!(theme_veil(&steam()), (veil_alpha() << 24) | 0x00_1B_1D_22);
+    }
+
+    #[test]
+    fn veil_txt_overrides_opacity() {
+        // `veil.txt` 写百分数：70 更透、95 更实；带 % 和空白都认。
+        assert_eq!(super::parse_veil_pct("70"), Some(179)); // 70%  → 0xB3
+        assert_eq!(super::parse_veil_pct(" 78% "), Some(199)); // 78%  → 0xC7
+        assert_eq!(super::parse_veil_pct("95"), Some(242));
+        // 两头越界（低于 60 变玻璃 / 高于 95 没磨砂）与乱写一律当"没写"。
+        assert_eq!(super::parse_veil_pct("50"), None);
+        assert_eq!(super::parse_veil_pct("99"), None);
+        assert_eq!(super::parse_veil_pct("abc"), None);
+        assert_eq!(super::parse_veil_pct(""), None);
     }
 
     #[test]
     fn acrylic_veil_is_opaque_enough() {
-        // 「不那么透明」：蒙版必须占大头（≥80%），否则背后那道亮带照样一眼看见 ——
-        // 90:4x 提到 0xC0（75%）时用户仍然说「这是玻璃的效果啊」。
+        // 「不那么透明」：蒙版必须占大头（≥70%），否则背后那道亮带照样一眼看见 ——
+        // 0xC0（75%）时用户仍说「这是玻璃的效果啊」（根因是当时颜色被平均成灰）。
+        // 现在颜色已经跟配色走了，75~85% 之间是"磨砂"的可调范围，低于 70% 就变玻璃。
         assert!(
-            VEIL_ALPHA >= 0xCC,
+            VEIL_ALPHA >= 0xB3,
             "蒙版只有 {:.0}%，看着还是透明的",
             VEIL_ALPHA as f32 / 255.0 * 100.0
         );

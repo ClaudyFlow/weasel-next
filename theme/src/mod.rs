@@ -608,8 +608,9 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
                 // 实际色打出来：配色文件是官方 ABGR 字节序，肉眼以为的"橙字"到内部是
                 // `0xFF528CCD`（蓝）—— 蒙版跟的是**内部 ARGB**，对账时一眼就能看出差在哪。
                 format!(
-                    "配色蒙版 alpha={:#04X} · 实际色 {:#010X}",
-                    paint::VEIL_ALPHA,
+                    "配色蒙版 alpha={:#04X}（{:.0}%）· 实际色 {:#010X}",
+                    paint::veil_alpha(),
+                    paint::veil_alpha() as f32 / 255.0 * 100.0,
                     paint::theme_veil(&loaded.scheme)
                 )
             } else {
