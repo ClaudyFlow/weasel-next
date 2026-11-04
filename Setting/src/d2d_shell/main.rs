@@ -2392,8 +2392,10 @@ fn run() -> Result<(), String> {
             &corner as *const _ as *const core::ffi::c_void,
             core::mem::size_of::<i32>() as u32,
         );
-        // 系统级亚克力：与面板同色相（#1B1F27，alpha 控制染色强度）。
-        acrylic::enable_acrylic(hwnd, 0x991B1F27);
+        // 系统级亚克力（2026-11-04 用户要求"识别背景颜色"）:
+        // 染色 alpha 0x99→0x66(40%)——之前 60% 不透明深色把壁纸颜色全盖住,
+        // 只剩"黑板子"。降染色后 DWM 模糊的背景颜色能透出来。
+        acrylic::enable_acrylic(hwnd, 0x661B1F27);
 
         // 配色页数据：与 Slint 版同一份（`weasel_settings::themes`）。
         let shared = weasel_settings::themes::shared_dir_for_exe();
