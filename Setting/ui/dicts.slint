@@ -90,6 +90,8 @@ export component DictPage inherits VerticalBox {
         // vertical-stretch 不再起作用；结果区自己内部滚动。
         height: 300px;
         ScrollView {
+            // 不显示水平滚动条（用户 2026-11-04 11:0x）：窗口窄了也不该出现横条。
+            horizontal-scrollbar-policy: always-off;
             VerticalBox {
                 for row in root.rows : HorizontalBox {
                     height: 32px;

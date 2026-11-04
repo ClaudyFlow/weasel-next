@@ -226,6 +226,8 @@ export component ColorSchemesPage inherits VerticalBox {
         // 最后一行被窗口底边裁掉（用户 2026-10-18 报「下面不全」）。
         vertical-stretch: 1;
         ScrollView {
+            // 不显示水平滚动条（用户 2026-11-04 11:0x）：窗口窄了也不该出现横条。
+            horizontal-scrollbar-policy: always-off;
             VerticalBox {
                 for item in root.schemes: SchemeItem {
                     entry: item;

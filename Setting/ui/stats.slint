@@ -213,6 +213,8 @@ export component StatsPage inherits Rectangle {
     // 加起来比窗口高，以前直接裁在窗口底边，常用字只露个标题。
     // 外面套 ScrollView：窗口够高时看不出差别，不够高就能往下滚。
     ScrollView {
+        // 不显示水平滚动条（用户 2026-11-04 11:0x）：窗口窄了也不该出现横条。
+        horizontal-scrollbar-policy: always-off;
     VerticalLayout {
         padding: 14px;
         // 底部只留一点点：灵感来源是页面最后一行，要贴着窗口下沿

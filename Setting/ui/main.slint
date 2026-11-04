@@ -502,6 +502,8 @@ export component SettingsWindow inherits Window {
             spacing: 8px;
             // 用户 2026-10-18：不要显示那一行 `C:\Users\…\weasel.custom.toml` 路径。
             ScrollView {
+                // 不显示水平滚动条（用户 2026-11-04 11:0x）：窗口窄了也不该出现横条。
+                horizontal-scrollbar-policy: always-off;
                 VerticalBox {
                     // 剩余高度不能分给子项：默认 alignment: stretch 会把空白的
                     // 字段行/标题块按比例撑开，「应用选项」「更新」这种内容少的页

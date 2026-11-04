@@ -167,6 +167,8 @@ export component SchemaPicker inherits VerticalBox {
         background: #ffffff;
         vertical-stretch: 1;
         ScrollView {
+            // 不显示水平滚动条（用户 2026-11-04 11:0x）：窗口窄了也不该出现横条。
+            horizontal-scrollbar-policy: always-off;
             VerticalBox {
                 for row in root.rows : Rectangle {
                     height: row.header ? 30px : 52px;

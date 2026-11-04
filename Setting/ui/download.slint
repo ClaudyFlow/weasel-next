@@ -326,6 +326,8 @@ export component DownloadPage inherits VerticalBox {
         vertical-stretch: 1;
         min-height: 240px;
         ScrollView {
+            // 不显示水平滚动条（用户 2026-11-04 11:0x）：窗口窄了也不该出现横条。
+            horizontal-scrollbar-policy: always-off;
             VerticalBox {
                 for repo in root.repos : RepoCard {
                     repo: repo;
