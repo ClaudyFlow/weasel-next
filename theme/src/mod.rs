@@ -572,11 +572,33 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
         ),
         Err(_) => loaded.style.glass,
     };
-    // 自绘高斯模糊:`style/glass_blur: "self"` 时关 DWM 亚克力、改显示前抓屏。
-    let glass_self = loaded.style.glass_blur.trim().eq_ignore_ascii_case("self");
+    // 模糊实现由**材质档位**决定，不再让 `style/glass_blur` 单独指挥
+    // （用户 2026-11-04 08:5x：「设置是不是玻璃？磨砂透明的才叫玻璃，
+    //   磨砂带颜色的是亚克力，亚克力是取背景色的」）。
+    //
+    // 原来的毛病：档位（material.txt）和实现（`glass_blur`，默认 `dwm`）是两个
+    // 互不相干的开关。`dwm` = DWM 亚克力，本身就取背景色 + 叠 20% 白 tint ⇒
+    // **选「透明」出来的是亚克力**，名不符实。
+    //
+    // 现在的对应关系：
+    // - [`Material::Glass`]（透明）  → 自绘高斯模糊（抓屏 + 箱式模糊，面板底全透明）
+    //                                  ⇒ 真玻璃：磨砂但**不染色**
+    // - [`Material::Acrylic`]（亚克力）→ DWM 亚克力（取系统背景色 + tint）
+    //                                  ⇒ 磨砂 + 有色
+    // - 不透明 / 金属            → 两者都不用，压根没有模糊
+    //
+    // `WEASEL_GLASS_BLUR=self|dwm` 仍可强制覆盖，只作排查用；`style/glass_blur`
+    // 从此只是兼容旧配置的残留键，不再参与决策（值仍打进诊断日志，便于对账）。
+    let tier_now = paint::tier();
+    let glass_self = match std::env::var("WEASEL_GLASS_BLUR") {
+        Ok(value) => value.trim().eq_ignore_ascii_case("self"),
+        Err(_) => tier_now == paint::Material::Glass,
+    };
     crate::diagnostics::record(format_args!(
-        "glass_blur 配置: {:?} → glass_self={glass_self} (glass={glass})",
-        loaded.style.glass_blur
+        "材质 {:?} + glass={glass} + glass_blur(残留配置)={:?} → glass_self={glass_self}（{}）",
+        tier_now,
+        loaded.style.glass_blur,
+        if glass_self { "抓屏模糊·不染色" } else { "DWM 亚克力·取背景色" }
     ));
     // 毛玻璃染色用配色背景色；`loaded` 之后会被 `App::new` 吞掉，先取出来。
     let tint = loaded.scheme.back_color;
@@ -692,9 +714,12 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
                 core::mem::size_of::<u32>() as u32,
             );
         }
-        // 亚克力只给玻璃/亚克力档（`flat`）。不透明/金属档窗口外面那圈（offset ≈ 10px）
-        // 没有面板盖住，开了亚克力就是"面板外多一层浅色"（用户 2026-11-04 00:5x）。
-        if glass && paint::tier().flat() {
+        // 亚克力**只给亚克力档**：
+        // - 玻璃档走自绘抓屏模糊，DWM 再叠一层就成了"糊上糊"，边缘还会有 DWM 那层
+        //   系统着色（用户 2026-11-04：「磨砂透明的才叫玻璃」）。
+        // - 不透明/金属档窗口外面那圈（offset ≈ 10px）没有面板盖住，开了亚克力就是
+        //   "面板外多一层浅色"（用户 2026-11-04 00:5x 截图）。
+        if glass && tier_now.flat() && !glass_self {
             accent::sync_acrylic(hwnd, true, tint);
         }
         if glass {
@@ -1021,7 +1046,12 @@ impl Window {
                 return;
             }
             let (w, h) = (wr.right - wr.left, wr.bottom - wr.top);
-            if w <= 0 || h <= 0 {
+            // **别抓"还没定位"的窗口**：创建/隐藏期间窗口只有 16x16，抓到的是一小块
+            // 黑图（平均亮度 0），既会把 8x8 的位图拉伸成整面板的"糊墙"，也会让
+            // 字色判断永远按"深色背景"算（用户 2026-11-04 问"字体自动变色呢"）。
+            // 真实候选窗至少也有几十像素，小于这个门槛直接跳过，保留上一张好图。
+            const MIN_CAPTURE: i32 = 48;
+            if w < MIN_CAPTURE || h < MIN_CAPTURE {
                 return;
             }
             let Some((mut rgba, bw, bh)) = backdrop::capture_blurred(wr.left, wr.top, w, h)
@@ -1068,9 +1098,14 @@ impl Window {
                 return;
             };
             let mean = {
+                // 只统计**不透明**像素：圆角遮罩把四角刷成 alpha=0（RGB 也是 0），
+                // 一并平均进去会把亮度算低一截，字色就偏"按深底算"。
                 let mut sum: u64 = 0;
                 let mut n: u64 = 0;
                 for pixel in rgba.chunks_exact(4).step_by(37) {
+                    if pixel[3] == 0 {
+                        continue;
+                    }
                     sum += pixel[1] as u64;
                     n += 1;
                 }
@@ -1293,21 +1328,19 @@ impl Window {
         };
         let target = presenter.render_target();
         let scheme = &*scheme;
-        // 抓屏模糊档（透明/亚克力）要用浅底配色：steam 是深底浅字，白底上编码/候选/注释
-        // 全是白字 ⇒ 看不见（2026-11-01 用户截图）。其它材质保持配色表原样。
+        // 抓屏模糊档（透明/亚克力）：面板不再铺死白，配色与字色要跟着**真实背景**走。
+        // 其它材质（不透明/金属）底色是自己铺的，配色表原样即可。
         let plain_palette;
         let tier = paint::tier();
         let scheme = if tier.flat() {
-            // 面板不再铺白（直接透明），文字颜色要跟着**背景亮度**走：
-            // 深色背景上用浅色字，否则黑字糊在黑背景里看不见。
-            // 亚克力例外：它在模糊底上再铺 50% 白 ⇒ 有效背景一定是浅的，
-            // 按原始背景明暗选字色会在深色壁纸上变成"白字压乳白"（看不见）。
-            let backdrop_is_dark = if tier == paint::Material::Acrylic {
-                false
-            } else {
-                backdrop.as_ref().map(|b| b.luma < 128).unwrap_or(false)
-            };
-            plain_palette = paint::plain_scheme(scheme, backdrop_is_dark);
+            // 玻璃档：抓到的背景平均亮度就是"有效背景"；
+            // 亚克力档：DWM 模糊 + 50% 配色底，`plain_scheme` 会按"桌面纯黑/纯白"
+            // 两种极端一起算，保证换壁纸也不会出现"深字压深底"。
+            plain_palette = paint::plain_scheme(
+                scheme,
+                tier,
+                backdrop.as_ref().map(|b| b.luma as f32),
+            );
             &plain_palette
         } else {
             scheme

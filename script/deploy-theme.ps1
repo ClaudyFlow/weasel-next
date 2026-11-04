@@ -10,7 +10,15 @@
 [CmdletBinding()]
 param(
     [string]$InstallDir = 'C:\Program Files\Rime-Next\Weasel-Next-0.18.5',
-    [string]$TargetDir  = 'C:\Code\Weasel-Next\target\release'
+    [string]$TargetDir  = 'C:\Code\Weasel-Next\target\release',
+    # 编译产物名 → 安装目录里的名字。安装布局在 2026-11 改过：渲染器按
+    # `weasel-next-theme.dll` 加载（LoadLibrary），而 cargo 产物是
+    # `weasel_theme_official.dll`，所以两边名字不同，不能硬编码同一个。
+    [string]$SourceName = 'weasel_theme_official.dll',
+    [string]$DllName    = 'weasel-next-theme.dll',
+    # 部署完成后在右下角弹通知（和输入法自己的"配置加载失败"同一条 Toast 通道）。
+    # 批处理/CI 里不想要弹窗时加 -NoToast。
+    [switch]$NoToast
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,6 +49,59 @@ function Stop-WeaselProcesses {
     Start-Sleep -Seconds 2
 }
 
+function Show-DeployToast {
+    <#
+      在右下角弹一条通知，和输入法自己（broker）发的"配置加载失败"走同一条
+      Windows Toast 通道：AUMID 用 `WeaselNext.Broker`，也就是开始菜单里
+      「小狼毫Next算法服务.lnk」注册的那个 AppUserModelID。
+
+      Toast 不可用（AUMID 没注册/通知被系统关掉）时退回托盘气泡，
+      再不行就只写控制台 —— 通知失败绝不影响部署结果。
+    #>
+    param(
+        [Parameter(Mandatory)] [string]$Title,
+        [Parameter(Mandatory)] [string]$Body,
+        [string]$AppId = 'WeaselNext.Broker',
+        # 气泡/TToast 都是本进程持有的，脚本一退出就收走 ⇒ 停留几秒再收尾。
+        [int]$Seconds = 7
+    )
+    $shown = $false
+    try {
+        $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+        $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]
+        $escape = { param($s) [System.Security.SecurityElement]::Escape($s) }
+        $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+        $xml.LoadXml("<toast><visual><binding template=`"ToastGeneric`"><text>$(& $escape $Title)</text><text>$(& $escape $Body)</text></binding></visual></toast>")
+        $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($AppId).Show($toast)
+        $shown = $true
+    } catch {
+        Write-Host "Toast 不可用（$($_.Exception.Message)），改用托盘气泡"
+    }
+    if (-not $shown) {
+        try {
+            Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+            Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+            $icon = New-Object System.Windows.Forms.NotifyIcon
+            $icon.Icon = [System.Drawing.SystemIcons]::Information
+            $icon.BalloonTipTitle = $Title
+            $icon.BalloonTipText = $Body
+            $icon.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+            $icon.Visible = $true
+            $icon.ShowBalloonTip($Seconds * 1000)
+            Start-Sleep -Seconds $Seconds
+            $icon.Visible = $false
+            $icon.Dispose()
+            return
+        } catch {
+            Write-Warning "托盘气泡也失败: $($_.Exception.Message)"
+            return
+        }
+    }
+    # Toast 由通知中心托管，本进程退出不会收走，但仍等一会儿让调用方看到弹窗过程。
+    Start-Sleep -Seconds 2
+}
+
 function Register-PendingRename {
     param(
         [Parameter(Mandatory)] [string]$Staged,
@@ -66,8 +127,8 @@ function Register-PendingRename {
 # ---------- 主流程 ----------
 Assert-Admin
 
-$src = Join-Path $TargetDir 'weasel_theme_official.dll'
-$dst = Join-Path $InstallDir 'weasel_theme_official.dll'
+$src = Join-Path $TargetDir $SourceName
+$dst = Join-Path $InstallDir $DllName
 
 if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { throw "找不到编译产物: $src（请先 cargo build --release -p weasel-theme-official）" }
 if (-not (Test-Path -LiteralPath $dst -PathType Leaf)) { throw "找不到安装目录里的 dll: $dst" }
@@ -76,6 +137,10 @@ $srcHash = (Get-FileHash -LiteralPath $src -Algorithm SHA256).Hash
 $dstHash = (Get-FileHash -LiteralPath $dst -Algorithm SHA256).Hash
 if ($srcHash -eq $dstHash) {
     Write-Host "内容一致，无需覆盖: $dst"
+    if (-not $NoToast) {
+        Show-DeployToast -Title '小狼毫Next：主题已是最新' `
+            -Body ("DLL 哈希一致，本次没有覆盖。" + [Environment]::NewLine + "SHA256 " + $srcHash.Substring(0, 12))
+    }
     exit 0
 }
 
@@ -105,7 +170,7 @@ try {
 }
 
 # 校验
-$after = (Get-FileHash -LiteralPath (Join-Path $InstallDir 'weasel_theme_official.dll') -Algorithm SHA256).Hash
+$after = (Get-FileHash -LiteralPath (Join-Path $InstallDir $DllName) -Algorithm SHA256).Hash
 if ($after -eq $srcHash) { Write-Host "校验通过（哈希一致）" } else { Write-Warning "校验不一致，可能待重启替换生效" }
 
 # 重启输入法
@@ -124,3 +189,22 @@ if (Test-Path -LiteralPath $server) {
 
 Write-Host ""
 Write-Host "部署完成。"
+
+# 右下角通知：部署结果 + 当前档位/配色，省得再去翻 theme.log 对账。
+if (-not $NoToast) {
+    $themeDir = Join-Path $env:APPDATA 'Rime-Next\theme'
+    $material = '未知'
+    $mf = Join-Path $themeDir 'material.txt'
+    if (Test-Path -LiteralPath $mf) { $material = (Get-Content -LiteralPath $mf -Raw).Trim() }
+    $scheme = '未知'
+    $yf = Join-Path $themeDir 'theme.yaml'
+    if (Test-Path -LiteralPath $yf) {
+        $match = Select-String -LiteralPath $yf -Pattern '^scheme\s*:\s*(\S+)' | Select-Object -First 1
+        if ($match) { $scheme = $match.Matches[0].Groups[1].Value.Trim('"', "'") }
+    }
+    $body = @(
+        "材质 $material · 配色 $scheme"
+        "SHA256 $($srcHash.Substring(0, 12))"
+    ) -join [Environment]::NewLine
+    Show-DeployToast -Title '小狼毫Next：主题已部署' -Body $body
+}

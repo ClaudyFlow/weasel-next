@@ -75,64 +75,114 @@ pub fn tier() -> Material {
     Material::parse(&material())
 }
 
-/// `plain` 档（纯白面板）的浅底配色 —— 逐项照抄 `C:\Code\_shots\cand_preview.html`。
+/// 抓屏模糊/亚克力档（`flat`）的配色 —— 面板底不再写死白色，字色**自动**跟着
+/// 实际能看见的背景变（用户 2026-11-04：「字体自动变色」「亚克力识别配色」）。
 ///
-/// 配色里的 `steam` 是**深底浅字**：面板一换成纯白，编码/候选/注释全变成
-/// "白底白字"，肉眼就是"看不见"（2026-11-01 用户截图：只有高亮项看得见）。
-/// 所以只在 plain 档套这套 HTML 颜色，其它材质仍然用配色表里的值。
-pub fn plain_scheme(base: &ColorScheme, backdrop_is_dark: bool) -> ColorScheme {
-    /// 背景与配色"对不上"时的兜底深色字（HTML 的 `#1b1d22`）。
+/// 两个档位的"有效背景"不一样，所以分开算：
+///
+/// * **玻璃**：面板全透明，背后就是抓屏 + 高斯模糊的那张图 ⇒ 直接用它算出来的
+///   平均亮度；抓不到背景（没有抓屏权限/老系统）时 `Painter::draw` 会退回 50% 白，
+///   这里也按白底估。
+/// * **亚克力**：DWM 在背后做系统模糊，面板再压一层 **配色自己的底色**（50% 不透明，
+///   见 `Painter::draw`）。桌面亮度事先不知道，就取"桌面纯黑 / 纯白"两种极端，
+///   要求两种情况下对比度都够 —— 否则深色壁纸上是"深字压深底"，浅色壁纸上是
+///   "白字压白底"，总有一边看不清。
+///
+/// 主题自己的颜色**优先**：只有对比度掉到门槛以下才翻成兜底墨色，绝不无条件强制白/黑
+/// （用户 18:2x：「识别 weasel 的 theme」）。
+pub fn plain_scheme(
+    base: &ColorScheme,
+    tier: Material,
+    backdrop_luma: Option<f32>,
+) -> ColorScheme {
+    /// 对比度不够时的兜底深色字（HTML 的 `#1b1d22`）。
     const INK: u32 = 0xFF_1B_1D_22;
     /// 兜底浅色字。
     const INK_LIGHT: u32 = 0xFF_F2_F3_F5;
     const MUTED: u32 = 0xFF_6B_72_80;
     const MUTED_LIGHT: u32 = 0xFF_C9_CE_D6;
-    const PAGER_LIGHT: u32 = 0xFF_9A_A4_B2;
-    /// 高亮框底：HTML `.hilite` 的 `#3b4a63`；字用白色。
+    /// 高亮框底：HTML `.hilite` 的 `#3b4a63`；字用高对比色。
     const HILITE_BG: u32 = 0xFF_3B_4A_63;
+    /// 正文/候选的最低对比度（WCAG AA 正文）。
+    const TEXT_MIN: f32 = 4.5;
+    /// 注释、编码、翻页箭头这类次要文字可以松一点。
+    const MUTED_MIN: f32 = 3.0;
 
+    /// 平均亮度（0..255），用来给"只知道一坨背景"的场景估色。
     fn luma(argb: u32) -> f32 {
         let r = ((argb >> 16) & 0xff) as f32;
         let g = ((argb >> 8) & 0xff) as f32;
         let b = (argb & 0xff) as f32;
         0.299 * r + 0.587 * g + 0.114 * b
     }
-    // **识别 weasel 的 theme**（用户 18:2x）：文字用主题自己配色里的颜色，
-    // 只有"背景和配色明暗对不上"时才翻 —— 例如 steam（深底浅字）压在白网页上，
-    // 浅字就看不见了，这时才换成深色字。绝不无条件强制白/黑。
-    let scheme_dark = luma(base.back_color) < 128.0;
-    let mismatch = scheme_dark != backdrop_is_dark;
-    let (ink, muted, pager) = if mismatch {
-        if backdrop_is_dark {
-            (INK_LIGHT, MUTED_LIGHT, PAGER_LIGHT)
+    /// sRGB 分量 → 线性。
+    fn linear(value: u32) -> f32 {
+        let v = (value & 0xff) as f32 / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
         } else {
-            (INK, MUTED, PAGER_LIGHT)
+            ((v + 0.055) / 1.055).powf(2.4)
         }
-    } else {
-        (base.text_color, base.comment_text_color, base.prevpage_color)
+    }
+    /// WCAG 相对亮度。
+    fn rel(argb: u32) -> f32 {
+        0.2126 * linear((argb >> 16) & 0xff)
+            + 0.7152 * linear((argb >> 8) & 0xff)
+            + 0.0722 * linear(argb & 0xff)
+    }
+    /// 把"平均亮度"当成灰色，取它的相对亮度。
+    fn gray(luma: f32) -> f32 {
+        let v = luma.clamp(0.0, 255.0).round() as u32;
+        rel((v << 16) | (v << 8) | v)
+    }
+    /// WCAG 对比度（1:1 ~ 21:1）。
+    fn contrast(a: f32, b: f32) -> f32 {
+        let (hi, lo) = if a > b { (a, b) } else { (b, a) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+    /// 在**每一种可能的背景**下的最小对比度（最坏情况）。
+    fn worst_contrast(color: u32, backgrounds: &[f32]) -> f32 {
+        backgrounds
+            .iter()
+            .map(|bg| contrast(rel(color), gray(*bg)))
+            .fold(f32::MAX, f32::min)
+    }
+    /// 配色自己的颜色优先；最坏情况都掉到 `min` 以下才换成兜底墨色。
+    fn keep_or(color: u32, backgrounds: &[f32], min: f32, fallback: u32) -> u32 {
+        if worst_contrast(color, backgrounds) >= min {
+            color
+        } else {
+            fallback
+        }
+    }
+
+    let veil = VEIL_ALPHA as f32 / 255.0;
+    let base_luma = luma(base.back_color);
+    let backgrounds: [f32; 2] = match tier {
+        // 亚克力：配色底 + 桌面（未知 ⇒ 纯黑/纯白两头都要过关）。
+        Material::Acrylic => [base_luma * veil, base_luma * veil + 255.0 * (1.0 - veil)],
+        // 玻璃：真的有一张糊过的背景图就当它准；没有就按视觉上的白底估。
+        _ => [backdrop_luma.unwrap_or(255.0); 2],
     };
+    // 兜底墨色取"最坏情况下更清楚"的那一边。
+    let ink = if worst_contrast(INK, &backgrounds) >= worst_contrast(INK_LIGHT, &backgrounds) {
+        INK
+    } else {
+        INK_LIGHT
+    };
+    let muted = if ink == INK { MUTED } else { MUTED_LIGHT };
+
     let mut scheme = base.clone();
-    scheme.back_color = 0x80FF_FFFF;
+    // 面板底保留**配色自己的底色**：亚克力档要拿它做 50% 蒙版（「亚克力识别配色」），
+    // 玻璃档虽然全透明，模式提示之类的小窗也还要用它染色。
     // HTML 的面板没有描边、没有投影；边框和阴影全透明（透明就不画）。
     scheme.border_color = 0;
     scheme.shadow_color = 0;
-    // 各字段一律用**主题自己**的颜色（steam：编码橙、候选白、注释灰…）；
-    // 只有背景与配色明暗对不上时（`mismatch`）才换成反差字色。
-    let pick = |c: u32| -> u32 {
-        if !mismatch {
-            return c;
-        }
-        // 面板底是「全透明（玻璃）」或「半透明白（亚克力）」，字色必须跟着**背景明暗**走。
-        // 2026-11-02 实测：原来按"原配色自己的明暗"挑（白字→INK_LIGHT），亚克力档
-        // 变成 #939393 底 + #F2F3F5 字，对比度 ≈2.4:1（几乎看不清）。`ink` 已按
-        // backdrop_is_dark 选好对比色，直接用它。
-        ink
-    };
-    scheme.text_color = pick(base.text_color);
-    scheme.hilited_text_color = pick(base.hilited_text_color);
-    scheme.candidate_text_color = pick(base.candidate_text_color);
-    scheme.label_color = pick(base.label_color);
-    scheme.comment_text_color = if mismatch { muted } else { base.comment_text_color };
+    scheme.text_color = keep_or(base.text_color, &backgrounds, TEXT_MIN, ink);
+    scheme.candidate_text_color = keep_or(base.candidate_text_color, &backgrounds, TEXT_MIN, ink);
+    scheme.label_color = keep_or(base.label_color, &backgrounds, TEXT_MIN, ink);
+    scheme.comment_text_color =
+        keep_or(base.comment_text_color, &backgrounds, MUTED_MIN, muted);
     scheme.candidate_back_color = 0;
     scheme.candidate_border_color = 0;
     scheme.candidate_shadow_color = 0;
@@ -146,20 +196,28 @@ pub fn plain_scheme(base: &ColorScheme, backdrop_is_dark: bool) -> ColorScheme {
         HILITE_BG
     };
     scheme.hilited_candidate_back_color = hilite_bg;
-    // 高亮块上的字也用主题的（没给就用白色，保证可读）
+    // 高亮块上的字要对的是**高亮块底色**，不是面板背景 —— 两边分开算对比度。
+    let hilite_luma = [luma(hilite_bg)];
+    let hilite_ink = if worst_contrast(INK, &hilite_luma) >= worst_contrast(INK_LIGHT, &hilite_luma)
+    {
+        INK
+    } else {
+        INK_LIGHT
+    };
     let theme_hilite_text = base.hilited_candidate_text_color;
     let hilite_text = if (theme_hilite_text >> 24) >= 0x40 {
-        theme_hilite_text
+        keep_or(theme_hilite_text, &hilite_luma, MUTED_MIN, hilite_ink)
     } else {
-        0xFF_FF_FF_FF
+        hilite_ink
     };
+    scheme.hilited_text_color = hilite_text;
     scheme.hilited_candidate_text_color = hilite_text;
     scheme.hilited_label_color = hilite_text;
     scheme.hilited_comment_text_color = hilite_text;
     scheme.hilited_candidate_border_color = 0;
     scheme.hilited_candidate_shadow_color = 0;
-    scheme.prevpage_color = pager;
-    scheme.nextpage_color = pager;
+    scheme.prevpage_color = keep_or(base.prevpage_color, &backgrounds, MUTED_MIN, muted);
+    scheme.nextpage_color = keep_or(base.nextpage_color, &backgrounds, MUTED_MIN, muted);
     scheme
 }
 
@@ -434,6 +492,12 @@ impl<'a> Painter<'a> {
 /// [`GLASS_ALPHA`]，本就半透明的配色保持原样。文字仍是实色绘制，可读性不受影响。
 pub(crate) const GLASS_ALPHA: u32 = 0x33;
 
+/// 亚克力档面板上那层**配色底**的不透明度（0..255）。
+///
+/// `plain_scheme` 用它算"有效背景亮度"（决定字色），`Painter::draw` 用它铺面板 ——
+/// 两处必须是同一个值，否则字色按 A 算、底按 B 画，看着就会"算得挺好却看不清"。
+pub(crate) const VEIL_ALPHA: u32 = 0x80;
+
 /// 玻璃态的**亮度层**（scrim）：铺在 tint 之下，压住背景穿透。
 ///
 /// 只有一层 20% 的 tint 时，背后的桌面/网页纹理会整片透上来 ⇒ 面板发灰发脏、
@@ -604,8 +668,13 @@ impl Painter<'_> {
                     Material::Metal => {
                         0xFF00_0000 | (darken_color(self.scheme.back_color, 0.78) & 0x00FF_FFFF)
                     }
-                    // 亚克力：模糊底上再铺 50% 白（原 `--features acrylic` 那一档）。
-                    Material::Acrylic => 0x80FF_FFFF,
+                    // 亚克力：模糊底上再铺**配色自己的底色**（50% 不透明）。
+                    // 原来是写死的 0x80FF_FFFF（纯白蒙版）—— 用户 2026-11-04：
+                    // 「亚克力识别配色」，DWM 取的背景色 + 白蒙版出来是"磨砂但没配色"，
+                    // 蒙版换成配色的 back_color，亚克力才跟着皮肤走。
+                    Material::Acrylic => {
+                        (VEIL_ALPHA << 24) | (self.scheme.back_color & 0x00FF_FFFF)
+                    }
                     // 玻璃：**不要白色**（用户 18:1x「不要白色了，直接透明」）。
                     // 抓不到背景（没抓屏权限/老系统）时才退回 50% 白，否则面板会整个消失。
                     Material::Glass => {
@@ -1275,6 +1344,96 @@ impl Painter<'_> {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{plain_scheme, Material, VEIL_ALPHA};
+    use weasel_style::ColorScheme;
+
+    /// 只关心 back/text 的配色；其余按 `resolve` 的缺省关系填成同色，
+    /// 免得"没填的颜色"混进对比度判断。
+    fn scheme(back: u32, text: u32) -> ColorScheme {
+        ColorScheme {
+            name: "test".into(),
+            author: String::new(),
+            color_format: String::new(),
+            back_color: back,
+            border_color: text,
+            shadow_color: 0,
+            text_color: text,
+            candidate_text_color: text,
+            candidate_back_color: 0,
+            candidate_border_color: 0,
+            candidate_shadow_color: 0,
+            label_color: text,
+            comment_text_color: text,
+            hilited_text_color: text,
+            hilited_back_color: back,
+            hilited_border_color: 0,
+            hilited_shadow_color: 0,
+            hilited_candidate_text_color: text,
+            hilited_candidate_back_color: 0,
+            hilited_candidate_border_color: 0,
+            hilited_candidate_shadow_color: 0,
+            hilited_label_color: text,
+            hilited_comment_text_color: text,
+            hilited_mark_color: 0,
+            nextpage_color: text,
+            prevpage_color: text,
+        }
+    }
+
+    /// steam：深底（#1B1D22 ≈ 29）浅字（#F2F3F5）。
+    fn steam() -> ColorScheme {
+        scheme(0xFF_1B_1D_22, 0xFF_F2_F3_F5)
+    }
+
+    #[test]
+    fn glass_keeps_theme_text_on_matching_backdrop() {
+        // 深色桌面 + 深底浅字：主题自己的白字对比度足够 ⇒ 原样保留。
+        let out = plain_scheme(&steam(), Material::Glass, Some(20.0));
+        assert_eq!(out.text_color, 0xFF_F2_F3_F5);
+        assert_eq!(out.candidate_text_color, 0xFF_F2_F3_F5);
+        assert_eq!(out.comment_text_color, 0xFF_F2_F3_F5);
+    }
+
+    #[test]
+    fn glass_flips_text_on_opposite_backdrop() {
+        // 白网页 + 深底浅字：白字压白底看不清 ⇒ 自动换成深墨色。
+        let out = plain_scheme(&steam(), Material::Glass, Some(245.0));
+        assert_eq!(out.text_color, 0xFF_1B_1D_22);
+        assert_eq!(out.comment_text_color, 0xFF_6B_72_80);
+        // 高亮块底色没变，块上的字仍要对它（#3b4a63 是深色底 ⇒ 白字）。
+        assert_eq!(out.hilited_candidate_text_color, 0xFF_F2F3_F5);
+    }
+
+    #[test]
+    fn glass_without_backdrop_assumes_light() {
+        // 抓不到背景（老系统/无抓屏权限）时面板退回 50% 白 ⇒ 按白底挑字色。
+        let out = plain_scheme(&steam(), Material::Glass, None);
+        assert_eq!(out.text_color, 0xFF_1B_1D_22);
+    }
+
+    #[test]
+    fn acrylic_veil_uses_palette_color() {
+        // 「亚克力识别配色」：蒙版是配色自己的底色（steam 的 #1B1D22），不是纯白。
+        let base = steam();
+        let out = plain_scheme(&base, Material::Acrylic, None);
+        assert_eq!(out.back_color & 0x00FF_FFFF, 0x00_1B_1D_22);
+        assert_eq!(VEIL_ALPHA, 0x80);
+    }
+
+    #[test]
+    fn acrylic_text_survives_both_desktop_extremes() {
+        // steam 深底：不管壁纸是纯黑还是纯白，文字都要够亮（浅色字）。
+        let out = plain_scheme(&steam(), Material::Acrylic, None);
+        assert_eq!(out.text_color, 0xFF_F2_F3_F5);
+        // 反过来：浅底深字的配色（#F5F6F8 底 + #1B1D22 字）也得用深字。
+        let light = scheme(0xFF_F5_F6_F8, 0xFF_1B_1D_22);
+        let out = plain_scheme(&light, Material::Acrylic, None);
+        assert_eq!(out.text_color, 0xFF_1B_1D_22);
     }
 }
 
