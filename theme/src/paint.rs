@@ -45,7 +45,8 @@ pub enum Material {
     /// 亚克力：同样抓屏模糊（糊得更狠），再铺一层 85% 的**配色蒙版** —— 一眼看得出有颜色、
     /// 比玻璃「实」得多，`back_color` 的明暗 + 配色个性色的色相（见 [`theme_veil`]）。
     Acrylic,
-    /// 不透明：用 yaml 的 `back_color` 铺满，不抓屏、不模糊、不留投影边。
+    /// 默认（设置里叫「默认」，2026-11-04 10:50 之前叫"不透明"）：用 yaml 的
+    /// `back_color` 铺满，不抓屏、不模糊、不留投影边 —— 就是主题本来的样子。
     Opaque,
     /// 金属（老档，只为兼容旧的 `material.txt`）：不透明哑光 + 上白下黑渐变。
     Metal,
@@ -63,7 +64,9 @@ impl Material {
     pub fn parse(text: &str) -> Self {
         match text.trim().to_ascii_lowercase().as_str() {
             "acrylic" => Material::Acrylic,
-            "opaque" | "original" | "solid" => Material::Opaque,
+            // 设置界面 2026-11-04 10:50 起把这档叫「默认」，所以 `default` 也认；
+            // `opaque` / `original` / `solid` 是它以前的名字，旧文件继续有效。
+            "default" | "opaque" | "original" | "solid" => Material::Opaque,
             "metal" => Material::Metal,
             // "glass" / "plain" / 空 / 垃圾值 —— 都是透明档
             _ => Material::Glass,
@@ -509,15 +512,18 @@ pub(crate) const GLASS_ALPHA: u32 = 0x33;
 /// 2026-11-04 09:4x 用户：「亚克力怎么是透明的」—— 原来是 `0x80`（50%），一半桌面直接透
 /// 上来，糊得再狠看着也像玻璃；先提到 `0xC0`（75%），结果 10:2x 用户还是说
 /// 「这是玻璃的效果啊」—— 因为背后那道亮带 25% 透上来照样一眼能看见，于是提到 `0xD8`（85%）。
-/// 10:41 用户再回调一档：「亚克力再透明一点就好」—— 85% 时背景几乎只剩"有没有东西"，
-/// 磨砂感在暗色桌面上看不出来。现在 **`0xD1`（82%）**：背景的明暗起伏能看见了
+/// 10:41 用户再回调一档，10:50 定在 **`0xCC`（80%）**：背景的明暗起伏能看见了
 /// （这才是磨砂该有的"透光不透影"），但因为糊到 σ=8、且被配色染过，仍旧看不出是什么。
-/// 这个比例正好对齐 Windows Fluent 亚克力的 tint opacity 0.8。
+/// 这个比例正好对齐 Windows Fluent 亚克力的 tint opacity 0.8（即"透出 20%"）。
+///
+/// 三档的"透明度"口径（面板底的不透明占比）：
+/// 透明档 **0%**（面板底全透明，只剩抓屏模糊图；抓不到屏幕才退回 50% 白）
+/// · 亚克力 **80%** · 默认（原"不透明"）**100%**（yaml 的 `back_color` 铺满）。
 ///
 /// `plain_scheme` 用它算"有效背景亮度"（决定字色），`Painter::draw` 用它铺面板 ——
 /// 两处必须是同一个值，否则字色按 A 算、底按 B 画，看着就会"算得挺好却看不清"。
 /// 运行时可用 [`veil_alpha`]（`veil.txt`）覆盖。
-pub(crate) const VEIL_ALPHA: u32 = 0xD1;
+pub(crate) const VEIL_ALPHA: u32 = 0xCC;
 
 /// 蒙版不透明度的**实际生效值**：`VEIL_ALPHA` 可被
 /// `%APPDATA%\Rime-Next\theme\veil.txt`（一个 60..95 的百分数）实时覆盖。
@@ -1677,6 +1683,20 @@ mod tests {
         assert_eq!(super::parse_veil_pct("99"), None);
         assert_eq!(super::parse_veil_pct("abc"), None);
         assert_eq!(super::parse_veil_pct(""), None);
+    }
+
+    #[test]
+    fn material_default_is_a_tier_name() {
+        // 设置界面 2026-11-04 10:50 起第三档叫「默认」，文件里也可能写 `default`
+        // —— 必须解析成同一档（不抓屏、不模糊、back_color 铺满），旧名继续有效。
+        use super::Material;
+        for text in ["default", "opaque", "original", "solid", " DEFAULT "] {
+            assert_eq!(Material::parse(text), Material::Opaque, "{text:?}");
+        }
+        // 另外两档不受影响。
+        assert_eq!(Material::parse("glass"), Material::Glass);
+        assert_eq!(Material::parse("acrylic"), Material::Acrylic);
+        assert_eq!(Material::parse(""), Material::Glass);
     }
 
     #[test]

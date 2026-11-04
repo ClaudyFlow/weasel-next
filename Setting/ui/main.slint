@@ -58,7 +58,8 @@ export component SettingsWindow inherits Window {
     in property <color> scheme-preview-comment: #888888;
     callback scheme-picked(string);
     callback scheme-refresh();
-    // 候选窗材质三档（2026-11-02）：0=透明 1=亚克力 2=不透明。
+    // 候选窗材质三档（2026-11-02）：0=透明 1=亚克力 2=默认（原来叫"不透明"，
+    // 2026-11-04 10:50 用户要求改成"默认"：这档就是主题本来的样子）。
     // 界面只负责显示与回调，写文件在 Rust 侧（`weasel_settings::material`）；
     // 主题运行时读同一个文件（`theme/src/paint.rs::tier`），切完下一次按键生效。
     in-out property <int> candidate-material: 0;
@@ -432,7 +433,7 @@ export component SettingsWindow inherits Window {
                 for tier in [
                     { label: "透明", idx: 0 },
                     { label: "亚克力", idx: 1 },
-                    { label: "不透明", idx: 2 }
+                    { label: "默认", idx: 2 }
                 ] : Button {
                     width: 92px;
                     height: 30px;

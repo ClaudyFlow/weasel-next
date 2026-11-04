@@ -587,7 +587,7 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
     //                                  ⇒ 真玻璃：磨砂但**不染色**
     // - [`Material::Acrylic`]（亚克力）→ 自绘高斯模糊 σ=8（更糊）+ 配色蒙版 85%
     //                                  ⇒ 磨砂 + 有色：色相取配色个性色、明度跟 back_color
-    // - 不透明 / 金属            → 两者都不用，压根没有模糊
+    // - 默认 / 金属              → 两者都不用，压根没有模糊
     //
     // 亚克力为什么不再用 DWM：`SetWindowCompositionAttribute` 的模糊半径是系统写死的，
     // 「再模糊一些」根本调不动；而且 Win11 上那一档常常退化成普通模糊、tint 还被吃掉了，
@@ -741,7 +741,7 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
         // 亚克力**只给亚克力档**：
         // - 玻璃档走自绘抓屏模糊，DWM 再叠一层就成了"糊上糊"，边缘还会有 DWM 那层
         //   系统着色（用户 2026-11-04：「磨砂透明的才叫玻璃」）。
-        // - 不透明/金属档窗口外面那圈（offset ≈ 10px）没有面板盖住，开了亚克力就是
+        // - 默认/金属档窗口外面那圈（offset ≈ 10px）没有面板盖住，开了亚克力就是
         //   "面板外多一层浅色"（用户 2026-11-04 00:5x 截图）。
         if glass && tier_now.flat() && !glass_self {
             accent::sync_acrylic(hwnd, true, tint);
@@ -997,7 +997,7 @@ impl Window {
     /// 而且**材质档位必须是玻璃/亚克力**（[`paint::Material::flat`]）。
     ///
     /// 最后这条是 2026-11-04 00:5x 补的：窗口比面板大一圈（[`config::Metrics::offset`]
-    /// ≈ `border*2 + 投影` ≈ 10px），那一圈没有任何东西盖住。不透明档还开着亚克力时，
+    /// ≈ `border*2 + 投影` ≈ 10px），那一圈没有任何东西盖住。默认档还开着亚克力时，
     /// 它就直接露成"面板外面多一层浅色"——和同一次截图里那道白描边一起，看着就是
     /// "外面一圈白的"。不透明/金属档底色本来就不透，亚克力没有任何东西可透，关掉也
     /// 不损失效果，还省一次 DWM 合成。
@@ -1355,7 +1355,7 @@ impl Window {
         let target = presenter.render_target();
         let scheme = &*scheme;
         // 抓屏模糊档（透明/亚克力）：面板不再铺死白，配色与字色要跟着**真实背景**走。
-        // 其它材质（不透明/金属）底色是自己铺的，配色表原样即可。
+        // 其它材质（默认/金属）底色是自己铺的，配色表原样即可。
         let plain_palette;
         let tier = paint::tier();
         // 亚克力蒙版色：拿**原始配色**（`plain_scheme` 之前）算，plain_scheme 内部算

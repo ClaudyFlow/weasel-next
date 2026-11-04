@@ -82,7 +82,7 @@ pub fn stamp(shared: &std::path::Path, user: &std::path::Path) -> Option<std::ti
         .chain([
             user.join("theme").join("theme.yaml"),
             shared.join("theme").join("theme.yaml"),
-            // 2026-11-02：材质档位也进时间戳 —— 设置里点「透明/亚克力/不透明」后，
+            // 2026-11-02：材质档位也进时间戳 —— 设置里点「透明/亚克力/默认」后，
             // 渲染器下一次按键就重算度量与配色（投影留边、浅底配色都跟档位绑死）。
             user.join("theme").join("material.txt"),
         ]);

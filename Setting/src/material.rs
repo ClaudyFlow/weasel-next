@@ -11,10 +11,16 @@
 use std::path::{Path, PathBuf};
 
 /// 三档写进文件里的字面值；下标 = 设置界面按钮的顺序（0/1/2）。
+///
+/// 第三档的文件值仍是 `opaque`（主题侧一直认它），只是界面上改叫「默认」——
+/// 用户 2026-11-04 10:50：「默认是不透明，然后不要写成不透明，写成默认」。
 pub const TIERS: [&str; 3] = ["glass", "acrylic", "opaque"];
 
 /// 三档的中文名（按钮文字与状态行共用）。
-pub const LABELS: [&str; 3] = ["透明", "亚克力", "不透明"];
+///
+/// 第三档叫 **默认**：它就是主题本来的样子（yaml 的 `back_color` 铺满、不抓屏不模糊），
+/// 而不是"特意关掉效果"的档位。
+pub const LABELS: [&str; 3] = ["透明", "亚克力", "默认"];
 
 /// `material.txt` 的完整路径（`<用户目录>/theme/material.txt`）。
 pub fn path(user: &Path) -> PathBuf {
@@ -29,7 +35,9 @@ pub fn current(user: &Path) -> usize {
     let text = std::fs::read_to_string(path(user)).unwrap_or_default();
     match text.trim().to_ascii_lowercase().as_str() {
         "acrylic" => 1,
-        "opaque" | "original" | "solid" => 2,
+        // `default` 是 2026-11-04 之后界面上的叫法；`opaque` / `original` / `solid`
+        // 是同一档的旧值（写回时仍用 `opaque`）。
+        "default" | "opaque" | "original" | "solid" => 2,
         _ => 0,
     }
 }
