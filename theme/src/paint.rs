@@ -1127,15 +1127,26 @@ impl Painter<'_> {
         }
         if !transparent(border_color) && border != 0.0 {
             unsafe {
+                // 描边要**完全落在面板内**。`DrawGeometry` 的线宽是沿路径**居中**铺开的：
+                // 直接拿面板矩形当路径，`border/2` 那一半就溢到面板外面去了 —— 圆角处
+                // 看着就是"圆角外面还镶了一圈"（用户 2026-11-04 11:2x，默认档最明显：
+                // 不透明档的 border_color 是实色，玻璃/亚克力档在 `plain_scheme` 里被清成 0）。
+                //
+                // 修法：路径按半个线宽内缩、半径同减半个线宽（等距内偏），描边的**外沿**
+                // 正好回到面板边界 —— 面板外形不变，描边变成真正的内描边。
+                let mut stroked = *rect;
+                stroked.deflate(border / 2.0, border / 2.0);
                 let inner = radius - border / 2.0;
-                if let Ok(path) = rounded_rect_path(self.factory, rect, inner, info) {
-                    let _ = self.brush.SetColor(&d2d_color(border_color));
-                    self.target.DrawGeometry(
-                        &path,
-                        self.brush,
-                        border,
-                        None::<&ID2D1StrokeStyle>,
-                    );
+                if stroked.width() > 0.0 && stroked.height() > 0.0 {
+                    if let Ok(path) = rounded_rect_path(self.factory, &stroked, inner, info) {
+                        let _ = self.brush.SetColor(&d2d_color(border_color));
+                        self.target.DrawGeometry(
+                            &path,
+                            self.brush,
+                            border,
+                            None::<&ID2D1StrokeStyle>,
+                        );
+                    }
                 }
             }
         }
