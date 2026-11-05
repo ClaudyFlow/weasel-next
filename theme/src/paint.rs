@@ -13,8 +13,8 @@
 //! * 颜色一律来自配色（[`ColorScheme`]），**不透明才画**（官方 `COLORNOTTRANSPARENT`）。
 
 use crate::d2d_bindings::*;
-use crate::theme::config::{Hover, Metrics};
-use crate::theme::layout::{Layout, Rect, RoundInfo, PAGE_NEXT, PAGE_PREV};
+use crate::theme::config::{Hover, LayoutType, Metrics};
+use crate::theme::layout::{row_padding, Layout, Rect, RoundInfo, PAGE_NEXT, PAGE_PREV};
 use crate::theme_api::CandidateView;
 use weasel_style::ColorScheme;
 use windows_core::Interface;
@@ -268,6 +268,22 @@ pub struct Painter<'a> {
     /// 矩形已经由模组侧按 CSS 语义插值好（只滑位置、宽高取目标），这里只管画。
     pub hilite_anim: Option<(Rect, usize)>,
 }
+
+// ── 挤压三模式固定配色（设计稿 `_shots/ime-three-modes.html`）──────────────
+// 刻意不读 theme.yaml 的 37 套配色：这套壳自带灰/白/橙，叠配色只会互相打架；
+// 而且配色解析失败回退默认值时（INI 残留那次），挤压壳不该跟着一起黑掉。
+const SQ_SHELL: u32 = 0xFF9A_9A9F; // 灰壳
+const SQ_PAPER: u32 = 0xFFF5_F5F7; // 白内板
+const SQ_CELL_BG: u32 = 0xFFE8_EAF0; // 编码字符格底
+const SQ_GRID: u32 = 0xFFC9_CED6; // 字符格线
+const SQ_ORANGE: u32 = 0xFFF5_9E0B; // 候选橙底
+const SQ_ORANGE_HI: u32 = 0xFFEA_580C; // 选中橙底
+const SQ_CORE: u32 = 0xFFFF_FFFF; // 核白板
+const SQ_RED: u32 = 0xFFE5_484D; // 候选间红块
+const SQ_GREEN: u32 = 0xFF22_C55E; // 分隔绿条
+const SQ_LINE: u32 = 0xFF11_1827; // 绿条上的黑线
+const SQ_INK: u32 = 0xFF1F_2937; // 正文墨色
+const SQ_NUM: u32 = 0xFF9C_A3AF; // 序号 / 注释灰
 
 /// 显示前抓好的模糊背景（自绘高斯模糊的缓存单元）。
 pub struct BackdropCache {
@@ -855,6 +871,20 @@ fn d2d_rect(rect: &Rect) -> D2D_RECT_F {
 impl Painter<'_> {
     /// 官方 `DoPaint`（WeaselPanel.cpp:423）。
     pub fn draw(&self, layout: &Layout, empty_context: bool) -> Result<(), String> {
+        // 挤压三模式走自带皮肤的独立帧路径；下面官方几百行一行未动 ——
+        // 非 squeeze 逐字节回原路径，零回归（用户 2026-11-05「外科手术式」）。
+        if self.m.squeeze {
+            // 兜底：挤压绘制若 panic（或返回 Err），不返回、让控制流落回下面的官方
+            // `{}` 块（逐字节未动），保证候选窗绝不消失
+            // （2026-11-05 竹简「没有界面」= draw_squeeze 首帧崩了把 Renderer 拖死）。
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.draw_squeeze(layout, empty_context)
+            }));
+            if let Ok(Ok(())) = r {
+                return Ok(());
+            }
+            // 否则继续执行下面的官方绘制（不 return）
+        }
         {
             let style = self.m;
             let inline = layout.inline_preedit;
@@ -1027,6 +1057,506 @@ impl Painter<'_> {
             }
             // 翻页提示独立画：不依赖 preedit、也不要求配色给翻页色。
             self.draw_page_buttons(layout);
+        }
+        Ok(())
+    }
+
+    /// 挤压三模式整帧绘制：灰壳 / 白内板 / 字符格编码 / 橙底白核 / 红块 / 绿分隔。
+    ///
+    /// 官方 `draw()` 在 `m.squeeze` 时把整帧交给这里，所以不会与材质三档、
+    /// 玻璃蒙版、金属渐变那套互相覆盖。所有矩形都取自 `Layout`（窗口尺寸已经
+    /// 按 squeeze 算好），只换颜色与装饰，绝不自己改坐标 —— 不会被窗口裁掉。
+    fn draw_squeeze(&self, layout: &Layout, empty_context: bool) -> Result<(), String> {
+        let _ = empty_context; // 自带壳始终画满；官方「空上下文不画背景」不适用于这里
+        let info = RoundInfo::default();
+        let shell = Rect::new(0.0, 0.0, layout.content_size.cx, layout.content_size.cy);
+        if shell.is_empty() {
+            return Ok(());
+        }
+        let round = self.m.round_corner_ex.max(0.0);
+        // 灰壳那一圈就是 **padding**（HTML `.ime` 的 padding: 0.25em）。
+        // 白内板是直角矩形，所以 padding 至少要把「外壳圆角被切掉的那块」让出来，
+        // 否则白板的直角会从灰壳的圆角里戳出去：要求 lip ≥ R(1 − 1/√2) ≈ 0.293R。
+        // 公式在 `Metrics::squeeze_lip`（layout 排按钮组/箭头时要拿同一个数顶右沿）。
+        let lip = self.m.squeeze_lip(shell.width());
+
+        // ① 灰壳（外圈 = padding）→ ② 白内板（内容区，**直角**）
+        self.fill_geometry(&shell, SQ_SHELL, round, &info, false);
+        let mut paper = shell;
+        paper.deflate(lip, lip);
+        if !paper.is_empty() {
+            self.fill_geometry(&paper, SQ_PAPER, 0.0, &info, false);
+        }
+
+        // ③ 编码栏：左侧字符格拼音 + 右侧按钮组（🔣 ✂ 🔄）+ 翻页箭头（见 ⑤），
+        //    下方一条 0.5em 绿横分隔（设计稿 `.ime-bar` / `.hsep`）。
+        //
+        //    这里量 1em 用 `font_point`（= config 里的 font_h），和 layout 内部
+        //    「圆角/间距全部按字高推导」的 em 同口径；`em` 那个变量是绘制用的放大值，
+        //    拿它算按钮会整体偏大 1/3，两边就对不齐了。
+        let bar_em = self.m.font_point.max(8.0);
+        let preedit_text = self
+            .view
+            .preedit
+            .as_ref()
+            .map(|p| p.text.as_str())
+            .filter(|t| !t.is_empty());
+        if !layout.inline_preedit && !layout.preedit.is_empty() {
+            if let Some(text) = preedit_text {
+                // 设计稿的编码栏**没有字符格**：`.ch` 只是给每个字定宽的 flex 项，
+                // 没有底色也没有格线（`.bar-inner` 是纯白）。旧实现画了浅灰格底 +
+                // 逐格竖线，跟设计稿对不上，2026-11-05 按 `.ime-bar` 去掉。
+                self.text_out(&layout.preedit, text, SQ_INK, &self.formats.preedit)?;
+            }
+            // 绿分隔贴**编码栏底**，不是贴文字底：栏高 1.5em 而文字带只有 1em，
+            // 按文字底画会把分隔条切进栏里、把 0.5em 的空白挤掉。
+            // 2026-11-05 18:5x：布局那边已经把「候选区顶」放在绿分隔下沿，这里**不能**
+            // 再 +1（会把整条分隔往下推 1px，和第一只框的顶沿错开）。
+            let bar_bottom = if layout.preedit_row.is_empty() {
+                layout.preedit.bottom
+            } else {
+                layout.preedit_row.bottom
+            };
+            let y = bar_bottom;
+            let band = Rect::new(
+                paper.left,
+                y,
+                paper.right,
+                (y + self.m.bar_hsep.max(3.0)).min(paper.bottom),
+            );
+            if !band.is_empty() {
+                self.fill_geometry(&band, SQ_GREEN, 0.0, &info, false);
+                // 黑线压在绿条**正中**（设计稿 `.hsep::before` 是 flex 居中，不是贴顶）
+                let mid = (band.top + band.bottom) / 2.0;
+                self.fill_geometry(
+                    &Rect::new(band.left, mid - 1.0, band.right, mid + 1.0),
+                    SQ_LINE,
+                    0.0,
+                    &info,
+                    false,
+                );
+            }
+        }
+
+        // ④ 候选：橙底（选中更深）+ 核白板 + 序号 / 正文 / 注释。
+        //    `layout.highlight_rect()` 已带 per-candidate padding（选中 2p、其余 p），
+        //    挤压后的框与鼠标命中矩形天然一致，paint 不用再算一遍。
+        let count = layout.rows.len();
+        let highlighted = if (self.view.selected_index as usize) < count {
+            self.view.selected_index as usize
+        } else {
+            usize::MAX
+        };
+        // 三模式在这里分形：竹简=方片+正文字符格，飞瀑=竖列绿横条，横流=单行红块。
+        let cells = matches!(self.m.layout_type, LayoutType::Cells);
+        let waterfall = matches!(self.m.layout_type, LayoutType::VerticalSqueeze);
+        for i in 0..count {
+            let row = layout.rows[i];
+            let hi = layout.highlight_rect(self.m, i);
+            if hi.is_empty() {
+                continue;
+            }
+            // 防御：items 与 rows 长度偶发不一致时跳过该项而不是越界 panic 把 Renderer 拖崩
+            // （2026-11-05：竹简首帧报「没有界面」疑似此处越界，改 get 兜底）。
+            let Some(item) = self.view.items.get(i) else {
+                continue;
+            };
+            // 候选块（橘红选中 / 橘黄未选中）圆角恒为 **0.25em**（用户 2026-11-05）。
+            //
+            // 以前三种模式各写一套，而且都不是 0.25em：
+            //   横流/飞瀑 = `hi.height() / 2.0` —— 胶囊，框高约 2em 时圆角约 1em；
+            //   竹简      = `em * 0.12`       —— 且 `em` 已乘过 `dpi_scale_font`（4/3），
+            //                                   实际约 0.16em，还随 DPI 漂移。
+            // 现在统一用 `bar_em`（= `font_point`，和 layout 里预算 1em 同口径，
+            // **不再**乘 `dpi_scale_font`），三种模式只差一个值来源。
+            let radius = (bar_em * 0.25).max(2.0);
+            self.fill_geometry(
+                &hi,
+                if i == highlighted { SQ_ORANGE_HI } else { SQ_ORANGE },
+                radius,
+                &info,
+                false,
+            );
+            let mut core = hi;
+            // 白核（`.core`）同样**直角**。橙底是有圆角的，直角白核必须内缩到圆角之内，
+            // 否则四个角会从橙底戳出来（胶囊形半径 R 时要 ≥ 0.293R）。
+            //
+            // 内缩量 = 本候选自己的橙边厚度，而不是常量 p（2026-11-05 用户按 HTML 对照）：
+            //   rim = pad − 0.5p   ⇒  普通 0.25em、选中 0.5em
+            // 于是「选中时橙边变粗、白核不变」，与设计稿 `.item.first { padding:.5em }`
+            // + `.core { padding:.25em }` 的叠法一致；旧写法用常量 p，选中/未选中的
+            // 橙边一样粗、白核跟着外框长，看起来就是"只是换了个颜色"。
+            let (pad_x, pad_y) = row_padding(self.m, &row);
+            // 三种模式**同一套 padding**（用户 2026-11-06：「按那两个的效果做 padding，
+            // 现在太宽了」）：白核 = 外框按 rim 内缩，rim = pad − 0.5p
+            // ⇒ 普通 0.25em、选中 0.5em；文字在白核里水平居中、顶部对齐（竹简）/
+            // 垂直居中、左对齐（横流、飞瀑）。
+            let rim_x = (pad_x - self.m.hilite_padding_x * 0.5).max(0.0);
+            let rim_y = (pad_y - self.m.hilite_padding_y * 0.5).max(0.0);
+            let inset_x = (radius * 0.3).max(rim_x);
+            let inset_y = (radius * 0.3).max(rim_y);
+            core.deflate(inset_x, inset_y);
+            // 白核限高(2026-11-06 用户实机:"候选词的白框太高了"):
+            // 白核只包住文字(1em)+核内边距(0.25em 上下)= 1.5em,
+            // 不跟随整个橙底外框高——竖排时外框高度由布局决定可能远大于文字,
+            // 白核跟着长就是"字飘在超长白框里"的根因。
+            let core_h = bar_em * 1.5;
+            if core.height() > core_h {
+                let excess = core.height() - core_h;
+                // 竹简(内容顶齐):白核贴顶部;横流/飞瀑:白核垂直居中于橙底
+                if cells {
+                    core.bottom = core.top + core_h;
+                } else {
+                    core.top += excess / 2.0;
+                    core.bottom = core.top + core_h;
+                }
+            }
+            if !core.is_empty() {
+                self.fill_geometry(&core, SQ_CORE, 0.0, &info, false);
+            }
+            let text = &item.primary_text;
+            // 竹简：序号写进竖列**首格**，和正文同一条竖线（用户 2026-11-05：
+            // 「为什么序号不是垂直的」）。序号格下面留 `hilite_spacing`（Metrics 里恒为
+            // font_h / 2 = 0.5em）当间隔，正文再逐字往下 —— 与横流/飞瀑里
+            // 「序号右边到正文左边」的那条缝是同一个数（用户：「所有序号和候选词差 0.5em」）。
+            let n_body = text.chars().count();
+            let gap = self.m.hilite_spacing;
+            let mut head = 0.0;
+            let mut body = row.text;
+            let label_rect = if cells && n_body > 0 && !row.text.is_empty() {
+                // head = 序号格高：整列去掉间隔后，按「序号 + 字数」均分
+                head = ((row.text.height() - gap).max(1.0) / (n_body + 1) as f32).max(1.0);
+                let bottom = row.text.top + head;
+                body = Rect::new(
+                    row.text.left,
+                    (bottom + gap).min(row.text.bottom),
+                    row.text.right,
+                    row.text.bottom,
+                );
+                Rect::new(row.text.left, row.text.top, row.text.right, bottom)
+            } else {
+                row.label
+            };
+            if !label_rect.is_empty() {
+                // 竹简的首格只有一个字宽，`label_format` 默认是 "%s."（会画成 "1."），
+                // 横着塞进去会顶出格线，所以竹简里直接用裸序号；其余模式照旧走格式串。
+                let label = if cells {
+                    (i as u32 + 1).to_string()
+                } else {
+                    self.m.format_label(&(i as u32 + 1).to_string())
+                };
+                self.text_out(&label_rect, &label, SQ_NUM, &self.formats.label)?;
+            }
+            // 序号与正文之间那颗 0.5em 红块：设计稿每项都是「序号 ■ 正文」，
+            // `.num` 和正文之间夹一个 `.space`（0.5em 见方）——三种模式都有。
+            //   横流 / 飞瀑：横向那道缝（`hilite_spacing` 宽），竖直居中；
+            //   竹简      ：序号格与正文之间那道竖向缝，水平居中（`.core` 是 column）。
+            let dot = self.m.bar_dot;
+            if cells {
+                if head > 0.5 && !row.text.is_empty() {
+                    let band_top = row.text.top + head;
+                    let side = dot.min(gap).max(1.0);
+                    let x = (row.text.left + row.text.right) / 2.0 - side / 2.0;
+                    let y = band_top + (gap - side) / 2.0;
+                    self.fill_geometry(
+                        &Rect::new(x, y, x + side, y + side),
+                        SQ_RED,
+                        0.0,
+                        &info,
+                        false,
+                    );
+                }
+            } else if !row.label.is_empty() {
+                let seam = row.text.left - row.label.right;
+                if seam > 1.0 {
+                    let side = dot.min(seam).max(1.0);
+                    let x = row.label.right + (seam - side) / 2.0;
+                    let y = (row.text.top + row.text.bottom) / 2.0 - side / 2.0;
+                    self.fill_geometry(
+                        &Rect::new(x, y, x + side, y + side),
+                        SQ_RED,
+                        0.0,
+                        &info,
+                        false,
+                    );
+                }
+            }
+            if !text.is_empty() {
+                if cells {
+                    // 竹简：竖排逐字（设计稿 `.cell .core { flex-direction: column }`，
+                    // 每个字是一个 flex item ⇒ 天然一列）。**不画格线**：
+                    // 设计稿里 `.cell` 没有 border，旧实现的 `squeeze_grid_v` 会画出
+                    // 一片横线，跟「一模一样」冲突（2026-11-05 按设计稿去掉）。
+                    self.text_out_vertical(&body, text, SQ_INK, &self.formats.text)?;
+                } else {
+                    self.text_out(&row.text, text, SQ_INK, &self.formats.text)?;
+                }
+            }
+            let comment = &item.secondary_text;
+            if !comment.is_empty() && !row.comment.is_null() {
+                if cells {
+                    self.text_out_vertical(&row.comment, comment, SQ_NUM, &self.formats.comment)?;
+                } else {
+                    self.text_out(&row.comment, comment, SQ_NUM, &self.formats.comment)?;
+                }
+            }
+            // 分隔：相邻两候选之间 0.5em 红块（设计稿 `.row > .space`）。
+            // 飞瀑也是红块，只是贴在**列的左边**（`.col > .space { align-self: flex-start }`），
+            // 不再画绿横带（2026-11-05 按设计稿改；红/绿在 HTML 里都是调试色，
+            // 但形状与位置以设计稿为准）。
+            if i + 1 < count {
+                let next = layout.highlight_rect(self.m, i + 1);
+                let gap = if waterfall {
+                    next.top - hi.bottom
+                } else {
+                    next.left - hi.right
+                };
+                if gap > 1.0 {
+                    // 红块边长 = 0.5em；间隙更小时缩到间隙，别盖到橙框上。
+                    let side = dot.min(gap).max(1.0);
+                    let (x, y) = if waterfall {
+                        (paper.left, hi.bottom + (gap - side) / 2.0)
+                    } else {
+                        (
+                            hi.right + (gap - side) / 2.0,
+                            hi.top + (hi.height() - side) / 2.0,
+                        )
+                    };
+                    self.fill_geometry(
+                        &Rect::new(x, y, x + side, y + side),
+                        SQ_RED,
+                        0.0,
+                        &info,
+                        false,
+                    );
+                }
+            }
+        }
+
+        // ⑤ 编码栏右端：按钮组（🔣 符号 / ✂ 剪贴板 / 🔄 同步）+ 翻页箭头。
+        //    设计稿 `_shots/ime-three-modes.html` 的 `.ime-bar` 就是这么排的：
+        //      拼音 … |vsep| 🔣 ■ ✂ ■ 🔄 |vsep| ◀ ■ ▶
+        //    箭头矩形由 layout 给出（官方语义，命中测试也用它们），
+        //    按钮组贴着 `page_prev` 的左边往左排，所以点和点自动对齐。
+        if !layout.inline_preedit {
+            self.draw_bar_buttons(layout)?;
+            if !layout.page_prev.is_empty() {
+                self.text_out(&layout.page_prev, PAGE_PREV, SQ_INK, &self.formats.preedit)?;
+            }
+            if !layout.page_next.is_empty() {
+                self.text_out(&layout.page_next, PAGE_NEXT, SQ_INK, &self.formats.preedit)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 编码栏右侧的按钮组（设计稿 `.btns` / `.page-btns`）。
+    ///
+    /// 布局是纯绘制层的：箭头矩形来自 `Layout`（命中测试不变），
+    /// 按钮组从 `page_prev.left` 开始向左依次排
+    /// `vsep → 🔄 → ■ → ✂ → ■ → 🔣 → vsep`，每个按钮 1em 见方、
+    /// 按钮之间夹 0.5em 红块、vsep 是 0.5em 绿底黑竖线。
+    ///
+    /// 所有尺寸从 `Metrics` 的编码栏统一参数读（见 `config::bar`），
+    /// 不再自己算 `em * 倍数`（2026-11-05 统一编码栏参数）。
+    fn draw_bar_buttons(&self, layout: &Layout) -> Result<(), String> {
+        if layout.page_prev.is_empty() || layout.page_next.is_empty() {
+            return Ok(());
+        }
+        let info = RoundInfo::default();
+        // 整组（分隔条 / 按钮 / 红块 / 箭头）共用**编码栏的中线**做垂直居中
+        // （用户 2026-11-05：「这些编码分隔线按钮箭头都做成垂直居中」）。
+        // 栏高 1.5em 而箭头/按钮的字形只有 ~1em，按各自矩形贴顶排会高低不齐。
+        let mid = if layout.preedit_row.is_empty() {
+            (layout.page_prev.top + layout.page_prev.bottom) / 2.0
+        } else {
+            (layout.preedit_row.top + layout.preedit_row.bottom) / 2.0
+        };
+        // 分隔条高度取 `bar_vsep_h`（= 1em），栏内居中留出 0.25em 上下气。
+        let vsep_h = if layout.preedit_row.is_empty() {
+            layout.page_prev.height().max(self.m.bar_vsep_h)
+        } else {
+            layout.preedit_row.height().min(self.m.bar_vsep_h)
+        };
+        let vsep_top = mid - vsep_h / 2.0;
+        // 按钮/红块用自己的见方盒子，同样按中线居中。
+        let box_h = self.m.bar_btn;
+        let top = mid - box_h / 2.0;
+        let h = box_h;
+        let dot = self.m.bar_dot;
+        let vsep_w = self.m.bar_vsep_w;
+
+        // 两个箭头之间那颗红块（`.page-btns .space`）
+        let arrow_gap = layout.page_next.left - layout.page_prev.right;
+        if arrow_gap > 1.5 {
+            let side = dot.min(arrow_gap);
+            let x = layout.page_prev.right + (arrow_gap - side) / 2.0;
+            let y = top + (h - side) / 2.0;
+            self.fill_geometry(
+                &Rect::new(x, y, x + side, y + side),
+                SQ_RED,
+                0.0,
+                &info,
+                false,
+            );
+        }
+
+        let mut x = layout.page_prev.left;
+        // ① 箭头左边的 vsep
+        x -= vsep_w;
+        self.draw_vsep(x, vsep_top, vsep_w, vsep_h, &info);
+        // ② 三个按钮，从右往左；除第一个外每个前面一颗红块
+        for (idx, icon) in ["🔄", "✂", "🔣"].iter().enumerate() {
+            if idx > 0 {
+                x -= dot;
+                let y = top + (h - dot) / 2.0;
+                self.fill_geometry(
+                    &Rect::new(x, y, x + dot, y + dot),
+                    SQ_RED,
+                    0.0,
+                    &info,
+                    false,
+                );
+            }
+            x -= self.m.bar_btn;
+            if x + self.m.bar_btn > 0.0 {
+                self.text_out(
+                    &Rect::new(x, top, x + self.m.bar_btn, top + h),
+                    icon,
+                    SQ_INK,
+                    &self.formats.preedit,
+                )?;
+            }
+        }
+        // ③ 按钮组左边的 vsep（把拼音和按钮隔开）
+        x -= vsep_w;
+        if x > 0.0 {
+            self.draw_vsep(x, vsep_top, vsep_w, vsep_h, &info);
+        }
+        Ok(())
+    }
+
+    /// 竖向分隔条：绿底 + 居中 2px 黑线（设计稿 `.vsep::before`）。
+    fn draw_vsep(&self, x: f32, top: f32, w: f32, h: f32, info: &RoundInfo) {
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        self.fill_geometry(
+            &Rect::new(x, top, x + w, top + h),
+            SQ_GREEN,
+            0.0,
+            info,
+            false,
+        );
+        let cx = x + w / 2.0;
+        self.fill_geometry(
+            &Rect::new(cx - 1.0, top, cx + 1.0, top + h),
+            SQ_LINE,
+            0.0,
+            info,
+            false,
+        );
+    }
+
+    /// 字符格：ASCII 半格、其它全格，逐格画浅底 + 右边界线。
+    /// 文字仍由调用方整串画一遍，字形连续，不会因为分格被切断。
+    ///
+    /// ⚠️ **当前设计稿不用它**：`_shots/ime-three-modes.html` 的 `.ch` 只是给每个字
+    /// 定宽的 flex 项，没有底色也没有格线，所以 `draw_squeeze` 不再调用（2026-11-05）。
+    /// 实现留着备用：设计文档 `doc/squeeze-candidate-design.md` 的「字符格」元素，
+    /// 以后若要恢复，把调用加回编码栏那段即可。
+    #[allow(dead_code)]
+    fn squeeze_grid(&self, rect: &Rect, text: &str, em: f32, bg: u32) {
+        if rect.is_empty() || text.is_empty() {
+            return;
+        }
+        let info = RoundInfo::default();
+        let mut x = rect.left;
+        for ch in text.chars() {
+            let width = if ch.is_ascii() { em * 0.5 } else { em };
+            let right = (x + width).min(rect.right);
+            if right <= x {
+                break;
+            }
+            let cell = Rect::new(x, rect.top, right, rect.bottom);
+            if !transparent(bg) {
+                // 字符格底也是白的 —— 跟白内板/白核保持一致，直角。
+                self.fill_geometry(&cell, bg, 0.0, &info, false);
+            }
+            self.fill_geometry(
+                &Rect::new(right - 1.0, cell.top, right, cell.bottom),
+                SQ_GRID,
+                0.0,
+                &info,
+                false,
+            );
+            x = right;
+        }
+    }
+
+    /// 竖排字符格（竹简）：列首序号格 → 0.5em 间隔（不画线）→ 正文逐字格，
+    /// 每格下沿画一条格线。与横排的 [`Self::squeeze_grid`] 对应，只是格子长边竖直。
+    ///
+    /// ⚠️ **当前设计稿不用它**：`.cell` 没有 border，竹简是「一片竖条 + 逐字竖排」，
+    /// 画格线会多出一片横线，跟设计稿对不上（2026-11-05 去掉调用）。实现留作备用。
+    #[allow(dead_code)]
+    fn squeeze_grid_v(&self, rect: &Rect, head: f32, gap: f32, body_n: usize) {
+        if rect.is_empty() || body_n == 0 {
+            return;
+        }
+        let info = RoundInfo::default();
+        let body_top = rect.top + head + gap;
+        let step = (rect.bottom - body_top) / body_n as f32;
+        if step <= 0.0 {
+            return;
+        }
+        let mut line = |y: f32| {
+            if y > rect.top + 0.5 && y <= rect.bottom + 0.5 {
+                self.fill_geometry(
+                    &Rect::new(rect.left, y - 1.0, rect.right, y),
+                    SQ_GRID,
+                    0.0,
+                    &info,
+                    false,
+                );
+            }
+        };
+        // 序号格的下边线（= 间隔的上沿），间隔本身留白
+        if head > 0.5 {
+            line(rect.top + head);
+        }
+        for i in 0..body_n {
+            line(body_top + (i + 1) as f32 * step);
+        }
+    }
+
+    /// 竖排文字：按字符把矩形切成等高横带，每带单独画一个字（自上而下）。
+    ///
+    /// DirectWrite 的 `CreateTextLayout` 只排横排，竖排只能自己切格；
+    /// 每个格子高度 = `rect.height() / 字数`，正好等于一行的行高，
+    /// 所以字形不会被压扁或截断。
+    fn text_out_vertical(
+        &self,
+        rect: &Rect,
+        text: &str,
+        color: u32,
+        format: &IDWriteTextFormat,
+    ) -> Result<(), String> {
+        let chars: Vec<char> = text.chars().collect();
+        if chars.is_empty() || rect.is_empty() {
+            return Ok(());
+        }
+        let step = rect.height() / chars.len() as f32;
+        for (i, ch) in chars.iter().enumerate() {
+            let top = rect.top + i as f32 * step;
+            let bottom = if i + 1 == chars.len() {
+                rect.bottom
+            } else {
+                top + step
+            };
+            let cell = Rect::new(rect.left, top, rect.right, bottom);
+            let mut buf = [0u8; 4];
+            self.text_out(&cell, ch.encode_utf8(&mut buf), color, format)?;
         }
         Ok(())
     }
