@@ -23,6 +23,7 @@ pub mod rpc;
 #[cfg(windows)]
 pub mod service_owner;
 pub mod settings;
+pub mod symbols;
 #[cfg(windows)]
 pub mod task_dialog;
 #[cfg(feature = "wasm-metadata")]

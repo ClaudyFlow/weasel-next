@@ -248,6 +248,25 @@ pub(crate) fn monitor_children() {
             let taken = {
                 let mut guard = shared.lock().expect("broker state mutex poisoned");
                 if guard.idle {
+                    // 空闲态检测用户输入(2026-11-04 修"打字拉不起来"):
+                    // settings_rpc 的 wake_from_idle 只在设置管道连接时触发,
+                    // Tip 打字走的管道不会调它 ⇒ 空闲后打字永远拉不起 Engine。
+                    // 这里用 GetLastInputInfo 检测系统级输入活动,有活动就唤醒。
+                    unsafe {
+                        use windows::Win32::UI::Input::KeyboardAndMouse::GetLastInputInfo;
+                        #[repr(C)]
+                        struct LastInputInfo { cb_size: u32, dw_time: u32 }
+                        let mut info = LastInputInfo { cb_size: std::mem::size_of::<LastInputInfo>() as u32, dw_time: 0 };
+                        GetLastInputInfo(&mut info as *mut _ as *mut _);
+                        let now_tick = windows::Win32::System::SystemInformation::GetTickCount();
+                        // 用户在最近 3 秒内有输入活动 → 唤醒
+                        if now_tick.saturating_sub(info.dw_time) < 3000 {
+                            drop(guard);
+                            diagnostic("idle wake: keyboard activity detected");
+                            wake_from_idle(None);
+                            continue; // 跳过本轮渲染器关停,下轮重新评估
+                        }
+                    }
                     guard.renderer.take()
                 } else {
                     None

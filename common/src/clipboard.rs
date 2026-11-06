@@ -120,6 +120,63 @@ impl ClipboardStore {
     /// 删除条目。
     pub fn remove(&mut self, index: usize) { if index < self.entries.len() { self.entries.remove(index); } self.save(); }
 
+    // ── 按文本操作（面板用；后台采集线程会重排 entries，下标会失效）────────
+    pub fn toggle_pin_text(&mut self, text: &str) {
+        if let Some(e) = self.entries.iter_mut().find(|e| e.text == text) {
+            e.pin = !e.pin;
+            self.save();
+        }
+    }
+    pub fn toggle_fav_text(&mut self, text: &str) {
+        if let Some(e) = self.entries.iter_mut().find(|e| e.text == text) {
+            e.fav = !e.fav;
+            self.save();
+        }
+    }
+    pub fn toggle_hidden_text(&mut self, text: &str) {
+        if let Some(e) = self.entries.iter_mut().find(|e| e.text == text) {
+            e.hid = !e.hid;
+            self.save();
+        }
+    }
+    pub fn remove_text(&mut self, text: &str) {
+        if let Some(pos) = self.entries.iter().position(|e| e.text == text) {
+            self.entries.remove(pos);
+            self.save();
+        }
+    }
+
+    /// 合并远端条目（同步下载用，2026-11-06）。
+    /// 按文本去重：本地已有就保留**本地**的置顶/收藏/隐藏/锁定状态（本地标记优先），
+    /// 只把远端多出来的标记补上；本地没有则追加到末尾并打上 `synced`。
+    /// 返回新增条数。绝不用远端整份覆盖本地 —— 那会丢掉用户刚复制还没上传的内容。
+    pub fn merge_remote(&mut self, remote: Vec<ClipEntry>) -> usize {
+        let mut added = 0usize;
+        for mut entry in remote {
+            if entry.text.is_empty() {
+                continue;
+            }
+            if let Some(pos) = self.entries.iter().position(|e| e.text == entry.text) {
+                let local = &mut self.entries[pos];
+                local.pin |= entry.pin;
+                local.fav |= entry.fav;
+                local.hid |= entry.hid;
+                local.lock |= entry.lock;
+                if local.pass.is_none() {
+                    local.pass = entry.pass.take();
+                }
+                local.synced = true;
+            } else {
+                entry.synced = true;
+                self.entries.push(entry);
+                added += 1;
+            }
+        }
+        self.trim();
+        self.save();
+        added
+    }
+
     fn save(&self) {
         if let Some(path) = &self.path
             && let Ok(text) = serde_json::to_string_pretty(&self.entries)
@@ -144,7 +201,11 @@ mod tests {
     use super::*;
 
     fn temp_store() -> ClipboardStore {
-        let dir = std::env::temp_dir().join(format!("lrn_clip_{}", std::process::id()));
+        // 每个用例独立目录：并行测试共用 `<pid>` 目录时会互相看见对方的条目，
+        // `push_dedup_and_refresh` 曾经因此偶发断言 2 == 5。
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("lrn_clip_{}_{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         ClipboardStore::load(&dir)
@@ -179,6 +240,32 @@ mod tests {
         let favs = store.visible("fav", "");
         assert_eq!(favs.len(), 1);
         assert_eq!(store.entries()[favs[0]].text, "beta");
+    }
+
+    #[test]
+    fn merge_remote_keeps_local_flags_and_adds_missing() {
+        let mut store = temp_store();
+        store.push("local_only");
+        store.set_pin(0, true);
+        let remote = vec![
+            ClipEntry {
+                text: "local_only".into(), pin: false, fav: true, hid: false,
+                lock: false, pass: None, time: "09:00".into(), synced: false,
+            },
+            ClipEntry {
+                text: "from_cloud".into(), pin: false, fav: false, hid: false,
+                lock: false, pass: None, time: "09:01".into(), synced: false,
+            },
+        ];
+        let added = store.merge_remote(remote);
+        assert_eq!(added, 1);
+        assert_eq!(store.entries().len(), 2);
+        let local = store.entries().iter().find(|e| e.text == "local_only").unwrap();
+        assert!(local.pin, "本地置顶不能被远端覆盖掉");
+        assert!(local.fav, "远端的收藏要补上");
+        assert!(local.synced);
+        let cloud = store.entries().iter().find(|e| e.text == "from_cloud").unwrap();
+        assert!(cloud.synced);
     }
 
     #[test]
