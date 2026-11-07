@@ -165,7 +165,7 @@ local function data_directories()
     -- 本地补丁（Weasel-Next 2026-10-20）：数据文件放 plugin\tiger\，
     -- 优先查这个目录，避免 tiger_sentence.*.txt 平铺在用户目录根部。
     if directories[1] then
-        table.insert(directories, 1, directories[1] .. "/plugin/tiger")
+        table.insert(directories, 1, directories[1] .. "/plugin/tiger_sentence")
     end
     return directories
 end
