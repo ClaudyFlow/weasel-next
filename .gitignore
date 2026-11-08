@@ -20,4 +20,25 @@ Rime-Next/schema/yuhao_pinyin/*.yuhao-folder-variant
 
 # 误放进输入法音效目录的音乐文件（7MB，无任何配置引用；音效目录只放按键音）
 Rime-Next/sound/Smile. DK - Butterfly.mp3
+
+# 神经网络权重（30 MB 二进制）：不进 git，随 `install\Weasel-Next-<版本>-models.7z` 分发。
+# 2026-11-05 起 `Rime-Next/model/` 里**只有**这两份 safetensors（gram/tiger 已移除）。
+Rime-Next/model/*.safetensors
 dist/
+
+# 2026-11-08 用户要求：工作日志 / 临时记录一律不入库。
+# 历史上误提交过 1030日志.md(2MB) + 1030日志/ 目录 + 1031/1101日志.md +
+# script/deploy-theme.log，已从仓库删除，这里堵住以后再混进来。
+*日志.md
+/1030日志/
+*.log
+要求对照表-*.md
+
+# 本地构建 / 截图 / 临时目录（不是源码，不进 git）
+/install/
+/_shots/
+/out/
+/_tmp_*/
+/_tmp_*.rs
+/.git-rewrite/
+/.tmp_qiaoma/
