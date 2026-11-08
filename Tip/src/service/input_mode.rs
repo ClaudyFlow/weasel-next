@@ -50,6 +50,54 @@ fn write(manager: &ITfThreadMgr, tid: TfClientId, ascii: bool) -> Result<()> {
     unsafe { compartment.SetValue(tid, &value).ok() }
 }
 
+/// 系统输入指示器（任务栏那个「中/英」）读的**标准**转换模式隔间。
+///
+/// 值取自 Windows SDK `msctf.h` 的 `GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION`
+/// = `{ccf05dd8-4a87-11d7-a6e2-00065b84435c}`。原版小狼毫就是靠写它让任务栏图标
+/// 跟着中英切换变的（`WeaselTSF::_UpdateLanguageBar` → `_SetCompartmentDWORD`）。
+/// 我们之前只写私有隔间 `GUID_WEASEL_INPUT_MODE`，系统那边永远不知道模式变了
+/// —— 这就是"按 Shift 任务栏没反应"的根因。
+const GUID_COMPARTMENT_CONVERSION: GUID = GUID::from_u128(0xccf05dd8_4a87_11d7_a6e2_00065b84435c);
+
+/// `TF_CONVERSIONMODE_NATIVE`：置位 = 本语言（中文）输入，清位 = 英文。
+const TF_CONVERSIONMODE_NATIVE: i32 = 0x0001;
+
+/// 把中/英写进标准转换模式隔间，**只改 NATIVE 位**、保留其它位（全角等）。
+///
+/// 与 `WeaselTSF::_UpdateLanguageBar` 等价：先读现有 flags，再按 ascii 置/清
+/// `TF_CONVERSIONMODE_NATIVE`，最后整值写回。写入失败只记诊断，绝不阻断输入。
+fn write_conversion_mode(manager: &ITfThreadMgr, tid: TfClientId, ascii: bool) -> Result<()> {
+    let compartments: ITfCompartmentMgr = manager.cast()?;
+    let compartment = unsafe { compartments.GetCompartment(&GUID_COMPARTMENT_CONVERSION)? };
+    let mut flags: i32 = 0;
+    if let Ok(mut current) = unsafe { compartment.GetValue() } {
+        unsafe {
+            let inner = &current.Anonymous.Anonymous;
+            if inner.vt == VARTYPE(VT_I4 as u16) {
+                flags = inner.Anonymous.lVal;
+            }
+            let _ = VariantClear(&mut current);
+        }
+    }
+    if ascii {
+        flags &= !TF_CONVERSIONMODE_NATIVE;
+    } else {
+        flags |= TF_CONVERSIONMODE_NATIVE;
+    }
+    let value = VARIANT {
+        Anonymous: VARIANT_0 {
+            Anonymous: std::mem::ManuallyDrop::new(VARIANT_0_0 {
+                vt: VARTYPE(VT_I4 as u16),
+                wReserved1: 0,
+                wReserved2: 0,
+                wReserved3: 0,
+                Anonymous: VARIANT_0_0_0 { lVal: flags },
+            }),
+        },
+    };
+    unsafe { compartment.SetValue(tid, &value).ok() }
+}
+
 impl TextService {
     /// 激活时读取宿主保存的输入模式，并同步到 RPC 工作线程。
     ///
@@ -63,6 +111,16 @@ impl TextService {
                 None
             }
         };
+        // 激活时也把标准转换模式隔间刷一次：切到这个输入法时任务栏「中/英」立刻对上，
+        // 不等第一次按键（原版小狼毫在 `OnSetThreadFocus` 里做同样的事）。
+        if let (Some(manager), Some(ascii)) = (manager.as_ref(), mode) {
+            let tid = *self.lock(&self.keystroke_client_id)?;
+            if let Some(tid) = tid {
+                if let Err(error) = write_conversion_mode(manager, tid, ascii) {
+                    crate::rpc_diagnostics::report("input-mode-conversion", None, error);
+                }
+            }
+        }
         self.lock(&self.rpc)?.remember_mode(mode);
         Ok(())
     }
@@ -81,6 +139,10 @@ impl TextService {
             if let Err(error) = write(&manager, tid, ascii) {
                 // Remembering a preference must never disable host input.
                 crate::rpc_diagnostics::report("input-mode-write", None, error);
+            }
+            // 再写**标准**隔间 —— 任务栏/语言栏那个「中/英」指示器读的是它。
+            if let Err(error) = write_conversion_mode(&manager, tid, ascii) {
+                crate::rpc_diagnostics::report("input-mode-conversion", None, error);
             }
         }
         self.lock(&self.rpc)?.remember_mode(Some(ascii));

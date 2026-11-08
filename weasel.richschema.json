@@ -12,11 +12,10 @@
         "type": "string"
       },
       "theme": {
-        "description": "主题名称（出厂主题是 default，加载程序文件夹里的 weasel-next-theme.dll；official 是它的旧别名，仍兼容）",
+        "description": "主题名称（出厂主题是 default，加载程序文件夹里的 weasel-next-theme.dll）",
         "type": "string",
         "enum": [
-          "default",
-          "official"
+          "default"
         ],
         "title": "主题"
       },

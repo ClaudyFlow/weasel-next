@@ -1,0 +1,85 @@
+# Rime Schema
+# encode: utf-8
+# newline: lf
+---
+schema:
+  id: sunman
+  name: 山人
+  version: "0.9.01.custom.3833274275"
+  author:
+    - 谢振斌
+  description: |
+    山人全息码（Rime-Next 移植，初版仅全息码主打字）
+###
+switch:
+  - name: ascii_mode
+    state: [ 中文, 西文 ]
+    reset: 1
+  - name: full_shape
+    state: [ 半角, 全角 ]
+  - name: ascii_punct
+    state: [ 。，, ．， ]
+  - name: sunman_simp
+    state: [ 漢字, 汉字 ]
+###
+engine:
+  processor:
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentor:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translator:
+    - punct_translator
+    - script_translator
+    - reverse_lookup_translator
+  filter:
+    - simplifier
+    - uniquifier
+###
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcba
+  delimiter: " '"
+  algebra:
+    - "fuzz/^(\\w)(\\w).+$/$1$2/"
+    - "fuzz/^(\\w)(\\w)(\\w).+$/$1$2$3/"
+    - "fuzz/^(\\w)(\\w)(\\w)(\\w).+$/$1$2$3$4/"
+###
+translator:
+  dict: sunman.extended
+  prism: sunman
+  enable_user_dict: true
+  strict_spelling: true
+###
+simplifier:
+  option_name: sunman_simp
+###
+punctuator:
+  import_preset: symbols
+###
+key_binder:
+  import_preset: default
+###
+recognizer:
+  import_preset: default
+  patterns:
+    punct: '^/([0-9]0?|[A-Za-z]+)$'
+###
+reverse_lookup:
+  schema: pinyin.luna
+  enable_completion: true
+  prefix: "`"
+  suffix: "'"
+  tips: 〔拼音〕
+  preedit_format:
+    - xform/([nl])v/$1ü/
+...

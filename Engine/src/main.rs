@@ -92,9 +92,10 @@ async fn load_broker_settings() -> Result<weasel_common::settings::ConfigSnapsho
 /// 未知字段保持原样，以便 renderer、主题或未来组件自行解释。应用专属选项中的
 /// 无效字段会被移除，从而重新继承对应全局值。
 fn normalize_server_settings(root: &mut serde_json::Value) -> Vec<String> {
-    // 内嵌出厂默认值是 YAML（`weasel.yaml`，2026-10-23 起唯一格式）：
-    // `style::parse_file` 只认 YAML，配置树与序列化也统一在 `weasel_common::yaml`。
-    let defaults: serde_json::Value = weasel_common::yaml::to_value(include_str!("../../Rime-Next/weasel.yaml"))
+    // 内嵌出厂默认值是 YAML（源文件 `Rime-Next/setting.yaml`，2026-11-08 由 weasel.yaml
+    // 改名；运行时仍部署成 `<程序文件夹>\weasel.yaml`）：`style::parse_file` 只认 YAML，
+    // 配置树与序列化也统一在 `weasel_common::yaml`。
+    let defaults: serde_json::Value = weasel_common::yaml::to_value(include_str!("../../Rime-Next/setting.yaml"))
         .expect("embedded settings must be valid YAML");
     let defaults = defaults
         .as_object()
@@ -389,14 +390,9 @@ fn touch_activity() {
 ///
 /// 静默部署模式不向继承句柄输出参数错误；普通模式将启动失败写入标准错误。
 fn main() -> std::process::ExitCode {
-    // 语法模型默认不加载(2026-11-03 实测:453MB octagram 对候选质量零贡献,
-    // gram 开/关 top1/top3 完全一致——组句靠词典权重,终审靠 4.4MB 神经模型)。
-    // 用户显式设 WEASEL_GRAM=on 可恢复。
-    unsafe {
-        if std::env::var("WEASEL_GRAM").is_err() {
-            std::env::set_var("WEASEL_GRAM", "off");
-        }
-    }
+    // 语法模型（octagram `.gram`）已从引擎整体移除（2026-11-03）：
+    // 组句恒走词典权重 + 动态规划，候选产出后由 4.4MB 字符级 transformer
+    // 做重排与补位。`WEASEL_GRAM` 开关随之作废，不再注入。
     let args = match weasel_common::service_owner::take_launch_args(std::env::args_os().skip(1)) {
         Ok(args) => args,
         Err(error) => {

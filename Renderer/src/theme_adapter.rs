@@ -37,6 +37,7 @@ pub fn view(snapshot: &RenderSnapshot, content_id: u64) -> CandidateView {
                 id: indicator.id,
                 ascii_mode: indicator.ascii_mode,
                 reason,
+                caps_lock: indicator.caps_lock,
             })
         }),
         visible: snapshot.visible,
@@ -54,6 +55,7 @@ pub fn view(snapshot: &RenderSnapshot, content_id: u64) -> CandidateView {
                 primary_text: item.primary_text.clone(),
                 secondary_text: item.secondary_text.clone(),
                 enabled: item.enabled,
+                kind: item.kind.clone(),
             })
             .collect(),
         selected_index: snapshot.selected_index,
@@ -80,14 +82,20 @@ pub fn events(
     let previous = snapshot.can_page_previous;
     let next = snapshot.can_page_next;
     EventSink::new(move |action| {
-        let (action, item_index) = match action {
+        let (action, item_index, text) = match action {
             UiAction::ItemInvoked(i) if enabled.get(i as usize) == Some(&true) => {
-                (RendererEventAction::ItemInvoked, i)
+                (RendererEventAction::ItemInvoked, i, String::new())
             }
-            UiAction::NavigatePrevious if previous => (RendererEventAction::NavigatePrevious, 0),
-            UiAction::NavigateNext if next => (RendererEventAction::NavigateNext, 0),
-            UiAction::Dismiss => (RendererEventAction::Dismiss, 0),
-            UiAction::OpenEmojiPanel => (RendererEventAction::OpenEmojiPanel, 0),
+            UiAction::NavigatePrevious if previous => {
+                (RendererEventAction::NavigatePrevious, 0, String::new())
+            }
+            UiAction::NavigateNext if next => {
+                (RendererEventAction::NavigateNext, 0, String::new())
+            }
+            UiAction::Dismiss => (RendererEventAction::Dismiss, 0, String::new()),
+            UiAction::OpenEmojiPanel => (RendererEventAction::OpenEmojiPanel, 0, String::new()),
+            // 直拟上屏（符号面板点击）：文本随事件带给引擎。
+            UiAction::CommitText(text) => (RendererEventAction::CommitText, 0, text),
             _ => return,
         };
         let _ = sender.try_send((
@@ -98,6 +106,7 @@ pub fn events(
                 revision,
                 action: action as i32,
                 item_index,
+                text,
             },
         ));
     })

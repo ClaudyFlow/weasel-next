@@ -3,7 +3,7 @@
 # 产物 `weasel_theme_default.dll`，安装时改名为 `weasel-next-theme.dll`
 # （用户明确：档位/内部代号不要体现在对外 DLL 名字上）。
 name = "weasel-theme-default"
-version = "0.18.6"
+version = "0.18.7"
 edition = "2024"
 license.workspace = true
 

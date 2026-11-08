@@ -29,6 +29,17 @@ else
   tiger_sentence_translator = tiger_sentence.translator
   tiger_sentence_ascii = tiger_sentence.ascii_component
   tiger_sentence_buffer_filter = tiger_sentence.buffer_filter
+  -- [neural] 2026-11-07 用户拍板：不许用虎整句自带的 405MB 五阶 Kneser-Ney 统计模型
+  -- （models/*.bin 不部署、model/ 目录不碰）。关掉 n-gram 后脚本走 no-model
+  -- 回退排序出候选；候选的整句裁决/选字/续写交给引擎的神经网络
+  -- （runtime.rs 硬挂的 NeuralRescoreFilter / NeuralPredictFilter，
+  --  权重 = <shared_data_dir>/model/sentence-model.safetensors）。
+  if type(tiger_sentence.set_model_enabled) == "function" then
+    tiger_sentence.set_model_enabled(false)
+    boot_log("统计模型已禁用 → 神经网络接管（set_model_enabled(false)）")
+  else
+    boot_log("警告：本版 tiger_sentence 无 set_model_enabled 钩子")
+  end
   boot_log("虎整句已注册 tiger_sentence_translator = " .. type(tiger_sentence_translator))
 end
 

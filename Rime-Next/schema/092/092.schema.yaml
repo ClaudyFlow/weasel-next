@@ -14,6 +14,9 @@ schema:
   id: "092"       #方案ID
   name: "092(原版修订)"         #显示名
   version: "2022.5.2"      #版本
+  description: |
+    092 五笔字型（原版修订）：李诗歌魔改自小先生。
+    单字根与词库随包分发，键位与开关见本文件的 switches / engine 段。
 
 ##★ 二、开关设置[switches:]支持与[filters]设定配置其他开关 ★##
 switches:                  ##★设置转换开关，可依需要增减★

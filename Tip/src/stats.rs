@@ -138,6 +138,8 @@ const DAY_LEN_V1: usize = 20;
 const DAY_LEN_V2: usize = 28;
 /// v3：v2 的天记录 + `effective_keys: u32` + `commits: u32`。
 const DAY_LEN_V3: usize = 36;
+/// v4：v3 天记录 + 24×u32 当日逐时键数(时段图跨日历史,用户 2026-11-07)。
+const DAY_LEN_V4: usize = 36 + 96;
 const CHAR_LEN: usize = 12;
 /// 键盘热力图：每个虚拟键一个 u32 计数（vk 0..=255）。
 const VK_LEN: usize = 256;
@@ -159,7 +161,7 @@ const HOUR_EXT_LEN: usize = HOUR_LEN * (4 + 8);
 const KEEP_CHARS: usize = 200;
 const MAGIC: [u8; 4] = *b"WNST";
 /// 落盘用的版本号（读侧认 1/2/3）。
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 /// 版本 → 天记录长度；不认识的版本给 `None`（读侧据此拒绝覆盖文件）。
 fn day_len_of(version: u32) -> Option<usize> {
@@ -167,6 +169,7 @@ fn day_len_of(version: u32) -> Option<usize> {
         1 => Some(DAY_LEN_V1),
         2 => Some(DAY_LEN_V2),
         3 => Some(DAY_LEN_V3),
+        4 => Some(DAY_LEN_V4),
         _ => None,
     }
 }
@@ -314,6 +317,7 @@ pub fn flush() -> Option<()> {
             active_ms: active,
             effective_keys: merge_effective(0, effective),
             commits: clamp_u32(commits),
+            hours: hour_keys,
         }),
     }
     file.days.sort_by_key(|record| record.date);
@@ -427,6 +431,8 @@ struct DayRecord {
     effective_keys: u32,
     /// 当天上屏轮数；v3 起才有真正的当日值。
     commits: u32,
+    /// 当日逐时键数(v4 起落盘;旧文件读入为 0)。时段图跨日历史的数据源。
+    hours: [u32; HOUR_LEN],
 }
 
 /// 磁盘上的全部内容。
@@ -512,6 +518,16 @@ fn parse_file(buffer: &[u8]) -> Option<StatFile> {
             },
             effective_keys,
             commits,
+            hours: if day_len >= DAY_LEN_V4 {
+                let mut hs = [0u32; HOUR_LEN];
+                for (h, slot) in hs.iter_mut().enumerate() {
+                    let off = 36 + h * 4;
+                    *slot = u32::from_le_bytes(chunk[off..off + 4].try_into().unwrap());
+                }
+                hs
+            } else {
+                [0; HOUR_LEN]
+            },
         });
         at += day_len;
     }
@@ -574,7 +590,7 @@ fn encode(file: &StatFile) -> Vec<u8> {
     words.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
     words.truncate(KEEP_CHARS);
 
-    let mut buffer = Vec::with_capacity(HEADER_LEN + file.days.len() * DAY_LEN_V3 + words.len() * CHAR_LEN);
+    let mut buffer = Vec::with_capacity(HEADER_LEN + file.days.len() * DAY_LEN_V4 + words.len() * CHAR_LEN);
     buffer.extend_from_slice(&MAGIC);
     buffer.extend_from_slice(&VERSION.to_le_bytes());
     buffer.extend_from_slice(&(file.days.len() as u32).to_le_bytes());
@@ -586,6 +602,12 @@ fn encode(file: &StatFile) -> Vec<u8> {
         buffer.extend_from_slice(&record.active_ms.to_le_bytes());
         buffer.extend_from_slice(&record.effective_keys.to_le_bytes());
         buffer.extend_from_slice(&record.commits.to_le_bytes());
+        if VERSION >= 4 {
+            // v4:天记录尾部带当日逐时键数(时段图跨日历史)。
+            for h in &record.hours {
+                buffer.extend_from_slice(&h.to_le_bytes());
+            }
+        }
     }
     for (ch, count) in &words {
         buffer.extend_from_slice(&(*ch as u32).to_le_bytes());
@@ -649,6 +671,7 @@ mod tests {
                     chars: 2,
                     active_ms: 1_000,
                     effective_keys: 5,
+                    hours: [0; HOUR_LEN],
                     commits: 1,
                 },
                 DayRecord {
@@ -658,6 +681,7 @@ mod tests {
                     active_ms: 180_000,
                     effective_keys: 1_180,
                     commits: 321,
+                    hours: [0; HOUR_LEN],
                 },
             ],
             chars: HashMap::from([('的', 12), ('一', 3)]),
@@ -686,10 +710,10 @@ mod tests {
         let bytes = encode(&file);
         assert_eq!(
         bytes.len(),
-        HEADER_LEN + 2 * DAY_LEN_V3 + 2 * CHAR_LEN + EXT_LEN + HOUR_EXT_LEN,
+        HEADER_LEN + 2 * DAY_LEN_V4 + 2 * CHAR_LEN + EXT_LEN + HOUR_EXT_LEN,
     );
-        // 头里的版本必须是 3：读侧（Setting）也认 2/3，写侧只写 3。
-        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 3);
+        // 头里的版本必须是 4：读侧（Setting）认 2/3/4,写侧只写 4。
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 4);
         let back = parse_file(&bytes).expect("自己的输出必须读得回来");
         // 时段桶往返:9 点与 21 点的打字量原样回来。
         assert_eq!(back.hour_keys[9], 120);
@@ -763,7 +787,7 @@ mod tests {
         let upgraded = encode(&back);
         assert_eq!(
             upgraded.len(),
-            HEADER_LEN + 2 * DAY_LEN_V3 + CHAR_LEN + EXT_LEN + HOUR_EXT_LEN,
+            HEADER_LEN + 2 * DAY_LEN_V4 + CHAR_LEN + EXT_LEN + HOUR_EXT_LEN,
         );
         assert_eq!(u32::from_le_bytes(upgraded[4..8].try_into().unwrap()), VERSION);
         let again = parse_file(&upgraded).unwrap();
@@ -775,12 +799,12 @@ mod tests {
     #[test]
     fn truncated_file_reads_what_is_complete() {
         let bytes = encode(&scratch_file());
-        for cut in [0usize, 3, HEADER_LEN - 1, HEADER_LEN + 1, HEADER_LEN + DAY_LEN_V3 + 5, bytes.len() - 1] {
+        for cut in [0usize, 3, HEADER_LEN - 1, HEADER_LEN + 1, HEADER_LEN + DAY_LEN_V4 + 5, bytes.len() - 1] {
             let back = parse_file(&bytes[..cut]).expect("头完整就该能读（只有坏魔数/未知版本才拒绝）");
 
             assert!(back.days.len() <= 2, "cut={cut}");
         }
-        let partial = parse_file(&bytes[..HEADER_LEN + DAY_LEN_V3]).expect("头还在");
+        let partial = parse_file(&bytes[..HEADER_LEN + DAY_LEN_V4]).expect("头还在");
         assert_eq!(partial.days.len(), 1);
         assert_eq!(partial.days[0].date, 20261016);
     }

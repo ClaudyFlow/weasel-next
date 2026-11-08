@@ -9,10 +9,9 @@ members = [
     # 设置界面（Slint 版）
     # experimental panel. Keep both buildable so either can be launched.
     "Setting",
-    # Vulkan 版设置外壳（2026-10-31 起，先在 _vk_probe 里验，现已并入工作区）
-    "Setting-vk",
-    # Vulkan 渲染器原型（2026-11-01 从 Setting-vk 拆出：候选窗/模糊/后端探测）
-    "Renderer-VK",
+    # Vulkan 两条原型线已于 2026-11-05 整体移除（Setting-vk / Renderer-VK）。
+    # 原因：GDI 字形 + Win32 窗口 + SetWindowRgn + BitBlt 模糊全绑死 Windows，
+    # 跨不了平台；三模式几何又是编译期硬编码，theme.yaml 改不动。详见 doc/squeeze-candidate-design.md。
     "common",
     "theme/api",
     "style",

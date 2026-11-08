@@ -270,12 +270,13 @@ mod tests {
 
     #[test]
     fn lists_official_schemes_from_factory_file() {
-        // 出厂数据是 **YAML**（rime 数据文件，见 `lib.rs` 里 `const OFFICIAL` 的说明）。
+        // 官方皮肤自 2026-11-08 起不再随包分发（皮肤归 `Rime-Next/theme/`），
+        // 原文件留在 `style/tests/data/` 作测试夹具（见 `lib.rs` 里 `const OFFICIAL` 的说明）。
         let base = crate::parse_file(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../Rime-Next/weasel.official.yaml"
+            "/tests/data/weasel.official.yaml"
         ))
-        .expect("出厂 weasel.yaml 必须可解析");
+        .expect("官方皮肤夹具必须可解析");
         let schemes = list_schemes(&base, None);
         println!("列出 {} 套配色，前五：", schemes.len());
         for info in schemes.iter().take(5) {

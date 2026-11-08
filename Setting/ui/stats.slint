@@ -6,6 +6,21 @@ import { ScrollView, VerticalBox } from "std-widgets.slint";
 // 没有数据时全部显示 0，界面照样能打开（便于先看结构）。
 
 // 一天的热力格
+export struct CloudWord {
+    // 词云里的一个词：字号、字宽、坐标都在 Rust 侧算好（阿基米德螺线 + 积分图防重叠）。
+    // 这里只管按坐标画 —— Slint 用系统字体渲染，抗锯齿交给它。
+    word: string,
+    size: int,
+    x: int,
+    y: int,
+    // 估算字宽：给 Text 固定宽度，渲染框和布局框才对得上
+    advance: int,
+    // 颜色档 0..4（深蓝 → 灰绿，按排名分档）
+    tint: int,
+    // 上屏次数
+    count: int,
+}
+
 export struct StatDay {
     // 该日击键数（决定颜色深浅）
     count: int,
@@ -159,7 +174,24 @@ export component StatsPage inherits Rectangle {
     in property <int> total-keys: 0;
     in property <int> streak-days: 0;
     in property <[StatDay]> days: [];
+    // 年度活跃卡片：12 列（月）× 7 行（周日→周六）= 84 格
+    in property <[StatDay]> month-days: [];
+    in property <int> active-days: 0;
+    in property <int> active-rate: 0;
+    // 12 个月各自起始周（列索引）
+    in property <[int]> month-week: [];
+    // 按月日历（每月从 1 号起，行主序）：值 + 每月周数 + 每月起始下标
+    in property <[StatDay]> calendar: [];
+    in property <[int]> calendar-cols: [];
+    in property <[int]> calendar-offsets: [];
+    in property <[int]> calendar-mask: [];
+    // 左侧行标签：周日→周六（和网格行序一致）
+    in property <[string]> weekday-labels: ["一", "二", "三", "四", "五", "六", "日"];
     in property <[StatWord]> words: [];
+    // 词云排版结果（Rust 侧算好）
+    in property <[CloudWord]> cloud: [];
+    /// 词云来源说明（"1260 个学词 · 来自 2 个方案的用户词典"）
+    in property <string> cloud-note: "";
     in property <[StatWord]> words2: [];
     in property <[StatWord]> words3: [];
     // 键盘热力图 / 码长直方图（来自 stat.bin 尾部扩展；还没采到时为空）
@@ -167,6 +199,7 @@ export component StatsPage inherits Rectangle {
     in property <[int]> code-lens: [];
     // 时段统计：24 个小时桶，值是 0..100 的百分比（Rust 侧归一化好）。
     in property <[int]> hour-keys: [];
+    in property <[int]> hour-alpha: [];
     /// 峰值桶下标（高亮用）。
     in property <int> hour-peak: 0;
     /// 摘要行：最活跃 X 时 · 共 N 分。
@@ -196,6 +229,35 @@ export component StatsPage inherits Rectangle {
     // 而页面宽度来自布局，Slint 判成绑定环直接编译失败（2026-10-19 实测）。
     // 公式：卡片内宽 = 窗口宽 − 页面 padding(14×2) − 卡片 padding(14×2) − 52 个 3px 间隙。
     in property <length> heat-cell: 20px;
+
+    // 按月日历格的颜色（0 键 = 浅灰，四档绿）
+    pure function calendar-color(index: int) -> color {
+        if (index < 0 || root.calendar.length <= index
+            || (root.calendar-mask.length > index && root.calendar-mask[index] == 0)) {
+            return transparent;
+        }
+        return root.calendar[index].count <= 0
+            ? #f1f2f4
+            : (root.calendar[index].count < 100
+                ? #c9ebd4
+                : (root.calendar[index].count < 500
+                    ? #5cc77e
+                    : (root.calendar[index].count < 1500 ? #149a4c : #0b6b33)));
+    }
+
+    // 年度活跃格的颜色：0 键 = 浅灰，四档绿（用户 2026-11-01 设计图：浅→深）
+    pure function month-cell-color(index: int) -> color {
+        if (root.days.length <= index) {
+            return #f1f2f4;
+        }
+        return root.days[index].count <= 0
+            ? #f1f2f4
+            : (root.days[index].count < 100
+                ? #c9ebd4
+                : (root.days[index].count < 500
+                    ? #5cc77e
+                    : (root.days[index].count < 1500 ? #149a4c : #0b6b33)));
+    }
 
     // 今日格在年度热力图里的坐标（列 = 周，行 = 周日→周六）；-1 = 今天不在今年网格里，不画高亮。
     in property <int> today-week: -1;
@@ -244,87 +306,6 @@ export component StatsPage inherits Rectangle {
 
             Rectangle { horizontal-stretch: 1; }
 
-        }
-
-        // ── 十二张数字卡片：3 列 × 4 行（用户 2026-10-26 定稿顺序）──
-        // 上屏字数 / 平均每日字数 / 击键 · 平均速度 / 最大速度 / 打字时间 ·
-        // 平均击键 / 最大击键 / 键准 · 平均码长 / 平均词长 / 连续使用
-        // 宽度 = (内容宽 - 左右 padding 28 - 2 个 spacing 28 - 8 余量) / 3。
-        // 灰色小数字一律同字号粗体（用户要求），表示历史值。
-        GridLayout {
-            spacing: 14px;
-
-            StatCard {
-                col: 0; row: 0; width: (root.width - 64px) / 3; vertical-stretch: 1;
-                title: "上屏字数"; value: root.today-chars; unit: "字";
-                accent: #22c55e; note: root.total-chars-note;
-            }
-
-            StatCard {
-                col: 1; row: 0; width: (root.width - 64px) / 3; vertical-stretch: 1;
-                title: "平均每日字数"; value-text: root.avg-daily-text; unit: "字/天";
-                accent: #4d7c0f; note: root.avg-daily-note;
-            }
-
-            StatCard {
-                col: 2; row: 0; width: (root.width - 64px) / 3; vertical-stretch: 1;
-                title: "击键"; value: root.today-keys; unit: "次";
-                note: root.total-keys-note;
-            }
-
-            StatCard {
-                col: 0; row: 1; width: (root.width - 64px) / 3; vertical-stretch: 1;
-                title: "平均速度"; value: root.today-speed; unit: "字/分";
-                accent: #15803d; note: root.all-speed-note;
-            }
-
-            StatCard {
-                col: 1; row: 1; width: (root.width - 64px) / 3; vertical-stretch: 1;
-                title: "最大速度"; value: root.best-speed; unit: "字/分";
-                accent: #b42318; note: root.best-speed-note;
-            }
-
-            StatCard {
-                col: 2; row: 1; width: (root.width - 64px) / 3; vertical-stretch: 1;
-                title: "打字时间"; value-text: root.time-today-text; unit: "分";
-                accent: #0f766e; note: root.time-total-note;
-            }
-
-            StatCard {
-                col: 0; row: 2; width: (root.width - 64px) / 3; vertical-stretch: 1;
-                title: "平均击键"; value-text: root.today-key-speed-text; unit: "键/秒";
-                accent: #0e7490; note: root.all-key-speed-note;
-            }
-
-            StatCard {
-                col: 1; row: 2; width: (root.width - 64px) / 3; vertical-stretch: 1;
-                title: "最大击键"; value-text: root.best-key-speed-text; unit: "键/秒";
-                accent: #b45309; note: root.best-key-speed-note;
-            }
-
-            StatCard {
-                col: 2; row: 2; width: (root.width - 64px) / 3; vertical-stretch: 1;
-                title: "键准"; value-text: root.key-accuracy-text; unit: "%";
-                accent: #0891b2; note: root.key-accuracy-note;
-            }
-
-            StatCard {
-                col: 0; row: 3; width: (root.width - 64px) / 3; vertical-stretch: 1;
-                title: "平均码长"; value-text: root.code-len-text; unit: "键/字";
-                accent: #7c3aed; note: root.all-code-len-note;
-            }
-
-            StatCard {
-                col: 1; row: 3; width: (root.width - 64px) / 3; vertical-stretch: 1;
-                title: "平均词长"; value-text: root.word-len-text; unit: "字/轮";
-                accent: #a16207; note: root.word-len-note;
-            }
-
-            StatCard {
-                col: 2; row: 3; width: (root.width - 64px) / 3; vertical-stretch: 1;
-                title: "连续使用"; value: root.streak-days; unit: "天";
-                accent: #166534; note: root.best-streak-note;
-            }
         }
 
         // ── 生涯段位 + 进度条（20 级 + 7 境界，定义来自 input_statistics.lua）────
@@ -395,155 +376,228 @@ text: "Lv." + root.level + " / 100";
             }
         }
 
-        // ── 整年热力图 ────────────────────────────────────
+        // ── 十二张数字卡片：3 列 × 4 行（用户 2026-10-26 定稿顺序）──
+        // 上屏字数 / 平均每日字数 / 击键 · 平均速度 / 最大速度 / 打字时间 ·
+        // 平均击键 / 最大击键 / 键准 · 平均码长 / 平均词长 / 连续使用
+        // 宽度 = (内容宽 - 左右 padding 28 - 2 个 spacing 28 - 8 余量) / 3。
+        // 灰色小数字一律同字号粗体（用户要求），表示历史值。
+        GridLayout {
+            spacing: 14px;
+
+            StatCard {
+                col: 0; row: 0; width: (root.width - 56px) / 3; vertical-stretch: 1;
+                title: "上屏字数"; value: root.today-chars; unit: "字";
+                accent: #22c55e; note: root.total-chars-note;
+            }
+
+            StatCard {
+                col: 1; row: 0; width: (root.width - 56px) / 3; vertical-stretch: 1;
+                title: "平均每日字数"; value-text: root.avg-daily-text; unit: "字/天";
+                accent: #4d7c0f; note: root.avg-daily-note;
+            }
+
+            StatCard {
+                col: 2; row: 0; width: (root.width - 56px) / 3; vertical-stretch: 1;
+                title: "击键"; value: root.today-keys; unit: "次";
+                note: root.total-keys-note;
+            }
+
+            StatCard {
+                col: 0; row: 1; width: (root.width - 56px) / 3; vertical-stretch: 1;
+                title: "平均速度"; value: root.today-speed; unit: "字/分";
+                accent: #15803d; note: root.all-speed-note;
+            }
+
+            StatCard {
+                col: 1; row: 1; width: (root.width - 56px) / 3; vertical-stretch: 1;
+                title: "最大速度"; value: root.best-speed; unit: "字/分";
+                accent: #b42318; note: root.best-speed-note;
+            }
+
+            StatCard {
+                col: 2; row: 1; width: (root.width - 56px) / 3; vertical-stretch: 1;
+                title: "打字时间"; value-text: root.time-today-text; unit: "分";
+                accent: #0f766e; note: root.time-total-note;
+            }
+
+            StatCard {
+                col: 0; row: 2; width: (root.width - 56px) / 3; vertical-stretch: 1;
+                title: "平均击键"; value-text: root.today-key-speed-text; unit: "键/秒";
+                accent: #0e7490; note: root.all-key-speed-note;
+            }
+
+            StatCard {
+                col: 1; row: 2; width: (root.width - 56px) / 3; vertical-stretch: 1;
+                title: "最大击键"; value-text: root.best-key-speed-text; unit: "键/秒";
+                accent: #b45309; note: root.best-key-speed-note;
+            }
+
+            StatCard {
+                col: 2; row: 2; width: (root.width - 56px) / 3; vertical-stretch: 1;
+                title: "键准"; value-text: root.key-accuracy-text; unit: "%";
+                accent: #0891b2; note: root.key-accuracy-note;
+            }
+
+            StatCard {
+                col: 0; row: 3; width: (root.width - 56px) / 3; vertical-stretch: 1;
+                title: "平均码长"; value-text: root.code-len-text; unit: "键/字";
+                accent: #7c3aed; note: root.all-code-len-note;
+            }
+
+            StatCard {
+                col: 1; row: 3; width: (root.width - 56px) / 3; vertical-stretch: 1;
+                title: "平均词长"; value-text: root.word-len-text; unit: "字/轮";
+                accent: #a16207; note: root.word-len-note;
+            }
+
+            StatCard {
+                col: 2; row: 3; width: (root.width - 56px) / 3; vertical-stretch: 1;
+                title: "连续使用"; value: root.streak-days; unit: "天";
+                accent: #166534; note: root.best-streak-note;
+            }
+        }
+
+        // ── 全年活跃记录（用户 2026-11-01 设计图：12 列 = 月份 × 7 行）──────
         Rectangle {
             background: white;
-            border-radius: 14px;
-
+            border-radius: 18px;
             VerticalLayout {
-                padding: 14px;
-                spacing: 8px;
+                padding: 22px;
+                spacing: 12px;
 
-                Text {
-                    text: root.quarter-label;
-                    font-size: 22px;
-                    font-weight: 700;
-                    color: #334155;
-                }
-
-                // GitHub 贡献图布局：**列 = 周，行 = 星期**（7 行 × 53 列 = 371 格，整一年）
-                // 数据按「周 × 7 + 星期」索引，Rust 侧保证数组补满 371 个。
-                // 尺寸不再写死 17px：按 heat-cell 实时计算，横向撑满卡片（贴到两端）。
-                // 网格 + 今日「准星」。
-                // 迭代过三版（2026-10-26）：① 细蓝框 →用户说看不见；② 半透明蓝染整行整列 →
-                // 同一透明度压在深绿/浅灰上效果不同，看着像脏了、用户问「这好看吗」；
-                // ③ 光带藏在格子底下 → 只在 3px 缝里露几个点，像噪点。
-                // 现在：今天那格**实心蓝 + 白描边**，再从它向上下左右各伸一条 2px 蓝线、往外渐隐
-                // （画在格子上面，所以是连续的准星，不是在缝里闪）。
-                Rectangle {
-                    height: 7 * root.heat-cell + 18px;   // 7 行 + 6 个 3px 行距
-
-                    HorizontalLayout {
-                    spacing: 3px;
-                    alignment: start;
-                    for week in 53 : VerticalLayout {
-                        spacing: 3px;
-                        for day in 7 : Rectangle {
-                            width: root.heat-cell;
-                            height: root.heat-cell;
-                            border-radius: 2px;
-                            // 今天那格**保持绿色**（用户 2026-10-26：「今日的还是绿色」），
-                            // 高亮全靠下面四条从它伸向网格四边的渐变带。
-                            background: root.days[week * 7 + day].count <= 0
-                                ? #e7ecf2
-                                : (root.days[week * 7 + day].count < 100
-                                    ? #bbf7d0
-                                    : (root.days[week * 7 + day].count < 500
-                                        ? #4ade80
-                                        : (root.days[week * 7 + day].count < 1500 ? #22c55e : #15803d)));
+                // 标题行：标题 + 副标 + 关闭按钮
+                HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        spacing: 2px;
+                        Text {
+                            text: "全年活跃记录";
+                            font-size: 22px;
+                            font-weight: 700;
+                            color: #0f172a;
+                        }
+                        Text {
+                            text: "\{root.active-days} 天活跃 · 活跃率 \{root.active-rate}%";
+                            font-size: 13px;
+                            color: #94a3b8;
                         }
                     }
-                    }
-
-                    // ── 今日高亮：从今天那格向**上下左右各自**伸一条渐变带，一直到网格边缘 ──
-                    // 用户 2026-10-26：「直接做成今日到边缘的渐变，也就是独自计算上下左右，
-                    // 然后分别渐变，今日的还是绿色」。所以四条带分开算：每条都是「今日端最蓝 →
-                    // 边缘端透明」，并且都从格子的边开始，不盖在今日格上（它保持绿色）。
-                    // 左
-                    if root.today-week >= 0 : Rectangle {
-                        x: 0;
-                        y: root.today-day * (root.heat-cell + 3px);
-                        width: root.today-week * (root.heat-cell + 3px) > 0px
-                            ? root.today-week * (root.heat-cell + 3px) : 0px;
-                        height: root.heat-cell;
-                        background: @linear-gradient(90deg, #2563eb00, #2563eb59);
-                    }
-                    // 右
-                    if root.today-week >= 0 : Rectangle {
-                        x: root.today-week * (root.heat-cell + 3px) + root.heat-cell;
-                        y: root.today-day * (root.heat-cell + 3px);
-                        width: parent.width - (root.today-week * (root.heat-cell + 3px) + root.heat-cell);
-                        height: root.heat-cell;
-                        background: @linear-gradient(90deg, #2563eb59, #2563eb00);
-                    }
-                    // 上
-                    if root.today-week >= 0 : Rectangle {
-                        x: root.today-week * (root.heat-cell + 3px);
-                        y: 0;
-                        width: root.heat-cell;
-                        height: root.today-day * (root.heat-cell + 3px);
-                        background: @linear-gradient(180deg, #2563eb00, #2563eb59);
-                    }
-                    // 下
-                    if root.today-week >= 0 : Rectangle {
-                        x: root.today-week * (root.heat-cell + 3px);
-                        y: root.today-day * (root.heat-cell + 3px) + root.heat-cell;
-                        width: root.heat-cell;
-                        height: parent.height - (root.today-day * (root.heat-cell + 3px) + root.heat-cell);
-                        background: @linear-gradient(180deg, #2563eb59, #2563eb00);
-                    }
                 }
 
-                // 图例（GitHub 同款：少 → 多 五个色块）—— 用户 2026-10-19：整行居中
+                // 统计行 + 图例
                 HorizontalLayout {
-                    spacing: 2px;
-                    alignment: center;
-                    Text { text: "少"; font-size: 15px; color: #94a3b8; vertical-alignment: center; }
-                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #e7ecf2; }
-                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #bbf7d0; }
-                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #4ade80; }
-                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #22c55e; }
-                    Rectangle { width: 13px; height: 13px; border-radius: 2px; background: #15803d; }
-                    Text { text: "多"; font-size: 15px; color: #94a3b8; vertical-alignment: center; }
-                    Text { text: "（<100 / <500 / <1500 / ≥1500 键）"; font-size: 16px; color: #94a3b8; vertical-alignment: center; }
+                    spacing: 24px;
+                    alignment: start;
+                    HorizontalLayout {
+                        spacing: 5px;
+                        alignment: start;
+                        Text { text: "\{root.active-days}"; font-size: 20px; font-weight: 700; color: #0f172a; }
+                        Text { text: "天活跃"; font-size: 13px; color: #94a3b8; vertical-alignment: center; }
+                    }
+                    HorizontalLayout {
+                        spacing: 5px;
+                        alignment: start;
+                        Text { text: "\{root.active-rate}%"; font-size: 20px; font-weight: 700; color: #14a35c; }
+                        Text { text: "活跃率"; font-size: 13px; color: #94a3b8; vertical-alignment: center; }
+                    }
+                    HorizontalLayout {
+                        spacing: 5px;
+                        alignment: start;
+                        Text { text: "\{root.streak-days}"; font-size: 20px; font-weight: 700; color: #0f172a; }
+                        Text { text: "周连登"; font-size: 13px; color: #94a3b8; vertical-alignment: center; }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    HorizontalLayout {
+                        spacing: 5px;
+                        alignment: center;
+                        Text { text: "未活跃"; font-size: 12px; color: #94a3b8; }
+                        for level in 4 : Rectangle {
+                            width: 12px;
+                            height: 12px;
+                            border-radius: 3px;
+                            background: level == 0 ? #f1f2f4 : (level == 1 ? #c9ebd4 : (level == 2 ? #5cc77e : #149a4c));
+                        }
+                        Text { text: "活跃"; font-size: 12px; color: #94a3b8; }
+                    }
                 }
 
-            }
-        }
-
-        // ── 常用字 Top ────────────────────────────────────
-        // 没有字频数据时整张卡片不进布局。注意不能用 `visible: false`：
-        // Slint 里那只是不画，min-height 108px + 12px 间距照样占位，
-        // 会在热力图下面留一条 120px 的空灰边（2026-10-19 实测）。
-        // ── 键盘热力图（每个键按了多少次；数据来自 stat.bin 尾部扩展）──
-        Rectangle {
-            border-radius: 12px;
-            background: #ffffff;
-            VerticalLayout {
-                padding: 18px;
-                spacing: 12px;
-                alignment: start;
-                Text {
-                    text: "键盘热力图";
-                    font-size: 22px;
-                    font-weight: 700;
-                    color: #0f172a;
+                // 月份标签：每个月一块，宽度 = 该月周数 × 格宽（用户 2026-11-01：
+                // 「一个月一个月从一月一开始计算」——不再用统一的 53 周等分）
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: space-between;
+                    Rectangle { width: 14px; }
+                    for m in 12 : Text {
+                        width: (root.calendar-cols.length > m ? root.calendar-cols[m] : 4) * (root.heat-cell + 3px);
+                        text: "\{m + 1}月";
+                        font-size: 11px;
+                        color: #64748b;
+                        horizontal-alignment: center;
+                    }
+                    Rectangle { width: 14px; }
                 }
-                // 主键盘区（2026-10-18 用户要求：做成真正的主键盘区）
-    // 指法分布（2026-10-19：移植蓝宝石的 hand/row/finger 统计）
-    Rectangle {
-        // 不写死高度：让卡片贴着三行文字的底部（用户 2026-10-25）
-        border-radius: 10px;
-        background: #ffffff;
-        border-width: 1px;
-        border-color: #c9d2de;
-        VerticalLayout {
-            padding: 12px;
-            spacing: 6px;
-            alignment: start;
-            Text {
-                text: "指法分布";
-                font-size: 22px;
-                font-weight: 700;
-                color: #17202b;
+
+                // 网格：12 个月块，每块 7 行（周一→周日）× 该月周数
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: space-between;
+                    // 左侧周几
+                    VerticalLayout {
+                        spacing: 3px;
+                        for d in 7 : Text {
+                            width: 14px;
+                            height: root.heat-cell;
+                            text: root.weekday-labels.length > d ? root.weekday-labels[d] : "";
+                            font-size: 9px;
+                            color: #94a3b8;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                        }
+                    }
+                    for m in 12 : VerticalLayout {
+                        spacing: 3px;
+                        for row in 7 : HorizontalLayout {
+                            spacing: 3px;
+                            for col in (root.calendar-cols.length > m ? root.calendar-cols[m] : 4) : Rectangle {
+                                width: root.heat-cell;
+                                height: root.heat-cell;
+                                border-radius: 3px;
+                                background: root.calendar-color(
+                                    (root.calendar-offsets.length > m ? root.calendar-offsets[m] : 0)
+                                    + row * (root.calendar-cols.length > m ? root.calendar-cols[m] : 4) + col);
+                                if (root.calendar.length > (root.calendar-offsets.length > m ? root.calendar-offsets[m] : 0) + row * (root.calendar-cols.length > m ? root.calendar-cols[m] : 4) + col
+                                    && root.calendar[(root.calendar-offsets.length > m ? root.calendar-offsets[m] : 0) + row * (root.calendar-cols.length > m ? root.calendar-cols[m] : 4) + col].today) : Rectangle {
+                                    border-width: 1.5px;
+                                    border-color: #2563eb;
+                                    border-radius: 3px;
+                                    Text {
+                                        text: "今";
+                                        font-size: 9px;
+                                        font-weight: 700;
+                                        color: #ffffff;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // 右侧周几
+                    VerticalLayout {
+                        spacing: 3px;
+                        for d in 7 : Text {
+                            width: 14px;
+                            height: root.heat-cell;
+                            text: root.weekday-labels.length > d ? root.weekday-labels[d] : "";
+                            font-size: 9px;
+                            color: #94a3b8;
+                            horizontal-alignment: left;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
             }
-            Text { text: "左右手　" + root.finger-hands; font-size: 12px; color: #334155; }
-            Text { text: "三行　　" + root.finger-rows; font-size: 12px; color: #334155; }
-            // 2026-10-24 修：这里原来写「八指」，但下面实际有 9 项
-            // （左手 4 指 + 拇指 1 + 右手 4 指）。不是 10 是因为空格只记给一只拇指。
-            Text { text: "九指　　" + root.finger-names; font-size: 12px; color: #4b5563; overflow: elide; }
         }
-    }
 
     // 时段统计（2026-10-31 用户要求）：一天 24 小时，每小时的按键量（0..100 百分比）。
     Rectangle {
@@ -583,12 +637,14 @@ text: "Lv." + root.level + " / 100";
                         background: transparent;
                         VerticalLayout {
                             width: 100%;
-                            alignment: end;
+                            alignment: center;
                             Rectangle {
                                 width: 100%;
                                 height: (value * 1px) * 1;
                                 border-radius: 2px;
-                                background: value <= 0 ? #e2e8f0 : (index == root.hour-peak ? #2563eb : #93c5fd);
+                                background: value <= 0 ? #e2e8f0 :
+                    (index >= 24 ? #93c5fd.with_alpha((root.hour-alpha[index] / 100.0)) :
+                    (index == root.hour-peak ? #2563eb : #93c5fd));
                             }
                         }
                     }
@@ -603,6 +659,58 @@ text: "Lv." + root.level + " / 100";
             }
         }
     }
+
+        // ── 常用字 Top ────────────────────────────────────
+        // 没有字频数据时整张卡片不进布局。注意不能用 `visible: false`：
+        // Slint 里那只是不画，min-height 108px + 12px 间距照样占位，
+        // 会在热力图下面留一条 120px 的空灰边（2026-10-19 实测）。
+
+
+
+
+        // ── 键盘热力图（每个键按了多少次；数据来自 stat.bin 尾部扩展）──
+        Rectangle {
+            border-radius: 12px;
+            background: #ffffff;
+            VerticalLayout {
+                padding: 18px;
+                spacing: 12px;
+                alignment: start;
+                Text {
+                    text: "键盘热力图";
+                    font-size: 22px;
+                    font-weight: 700;
+                    color: #0f172a;
+                }
+                // 主键盘区（2026-10-18 用户要求：做成真正的主键盘区）
+
+
+    // 指法分布（2026-10-19：移植蓝宝石的 hand/row/finger 统计）
+    Rectangle {
+        // 不写死高度：让卡片贴着三行文字的底部（用户 2026-10-25）
+        border-radius: 10px;
+        background: #ffffff;
+        border-width: 1px;
+        border-color: #c9d2de;
+        VerticalLayout {
+            padding: 12px;
+            spacing: 6px;
+            alignment: start;
+            Text {
+                text: "指法分布";
+                font-size: 22px;
+                font-weight: 700;
+                color: #17202b;
+            }
+            Text { text: "左右手　" + root.finger-hands; font-size: 12px; color: #334155; }
+            Text { text: "三行　　" + root.finger-rows; font-size: 12px; color: #334155; }
+            // 2026-10-24 修：这里原来写「八指」，但下面实际有 9 项
+            // （左手 4 指 + 拇指 1 + 右手 4 指）。不是 10 是因为空格只记给一只拇指。
+            Text { text: "九指　　" + root.finger-names; font-size: 12px; color: #4b5563; overflow: elide; }
+        }
+    }
+
+
 
                 if root.key-counts.length >= 256 : VerticalLayout {
                     spacing: 4px;
@@ -691,91 +799,57 @@ text: "Lv." + root.level + " / 100";
             }
         }
 
-        if root.words.length > 0 : Rectangle {
+
+
+        // 灵感来源：放在页面最下方、卡片之外的灰底上（用户 2026-10-19：
+        // 从热力图卡片里拿出来，落到下面那块灰色区域）。
+        // 用户 2026-10-25：🐐🪶❄️ 是「羊毛雪花」的 emoji，要放在这四个字**前面**。
+        // ── 常用字词云（用户 2026-11-01 22:1x：要散开，像词云；放最后一块）──
+        if root.cloud.length > 0 : Rectangle {
             background: white;
             border-radius: 14px;
-            // 用户 2026-10-30：「常用字做成词云」—— 原来 20 个等大方块的数字墙，
-            // 改成三行、字号＝频次（3 大 / 7 中 / 其余小），每行居中。
-            // 字号由 Rust 按 sqrt(频次 / 最高频次) 算好（14~44px），Slint 只管画。
-            height: 250px;
-
             VerticalLayout {
-                padding: 14px;
-                padding-bottom: 18px;
-                spacing: 4px;
-
+                padding: 18px;
+                spacing: 10px;
                 HorizontalLayout {
-                    spacing: 8px;
+                    spacing: 10px;
                     Text {
-                        text: "常用字";
+                        text: "我的词云";
                         font-size: 22px;
                         font-weight: 700;
                         color: #334155;
                     }
-                    Rectangle { horizontal-stretch: 1; }
                     Text {
-                        text: "字号 = 出现次数";
+                        text: root.cloud-note;
                         font-size: 12px;
                         color: #94a3b8;
                         vertical-alignment: center;
                     }
                 }
-
-                // 第一行：最大的三个，带次数。
-                // 字数不给等高会各自居中、数字上下错位（2026-10-30 实测截图）——
-                // 所以把字放进固定 46px 的框里按底对齐，数字就落在同一条线上。
-                HorizontalLayout {
-                    alignment: center;
-                    spacing: 22px;
-                    for word in root.words : VerticalLayout {
-                        spacing: 2px;
-                        Rectangle {
-                            height: 46px;
-                            Text {
-                                text: word.word;
-                                font-size: word.size;
-                                font-weight: 700;
-                                color: #0f172a;
-                                horizontal-alignment: center;
-                                vertical-alignment: bottom;
-                            }
-                        }
-                        Text {
-                            text: word.count;
-                            font-size: 12px;
-                            color: #94a3b8;
-                            horizontal-alignment: center;
-                        }
-                    }
-                }
-
-                // 第二行：中间七个
-                HorizontalLayout {
-                    alignment: center;
-                    spacing: 14px;
-                    for word in root.words2 : Text {
-                        text: word.word;
-                        font-size: word.size;
-                        color: #334155;
-                    }
-                }
-
-                // 第三行：剩下的十个，最小
-                HorizontalLayout {
-                    alignment: center;
-                    spacing: 10px;
-                    for word in root.words3 : Text {
-                        text: word.word;
-                        font-size: word.size;
-                        color: #64748b;
+                // 画布：位置由 Rust 算好（阿基米德螺线 + 积分图碰撞），这里只按坐标画。
+                // 布局跑在固定逻辑尺寸 1040×400 上，这里按容器宽度等比缩放 ——
+                // 等比缩放不改变相对位置，所以缩放后照样不重叠。
+                Rectangle {
+                    property <float> k: self.width / 1040px;
+                    height: 400px * k;
+                    clip: true;
+                    for item in root.cloud : Text {
+                        x: (item.x * 1px) * k;
+                        y: (item.y * 1px) * k;
+                        width: (item.advance * 1px) * k;
+                        height: (item.size * 1px) * k;
+                        text: item.word;
+                        font-size: (item.size * 1px) * k;
+                        // 大词加粗：全角字符的宽度仍是 1em，加粗不改布局
+                        font-weight: item.size > 30 ? 700 : 500;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        color: item.tint == 0 ? #0B1F30 : (item.tint == 1 ? #17455F : (item.tint == 2 ? #256A78 : (item.tint == 3 ? #3F7D72 : #6E8B84)));
                     }
                 }
             }
         }
 
-        // 灵感来源：放在页面最下方、卡片之外的灰底上（用户 2026-10-19：
-        // 从热力图卡片里拿出来，落到下面那块灰色区域）。
-        // 用户 2026-10-25：🐐🪶❄️ 是「羊毛雪花」的 emoji，要放在这四个字**前面**。
         Text {
             text: "灵感来源：🐐🪶❄🌸 羊毛雪花 · input_statistic 统计插件";
             font-size: 12px;
@@ -836,6 +910,8 @@ export component StatsWindow inherits Window {
     in property <int> total-keys: 0;
     in property <int> streak-days: 0;
     in property <[StatDay]> days: [];
+    in property <[CloudWord]> cloud: [];
+    in property <string> cloud-note: "";
     in property <[StatWord]> words: [];
     in property <[StatWord]> words2: [];
     in property <[StatWord]> words3: [];
@@ -843,6 +919,7 @@ export component StatsWindow inherits Window {
     in property <[int]> code-lens: [];
     // 时段统计：24 个小时桶，值是 0..100 的百分比（Rust 侧归一化好）。
     in property <[int]> hour-keys: [];
+    in property <[int]> hour-alpha: [];
     /// 峰值桶下标（高亮用）。
     in property <int> hour-peak: 0;
     /// 摘要行：最活跃 X 时 · 共 N 分。
@@ -904,6 +981,8 @@ export component StatsWindow inherits Window {
         total-keys: root.total-keys;
         streak-days: root.streak-days;
         days: root.days;
+        cloud: root.cloud;
+        cloud-note: root.cloud-note;
         words: root.words;
         words2: root.words2;
         words3: root.words3;
@@ -927,19 +1006,3 @@ export component StatsWindow inherits Window {
         today-day: root.today-day;
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

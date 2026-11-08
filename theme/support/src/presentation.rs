@@ -7,13 +7,16 @@ use crate::bindings::{
 };
 use crate::theme_api::{Anchor as RenderRect, CandidateView};
 
-/// 判断完整快照是否包含可展示内容及有效定位锚点。
+/// 判断完整快照是否包含可展示内容。
 ///
-/// 快照必须要求可见，并且至少包含候选或预编辑文本；锚点缺失或无效时结果为 `false`。
+/// 快照必须要求可见，并且至少包含候选或预编辑文本。**不要求锚点有效**：
+/// 可见性由引擎侧决定（`render_snapshot` 的 `visible`），锚点缺失只影响定位
+/// 不影响显示——重启输入法后的首键（还没有任何光标上下文）按 F4/Ctrl+`
+/// 打开方案選單时，若在这里扣住锚点，菜单会整帧不画，看起来像"按键直接过去了"
+/// （Engine `renderer_bridge.rs` 注释明确说过选单无光标上下文也要显示）。
+/// 定位端（`theme/src/mod.rs::position`）对无效锚点自行回退。
 pub fn is_visible(snapshot: &CandidateView) -> bool {
-    snapshot.visible
-        && (!snapshot.items.is_empty() || snapshot.preedit.is_some())
-        && snapshot.anchor.as_ref().is_some_and(|anchor| anchor.valid)
+    snapshot.visible && (!snapshot.items.is_empty() || snapshot.preedit.is_some())
 }
 
 /// 判断快照是否包含位于有效插入点附近的中英文模式提示。
@@ -178,18 +181,23 @@ mod tests {
         assert_eq!(within_work_area(&anchor, 3000, 1200, &work), (-1920, 0));
     }
     #[test]
-    fn visibility_requires_items_and_an_anchor() {
+    fn visibility_requires_items_but_not_a_valid_anchor() {
         let mut snapshot = CandidateView::default();
         snapshot.visible = true;
         snapshot.items.push(Default::default());
-        assert!(!is_visible(&snapshot));
+        // 2026-11-07：锚点无效（首键选單）也必须可见，定位端自行回退。
+        assert!(is_visible(&snapshot), "无锚点但有候选 ⇒ 可见");
         snapshot.anchor = Some(RenderRect {
-            valid: true,
+            valid: false,
             ..Default::default()
         });
-        assert!(is_visible(&snapshot));
+        assert!(is_visible(&snapshot), "锚点 invalid 不扣整帧");
         snapshot.visible = false;
         assert!(!is_visible(&snapshot));
+        snapshot.visible = true;
+        snapshot.items.clear();
+        snapshot.preedit = None;
+        assert!(!is_visible(&snapshot), "既无候选也无预编辑 ⇒ 不可见");
     }
 
     #[test]

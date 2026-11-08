@@ -47,6 +47,11 @@ impl RimeLibraryApi {
         field!(destroy_session);
         field!(process_key);
         field!(commit_composition);
+        // 2026-11-07 修：辅助面板直拟上屏（点符号/剪贴板卡片）走 `commit_string`。
+        // 这一项原来漏在白名单里 → 快照恒为 None → `mod.rs` 的 COMMIT_TEXT 臂静默走
+        // `_` 分支（只 eprintln，Engine 常驻模式没有日志文件），用户看到的就是
+        // 「点了符号没反应、候选窗还在」。函数表在 DLL 里明明有（vendor 头 319 行）。
+        field!(commit_string);
         field!(clear_composition);
         field!(get_commit);
         field!(free_commit);
@@ -138,6 +143,28 @@ mod tests {
         table.data_size += 128;
         let api = unsafe { RimeLibraryApi::load(&table, true) }.unwrap();
         assert!(api.api.change_page.is_some());
+    }
+
+    /// 直拟上屏依赖的 `commit_string` 必须真的从 DLL 函数表拷进快照。
+    ///
+    /// 2026-11-07 线上 bug：白名单漏了它，快照恒为 None，COMMIT_TEXT 臂静默失败
+    /// （用户实测「点符号不上屏」），所以这里同时钉住"有则拷到、老表则留空"。
+    #[test]
+    fn commit_string_is_snapshotted_only_when_the_table_covers_it() {
+        unsafe extern "C" fn commit_string(
+            _: raw::RimeSessionId,
+            _: *const std::os::raw::c_char,
+        ) -> i32 {
+            1
+        }
+        let mut table = deploy_table();
+        table.commit_string = Some(commit_string);
+        let api = unsafe { RimeLibraryApi::load(&table, true) }.unwrap();
+        assert!(api.api.commit_string.is_some());
+        // 老 DLL 的 data_size 不覆盖该字段时必须留 None，而不是越界读。
+        table.data_size = (offset_of!(raw::RimeApi, commit_string) - size_of::<i32>()) as i32;
+        let old = unsafe { RimeLibraryApi::load(&table, true) }.unwrap();
+        assert!(old.api.commit_string.is_none());
     }
 
     #[test]

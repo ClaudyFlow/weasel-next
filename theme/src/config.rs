@@ -19,6 +19,33 @@ use std::path::PathBuf;
 /// 出厂皮肤名（数据在 `<程序文件夹>\Rime-Next\theme\default\default.theme.yaml`）。
 pub const SKIN: &str = "default";
 
+/// 编码栏（挤压三模式）的**统一尺寸参数**——全部以 em 倍数表达，
+/// 在 `Metrics::new` 里乘 `font_point` 得到像素值。
+///
+/// 以前这些数散在三处各自硬编码：`layout.rs`（栏高 `font_point*1.5`、按钮组占宽 5em）
+/// 与 `paint.rs`（vsep 宽 0.5em/高 1em、按钮 1em 见方、红块 0.5em、绿带 0.5em）。
+/// 2026-11-06：横/竖分隔统一改 0.25em（用户「绿色分界线做成 0.25em」），
+/// 按钮组占宽因此从 5em 变 4.5em；红块只作间隔、不再绘制。
+/// 改一处忘一处就会对不齐（2026-11-05 用户：「统一编码栏的处理，做成一套参数」）。
+/// 现在唯一入口是这里，layout 与 paint 都从 `Metrics` 的像素字段读。
+pub mod bar {
+    /// 栏高（编码栏那一整行，文字带 1em + 上下各 0.25em 气）。
+    pub const HEIGHT_EM: f32 = 1.5;
+    /// 分隔条（vsep）宽：0.25em（2026-11-06 从 0.5em 收窄）。
+    pub const VSEP_W_EM: f32 = 0.25;
+    /// 分隔条高（设计稿 `.vsep { height: 1em }`；实际取 `min(栏高, 按钮)` = 1em）。
+    pub const VSEP_H_EM: f32 = 1.0;
+    /// 按钮 1em 见方。
+    pub const BTN_EM: f32 = 1.0;
+    /// 按钮之间的红块。
+    pub const DOT_EM: f32 = 0.5;
+    /// 编码栏下方的横分隔带高：0.25em（2026-11-06 从 0.5em 收窄）。
+    /// 绿底已去掉，这个数现在是分隔线上下留白的占位高度。
+    pub const HSEP_EM: f32 = 0.25;
+    /// 编码栏左右留白（设计稿 `.ime-bar { padding: .25em }`，紫色是调试色，只留空间）。
+    pub const PAD_EM: f32 = 0.25;
+}
+
 /// 官方 `UIStyle::LayoutType`：六种布局。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LayoutType {
@@ -28,6 +55,12 @@ pub enum LayoutType {
     VerticalFullscreen,
     HorizontalFullscreen,
     VerticalTextFullscreen,
+    /// 横流（挤压）：水平布局 + 选中膨胀
+    HorizontalSqueeze,
+    /// 飞瀑（挤压）：竖直布局 + 选中膨胀
+    VerticalSqueeze,
+    /// 竹简：格子式布局
+    Cells,
 }
 
 impl LayoutType {
@@ -44,6 +77,9 @@ impl LayoutType {
             Self::Vertical | Self::VerticalFullscreen => Self::Vertical,
             Self::Horizontal | Self::HorizontalFullscreen => Self::Horizontal,
             Self::VerticalText | Self::VerticalTextFullscreen => Self::VerticalText,
+            Self::HorizontalSqueeze => Self::Horizontal,
+            Self::VerticalSqueeze => Self::Vertical,
+            Self::Cells => Self::Cells,
         }
     }
     pub fn is_vertical_text(self) -> bool {
@@ -250,6 +286,10 @@ pub fn layout_type(style: &UIStyle) -> LayoutType {
         "vertical+fullscreen" => Some(LayoutType::VerticalFullscreen),
         "horizontal+fullscreen" => Some(LayoutType::HorizontalFullscreen),
         "vertical_text+fullscreen" => Some(LayoutType::VerticalTextFullscreen),
+        // Rime-Next 三模式
+        "horizontal_squeeze" => Some(LayoutType::HorizontalSqueeze),
+        "vertical_squeeze" => Some(LayoutType::VerticalSqueeze),
+        "cells" => Some(LayoutType::Cells),
         _ => None,
     } {
         kind = named;
@@ -328,11 +368,30 @@ pub enum Hover {
 #[allow(dead_code)]
 pub struct Metrics {
     pub layout_type: LayoutType,
+    /// 挤压三模式（横流 / 飞瀑 / 竹简）：选中候选的 padding 翻倍，邻居被真实挤开。
+    /// 由 `layout_type` 推导，从 Metrics 穿透到布局层 —— 不改 `Layout::build` 签名、
+    /// 不动 `vertical_layout` 几百行骨架（用户 2026-11-05 定的「外科手术式」接续点）。
+    pub squeeze: bool,
     pub align: Align,
     /// 面板圆角（官方 `round_corner_ex`，键 `corner_radius`）。
     pub round_corner_ex: f32,
     /// 高亮块圆角（官方 `round_corner`，键 `hilited_corner_radius`）。
     pub round_corner: f32,
+    // ---- 编码栏统一参数（见 `bar` 模块；像素值 = em 倍数 × font_point）----
+    /// 栏高（编码栏那一整行）。
+    pub bar_height: f32,
+    /// 分隔条（vsep）宽。
+    pub bar_vsep_w: f32,
+    /// 分隔条高（实际 `min(栏高, 按钮)`）。
+    pub bar_vsep_h: f32,
+    /// 按钮见方边长。
+    pub bar_btn: f32,
+    /// 按钮之间的红块边长。
+    pub bar_dot: f32,
+    /// 编码栏下方横分隔带占位高（绿底已去掉，只剩居中细线）。
+    pub bar_hsep: f32,
+    /// 编码栏左右留白（紫块的位置，产品里只留空间不涂色）。
+    pub bar_pad: f32,
     pub border: f32,
     pub margin_x: f32,
     pub margin_y: f32,
@@ -393,6 +452,10 @@ impl Metrics {
     pub fn new(style: &UIStyle, dpi: f32) -> Self {
         let l = &style.layout;
         let layout_type = layout_type(style);
+        let squeeze = matches!(
+            layout_type,
+            LayoutType::HorizontalSqueeze | LayoutType::VerticalSqueeze | LayoutType::Cells
+        );
         let scale = (dpi / 96.0).max(0.01);
         let font_scale = (dpi / 72.0).max(0.01);
 
@@ -468,8 +531,8 @@ impl Metrics {
         // ⑤ 间距与圆角跟**字高**绑定（用户 2026-11-01 定）：yaml 里那些写死的像素
         //    不再驱动布局，字号一变整窗比例跟着变，不用再逐个改配置。
         //      候选之间   = 一个全角字符 = 字高
-        //      候选小圆角 = 字高 / 2
-        //      外侧大圆角 = 字高
+        //      候选小圆角 = 字高 / 4（0.25em，2026-11-05 用户定）
+        //      外侧大圆角 = 字高（挤压三模式显示时取一半，见 `panel_radius`）
         //      编码与候选的上下、左右各留一个字高
         let font_h = style.font_point as f32 * font_scale;
         // 上面 ①~③ 算出来的这几个值不再生效，显式吞掉免得编译告警。
@@ -488,13 +551,15 @@ impl Metrics {
 
         let metrics = Self {
             layout_type,
+            squeeze,
             align: match l.align_type.to_ascii_lowercase().as_str() {
                 "top" => Align::Top,
                 "bottom" => Align::Bottom,
                 _ => Align::Center,
             },
             // 圆角 / 间距 / 内边距**全部按字高推导**（= HTML 预览里的 em）：
-            //   大框四边 1em、大框圆角 1em、小框四边 0.5em、小框圆角 0.5em、
+            //   大框四边 1em、大框圆角 1em（挤压三模式经 `panel_radius()` 减半）、
+            //   小框四边 0.5em、小框圆角 0.25em、
             //   框与框 0.5em、编码与框 0.5em、编码与箭头最小间距 0.5em
             //
             // ⚠️ 关键：高亮框是**以文字为中心向外扩 hilite_padding**（官方语义，
@@ -506,7 +571,21 @@ impl Metrics {
             //    原来 margin=1em、spacing=0.5em、candidate_spacing=0.5em 直接被 pad 吃掉，
             //    实际可见间隙是 0.5em / 0 / −0.5em（相邻两框还互相重叠）。
             round_corner_ex: font_h,
-            round_corner: font_h / 2.0,
+            // 候选块（橘红选中 / 橘黄未选中）圆角 = 0.25em。
+            // 2026-11-05 用户：「为什么所有的候选词……圆角不是 0.25em」——
+            // 以前这里写的是 font_h / 2.0（0.5em），跟 HTML 预览的 `.item` 一致，
+            // 但视觉上偏胶囊。改成 0.25em 后仍只有 `font_point` 一个旋钮能改大小。
+            round_corner: font_h / 4.0,
+            // ---- 编码栏统一参数（见 `bar` 模块）----
+            // `font_h` 就是这里的 1em（= `style.font_point * font_scale`），
+            // layout 与 paint 都从这里读，不再各自硬编码倍数。
+            bar_height: font_h * bar::HEIGHT_EM,
+            bar_vsep_w: font_h * bar::VSEP_W_EM,
+            bar_vsep_h: font_h * bar::VSEP_H_EM,
+            bar_btn: font_h * bar::BTN_EM,
+            bar_dot: font_h * bar::DOT_EM,
+            bar_hsep: font_h * bar::HSEP_EM,
+            bar_pad: font_h * bar::PAD_EM,
             border: abs_scaled(border),
             // margin 仍保留 yaml 的符号（负 margin = 内容往外挪），绝对值 = 1em 边距 + pad 外扩
             margin_x: margin_sign_x as f32 * (font_h + font_h / 2.0),
@@ -574,7 +653,9 @@ impl Metrics {
             metrics.hilite_spacing,
             metrics.hilite_padding_x,
             metrics.hilite_padding_y,
-            metrics.round_corner_ex,
+            // 2026-11-06：打印**实际生效**的面板圆角（`panel_radius()`），挤压三模式
+            // 已减半；直接打 `round_corner_ex` 会显示 1em，排查时误以为减半没生效。
+            metrics.panel_radius(),
             metrics.round_corner
         ));
         metrics
@@ -612,6 +693,63 @@ impl Metrics {
     }
     pub fn real_margin_y(&self) -> f32 {
         self.margin_y.abs().max(self.hilite_padding_y)
+    }
+
+    /// 挤压三模式的灰壳 padding（= 白内板相对外壳的内缩量 `lip`）。
+    ///
+    /// 绘制侧（`paint::draw_squeeze` 画灰壳/白板）和布局侧（编码栏右端按钮组 +
+    /// 翻页箭头要顶到**白板**右沿）必须用同一个数，否则「按钮和箭头右对齐」
+    /// 会永远差这几像素（用户 2026-11-05 报过）。所以公式只留在这里一份。
+    ///
+    /// 2026-11-05 18:5x 按设计稿改成 **0.5em**（`.ime { padding: .5em }`）；
+    /// 旧值 `font_point * dpi_scale_font * 0.25` 把 em 又乘了一次 DPI，实际约 0.42em。
+    /// 2026-11-06 21:2x 用户「都 0.5」：padding 与面板圆角**统一 0.5em** ——
+    /// 圆角保持减半后的 0.5em，padding 从 0.25em 回到 0.5em（见 `squeeze_frame`）。
+    ///
+    /// `shell_width` 是外壳宽度：lip 不允许超过 1/8 窗宽，否则窄窗里白板会被吃没。
+    /// 另外还要 ≥ `0.3R`，不然白板的直角会从外壳圆角里戳出去。
+    pub fn squeeze_lip(&self, shell_width: f32) -> f32 {
+        self.squeeze_frame().min(shell_width / 8.0)
+    }
+
+    /// 面板（灰壳）外角半径。
+    ///
+    /// 2026-11-06 用户「大界面圆角做成一半」：挤压三模式取 `round_corner_ex`
+    /// 的一半（1em → 0.5em）；官方六种布局仍用原值（1em），零回归。
+    /// 同日 21:2x「都 0.5」后，挤压三模式的圆角与 padding 同为 **0.5em**。
+    ///
+    /// ⚠️ 三处必须同源：窗口 `SetWindowRgn`（mod.rs）、毛玻璃圆角遮罩（mod.rs）、
+    /// 灰壳圆角（paint.rs）。只改绘制不动窗口裁剪，窗口还是按大圆角把面板角切掉；
+    /// 只改窗口不动遮罩，模糊背景的四角又会方出来。
+    pub fn panel_radius(&self) -> f32 {
+        if self.squeeze {
+            self.round_corner_ex * 0.5
+        } else {
+            self.round_corner_ex
+        }
+    }
+
+    /// 布局侧用的纸边距（= lip 的**不含宽度夹取**版本）。
+    ///
+    /// 布局算宽度时就要用到它，而宽度又会反过来夹 lip —— 所以布局只取这个常数版，
+    /// 绘制侧再用 [`Self::squeeze_lip`] 夹一次（窗宽 < 8×lip 的极端情况才会不同）。
+    pub fn squeeze_frame(&self) -> f32 {
+        let em = self.font_point.max(8.0);
+        // 2026-11-06 21:2x「都 0.5」：与 `panel_radius()` 的 0.5em 对齐，
+        // padding 由 0.25em 回到 **0.5em**（= 设计稿 `.ime { padding: .5em }`）。
+        // 下限仍要 ≥ 0.3×面板圆角（0.3×0.5em = 0.15em，正常不触发），
+        // 保证白板直角不会从灰壳圆角里戳出去。
+        (em * 0.5)
+            .max(2.0)
+            .max(self.panel_radius().max(0.0) * 0.3)
+    }
+
+    /// 编码栏右侧按钮组的总宽（vsep + 3 按钮 + 2 间隔 + vsep = 4.5em）。
+    ///
+    /// 按钮组从 `page_prev.left` 向左排，占宽必须与 [`bar`] 里的 em 倍数一致，
+    /// 否则 layout 预留的宽度和 paint 实际画的宽度会对不上。
+    pub fn bar_group_width(&self) -> f32 {
+        2.0 * self.bar_vsep_w + 3.0 * self.bar_btn + 2.0 * self.bar_dot
     }
 
     /// 官方 `Layout.cpp:51-60` 的 `offsetX/offsetY`：给阴影与描边留出的外扩。
@@ -706,8 +844,8 @@ mod tests {
         assert!((m.hilite_padding_x - pad).abs() < 0.01, "小框四边 = 0.5em = {}", m.hilite_padding_x);
         assert!((m.hilite_padding_y - pad).abs() < 0.01);
         assert!(
-            (m.round_corner - font_h / 2.0).abs() < 0.01,
-            "候选小圆角 = 半个字高 = {}",
+            (m.round_corner - font_h / 4.0).abs() < 0.01,
+            "候选小圆角 = 0.25em = {}",
             m.round_corner
         );
         assert!(
@@ -733,7 +871,7 @@ mod tests {
         assert!((m.spacing - 28.0).abs() < 0.01, "spacing = 1em");
         assert!((m.candidate_spacing - 28.0).abs() < 0.01, "candidate_spacing = 1em");
         assert_eq!(m.min_width, 240.0);
-        assert!((m.round_corner - 14.0).abs() < 0.01, "候选小圆角 = 字高/2 = {}", m.round_corner);
+        assert!((m.round_corner - 7.0).abs() < 0.01, "候选小圆角 = 字高/4 = {}", m.round_corner);
         assert!((m.round_corner_ex - 28.0).abs() < 0.01, "外侧大圆角 = 字高 = {}", m.round_corner_ex);
         assert!((m.font_point - 28.0).abs() < 0.01, "14 * 144/72");
         // border 3 在 144 DPI = 4（取整），offset 是 border*2 → 8
@@ -787,6 +925,63 @@ mod tests {
         // real_margin 取绝对值
         assert!((m.real_margin_x() - font_h * 1.5).abs() < 0.01);
         assert!((m.real_margin_y() - font_h * 1.5).abs() < 0.01);
+    }
+
+    /// 编码栏统一参数（`config::bar`）锁值：em 倍数 × font_h = 像素值，
+    /// `bar_group_width()` = 2×vsep + 3×按钮 + 2×间隔 = 4.5em
+    /// （2026-11-06 分隔 0.5em → 0.25em 后从 5em 收窄）。
+    /// 2026-11-05 用户要求「统一编码栏的处理，做成一套参数」——这个测试守住
+    /// 改 `bar` 模块的倍数时，像素值与按钮组总宽都跟着变。
+    #[test]
+    fn bar_params_are_unified_em_multiples() {
+        let m = Metrics::new(&official_default(), 96.0);
+        let font_h = 14.0f32 * 96.0 / 72.0; // = 18.6667
+        assert!((m.bar_height - font_h * 1.5).abs() < 0.01, "栏高 = 1.5em");
+        assert!((m.bar_vsep_w - font_h * 0.25).abs() < 0.01, "vsep 宽 = 0.25em");
+        assert!((m.bar_vsep_h - font_h * 1.0).abs() < 0.01, "vsep 高 = 1em");
+        assert!((m.bar_btn - font_h * 1.0).abs() < 0.01, "按钮 = 1em");
+        assert!((m.bar_dot - font_h * 0.5).abs() < 0.01, "间隔 = 0.5em");
+        assert!((m.bar_hsep - font_h * 0.25).abs() < 0.01, "横分隔占位 = 0.25em");
+        // 按钮组总宽 = 2×0.25 + 3×1 + 2×0.5 = 4.5em
+        assert!(
+            (m.bar_group_width() - font_h * 4.5).abs() < 0.01,
+            "按钮组占宽 = 4.5em = {}",
+            m.bar_group_width()
+        );
+    }
+
+    /// 2026-11-06 21:2x「都 0.5」：挤压三模式面板外角与灰壳 padding
+    /// **同为 0.5em**；官方六种布局仍是 1em 且不受影响。
+    #[test]
+    fn squeeze_panel_radius_and_padding_are_both_half_em() {
+        let font_h = 14.0f32 * 96.0 / 72.0; // 18.6667 DIP
+        let official = Metrics::new(&official_default(), 96.0);
+        assert!(!official.squeeze);
+        assert!((official.panel_radius() - font_h).abs() < 0.01, "官方大圆角 = 1em");
+
+        let mut style = official_default();
+        style.layout.layout_type = "horizontal_squeeze".into();
+        let sq = Metrics::new(&style, 96.0);
+        assert!(sq.squeeze, "horizontal_squeeze 应点亮 squeeze");
+        assert!(
+            (sq.panel_radius() - font_h * 0.5).abs() < 0.01,
+            "挤压大圆角 = 0.5em = {}",
+            sq.panel_radius()
+        );
+        assert!(
+            (sq.squeeze_frame() - font_h * 0.5).abs() < 0.01,
+            "挤压 padding = 0.5em = {}",
+            sq.squeeze_frame()
+        );
+        assert!(
+            (sq.squeeze_lip(1000.0) - font_h * 0.5).abs() < 0.01,
+            "绘制侧 lip 与布局侧同数 = {}",
+            sq.squeeze_lip(1000.0)
+        );
+        // 具体输入输出：font_h=18.6667 ⇒ 圆角 9.3333 / padding 9.3333 DIP
+        assert!((sq.panel_radius() - 9.3333).abs() < 0.01);
+        assert!((sq.squeeze_frame() - 9.3333).abs() < 0.01);
+        assert!((sq.panel_radius() - sq.squeeze_frame()).abs() < 0.01, "两项都是 0.5em");
     }
 
     #[test]

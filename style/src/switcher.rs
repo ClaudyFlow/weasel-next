@@ -473,9 +473,34 @@ pub fn read_schema_ids(shared: &Path, user: &Path) -> Vec<String> {
     read_schema_table(shared, user).selected_ids()
 }
 
+/// 把一个方案 id 写成 YAML 标量；**纯数字开头的必须加引号**。
+///
+/// 2026-11-02 实测（092 码表方案）：`active: 092` 会被 YAML 解析成数字，
+/// `SchemaTable` 的 `Option<String>` 反序列化直接失败 ⇒ 整份 `schema.yaml` 被当成坏文件
+/// ⇒ `read_schema_table` 回退去读旧 `schema.toml` ⇒ 用户选了 092，重启又跳回原方案。
+/// 所以写的时候就得给这类 id 加引号，读的那一侧不用改。
+fn yaml_scalar(value: &str) -> String {
+    let plain = !value.is_empty()
+        && !value.as_bytes()[0].is_ascii_digit()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        && !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "true" | "false" | "null" | "yes" | "no" | "on" | "off" | "~"
+        );
+    if plain {
+        value.to_string()
+    } else {
+        format!(
+            "\"{}\"",
+            value.replace('\\', "\\\\").replace('"', "\\\"")
+        )
+    }
+}
+
 /// 写 `schema.yaml`：勾选清单 + 当前方案，一次写完。
-pub fn write_schema_table(path: &Path, table: &SchemaTable) -> io::Result<()> {
-    let mut out = String::from(
+pub fn write_schema_table(path: &Path, table: &SchemaTable) -> io::Result<()> {    let mut out = String::from(
         "# 方案信息 —— 勾选清单 + 当前使用的方案（YAML）。\n\
          # 由「方案选单设定」与输入法自己维护；引擎启动时读它并把选择落实到 librime。\n\
          #\n\
@@ -484,14 +509,14 @@ pub fn write_schema_table(path: &Path, table: &SchemaTable) -> io::Result<()> {
          # 正式发布时这两份文件应由安装器统一产出。\n",
     );
     if let Some(active) = &table.active {
-        out.push_str(&format!("active: {active}\n"));
+        out.push_str(&format!("active: {}\n", yaml_scalar(active)));
     }
     if table.schemas.is_empty() {
         out.push_str("schemas: []\n");
     } else {
         out.push_str("schemas:\n");
         for id in &table.schemas {
-            out.push_str(&format!("  - {id}\n"));
+            out.push_str(&format!("  - {}\n", yaml_scalar(id)));
         }
     }
     if let Some(parent) = path.parent() {
@@ -630,6 +655,33 @@ mod schema_table_tests {
             vec!["bopomofo".to_string(), "luna_pinyin".to_string()],
             "按文件出现顺序，只取 true"
         );
+    }
+
+    #[test]
+    fn numeric_schema_id_survives_roundtrip() {
+        // 092 是真实方案 id（码表）。不写引号时 YAML 会把它当数字，
+        // 反序列化 `Option<String>` 失败 ⇒ 整份 schema.yaml 作废、回退旧 toml。
+        let dir = std::env::temp_dir().join("weasel-next-schema-numeric-id");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("schema")).unwrap();
+        let path = dir.join("schema").join(SCHEMA_TABLE_FILE);
+        let table = SchemaTable {
+            active: Some("092".to_string()),
+            schemas: vec!["pinyin.luna".to_string(), "092".to_string()],
+        };
+        write_schema_table(&path, &table).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("active: \"092\""),
+            "纯数字 id 必须加引号，否则读不回来：{text}"
+        );
+        let back = read_schema_table(&dir, &dir);
+        assert_eq!(back.active.as_deref(), Some("092"), "写出去再读回来要一致");
+        assert_eq!(
+            back.schemas,
+            vec!["pinyin.luna".to_string(), "092".to_string()]
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

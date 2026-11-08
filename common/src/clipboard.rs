@@ -5,13 +5,18 @@
 //!
 //! 用法:
 //! ```
+//! use weasel_common::clipboard::ClipboardStore;
+//! # let root = std::env::temp_dir().join(format!("lrn_clip_doc_{}", std::process::id()));
+//! # let root = root.as_path();
+//! # std::fs::create_dir_all(root).ok();
 //! let mut store = ClipboardStore::load(root);
 //! store.push("复制的文本");          // 剪贴板新内容入环(去重:相同文本置顶旧条)
 //! store.set_pin(0, true);           // 置顶(排到最前,不被清理)
 //! store.set_fav(0, true);           // 收藏
 //! store.set_hidden(1, true);        // 隐藏(仅"隐藏"过滤可见)
-//! store.set_lock(2, true, "密码");  // 加密(查看需密码)
-//! let items = store.visible("all", ""); // 按过滤+搜索取可见列表
+//! store.set_lock(2, true, Some("密码".into())); // 加密(查看需密码)
+//! let _items = store.visible("all", ""); // 按过滤+搜索取可见列表
+//! # let _ = std::fs::remove_dir_all(root);
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -29,6 +34,9 @@ pub struct ClipEntry {
     pub hid: bool,
     #[serde(default)]
     pub lock: bool,
+    /// 本次解锁标记:输对密码后置位,切 tab/重载不丢;重新加密时清除。
+    #[serde(default)]
+    pub unlock: bool,
     #[serde(default)]
     pub pass: Option<String>,
     /// 时间戳(HH:MM 显示用)
@@ -72,6 +80,7 @@ impl ClipboardStore {
             self.entries.insert(0, ClipEntry {
                 text: text.to_string(),
                 pin: false, fav: false, hid: false, lock: false,
+            unlock: false,
                 pass: None, time: now, synced: false,
             });
         }
@@ -143,6 +152,40 @@ impl ClipboardStore {
         if let Some(pos) = self.entries.iter().position(|e| e.text == text) {
             self.entries.remove(pos);
             self.save();
+        }
+    }
+    /// 按文本加密 / 解除加密（面板「加密/解锁」按钮用）。
+    /// `on = true` 时写入密码；`on = false` 时清掉密码。
+    pub fn set_lock_text(&mut self, text: &str, on: bool, pass: Option<String>) {
+        if let Some(e) = self.entries.iter_mut().find(|e| e.text == text) {
+            e.lock = on;
+            e.pass = if on { pass } else { None };
+            if on {
+                e.unlock = false; // 重新加密:旧的解锁标记作废
+            }
+            self.save();
+        }
+    }
+    /// 按文本改「本次已解锁」标记(切 tab/重载后保持不遮码)。
+    pub fn set_unlock_text(&mut self, text: &str, on: bool) {
+        if let Some(e) = self.entries.iter_mut().find(|e| e.text == text) {
+            e.unlock = on;
+            self.save();
+        }
+    }
+    /// 按文本改「云端已备份」标记（面板 ☁ 按钮用）。
+    pub fn set_synced_text(&mut self, text: &str, on: bool) {
+        if let Some(e) = self.entries.iter_mut().find(|e| e.text == text) {
+            e.synced = on;
+            self.save();
+        }
+    }
+    /// 面板解锁校验：未加密条目直接放行，加密条目比对密码。
+    pub fn unlock_ok(&self, text: &str, pass: &str) -> bool {
+        match self.entries.iter().find(|e| e.text == text) {
+            Some(e) if e.lock => e.pass.as_deref() == Some(pass),
+            Some(_) => true,
+            None => false,
         }
     }
 
@@ -250,11 +293,11 @@ mod tests {
         let remote = vec![
             ClipEntry {
                 text: "local_only".into(), pin: false, fav: true, hid: false,
-                lock: false, pass: None, time: "09:00".into(), synced: false,
+                lock: false, unlock: false, pass: None, time: "09:00".into(), synced: false,
             },
             ClipEntry {
                 text: "from_cloud".into(), pin: false, fav: false, hid: false,
-                lock: false, pass: None, time: "09:01".into(), synced: false,
+                lock: false, unlock: false, pass: None, time: "09:01".into(), synced: false,
             },
         ];
         let added = store.merge_remote(remote);
@@ -275,5 +318,32 @@ mod tests {
         store.set_lock(0, true, Some("8848".into()));
         assert!(store.entries()[0].lock);
         assert_eq!(store.entries()[0].pass.as_deref(), Some("8848"));
+    }
+
+    // ── 面板按文本操作（2026-11-07 三面板功能①：加密 / 云同步标记）──────────
+
+    #[test]
+    fn by_text_lock_and_sync_apis_work() {
+        let mut store = temp_store();
+        store.push("alpha");
+        store.push("beta"); // entries[0] = beta
+        // 后台采集线程会重排 entries ⇒ 面板一律按文本操作，不按序号。
+        store.set_lock_text("alpha", true, Some("1234".into()));
+        let alpha = store.entries().iter().find(|e| e.text == "alpha").unwrap();
+        assert!(alpha.lock && alpha.pass.as_deref() == Some("1234"));
+        // 未加密条目无需密码；加密条目密码错 / 对。
+        assert!(store.unlock_ok("beta", ""));
+        assert!(!store.unlock_ok("alpha", "0000"));
+        assert!(store.unlock_ok("alpha", "1234"));
+        // 云同步标记可来回切。
+        store.set_synced_text("alpha", true);
+        assert!(store.entries().iter().find(|e| e.text == "alpha").unwrap().synced);
+        store.set_synced_text("alpha", false);
+        assert!(!store.entries().iter().find(|e| e.text == "alpha").unwrap().synced);
+        // 解锁清掉 lock 与密码，文本本身不动。
+        store.set_lock_text("alpha", false, None);
+        let alpha = store.entries().iter().find(|e| e.text == "alpha").unwrap();
+        assert!(!alpha.lock && alpha.pass.is_none() && alpha.text == "alpha");
+        assert!(store.unlock_ok("alpha", "任意"));
     }
 }

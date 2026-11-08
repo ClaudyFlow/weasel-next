@@ -6,7 +6,7 @@
 
       C:\Program Files\Rime-Next\            <- 程序文件夹（安装路径 + 产品名，到此为止）
           Weasel-Next-Server.exe  ...        <- 可执行文件
-          weasel.yaml                        <- 外壳配置（跟 exe 走）
+          weasel.yaml                        <- 外壳配置（源 Rime-Next\setting.yaml，跟 exe 走）
           data\                              <- 内置数据目录 = librime 的 shared_data_dir
               default.yaml  schema\  opencc\  parser\  eassy\  theme\ ...
 
@@ -92,13 +92,13 @@ Ok "数据同步完成（robocopy exit=$LASTEXITCODE）"
 
 # ---------------------------------------------------------------- 5 外壳配置（跟 exe 走）
 Step "外壳配置"
-foreach ($cfg in @('weasel.yaml','weasel.official.yaml')) {
-    $src = Join-Path $DataDir $cfg
-    if (Test-Path $src) {
-        Copy-Item -Path $src -Destination (Join-Path $InstallDir $cfg) -Force
-        Ok "$cfg -> 程序文件夹根"
-    }
-}
+# 2026-11-08：源文件改名 setting.yaml；官方皮肤 weasel.official.yaml 已移除（皮肤归 data\theme\）。
+# 运行时仍要程序文件夹根下的 `weasel.yaml`（引擎/设置界面按这个文件名读）。
+$configSrc = Join-Path $DataDir 'setting.yaml'
+if (Test-Path $configSrc) {
+    Copy-Item -Path $configSrc -Destination (Join-Path $InstallDir 'weasel.yaml') -Force
+    Ok 'setting.yaml -> 程序文件夹根\weasel.yaml'
+} else { Warn "缺 setting.yaml（跳过外壳配置）" }
 
 # ---------------------------------------------------------------- 6 可选：注册 TIP
 if ($RegisterTip) {

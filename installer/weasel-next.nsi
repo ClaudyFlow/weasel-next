@@ -547,9 +547,10 @@ Section "Weasel-Next" SEC_MAIN
   !insertmacro ManagedFile "${RELEASE_DIR}\plum-next.exe" "plum-next.exe"
   !insertmacro ManagedFile "${PROJECT_ROOT}\Engine\src\style-LICENSE.txt" "style-LICENSE.txt"
   !insertmacro ManagedFile "${PROJECT_ROOT}\LICENSE" "LICENSE"
-  ; 宿主配置的唯一格式是 YAML（weasel.yaml）：style::parse_file 只认 YAML，
-  ; 配置树与序列化也统一成 YAML。TOML/JSON 既不读也不写，旧文件不再分发。
-  !insertmacro ManagedFile "${PROJECT_ROOT}\Rime-Next\weasel.yaml" "weasel.yaml"
+  ; 宿主配置的唯一格式是 YAML：style::parse_file 只认 YAML，配置树与序列化也统一成 YAML。
+  ; TOML/JSON 既不读也不写，旧文件不再分发。
+  ; 2026-11-08 源文件改名 setting.yaml；安装目录里仍落地为 weasel.yaml（运行时文件名不变）。
+  !insertmacro ManagedFile "${PROJECT_ROOT}\Rime-Next\setting.yaml" "weasel.yaml"
   Delete /REBOOTOK "$INSTDIR\weasel.json"
   ; 过渡期：删掉安装目录里旧的 weasel.toml（新版本完全不读它）。只有确认 yaml 真的
   ; 装上才删，避免把机器上唯一的宿主配置删掉。
@@ -612,7 +613,7 @@ Section "设置应用" SEC_SETTINGS
 SectionEnd
 
 SectionGroup /e "候选主题" SEC_THEMES
-  Section "official（官方皮肤）" SEC_THEME_OFFICIAL
+  Section "default（默认皮肤）" SEC_THEME_OFFICIAL
     SetOutPath "$INSTDIR"
     !insertmacro ManagedFile "${RELEASE_DIR}\weasel-next-theme.dll" "weasel-next-theme.dll"
   SectionEnd

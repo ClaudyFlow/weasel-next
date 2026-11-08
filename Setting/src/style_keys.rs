@@ -51,7 +51,7 @@ pub const PREEDITTYPE_CHOICES: &[StyleChoice] = &[
     StyleChoice { value: "preview_all", zh_hans: "预览全部", zh_hant: "預覽全部", en: "Preview all" },
 ];
 
-/// 官方 kLayoutTypeChoices。
+/// 官方 kLayoutTypeChoices + Rime-Next 三模式扩展。
 pub const LAYOUTTYPE_CHOICES: &[StyleChoice] = &[
     StyleChoice { value: "vertical", zh_hans: "竖直", zh_hant: "垂直", en: "Vertical" },
     StyleChoice { value: "horizontal", zh_hans: "水平", zh_hant: "水平", en: "Horizontal" },
@@ -59,6 +59,10 @@ pub const LAYOUTTYPE_CHOICES: &[StyleChoice] = &[
     StyleChoice { value: "vertical+fullscreen", zh_hans: "竖直 + 全屏", zh_hant: "垂直 + 全螢幕", en: "Vertical + fullscreen" },
     StyleChoice { value: "horizontal+fullscreen", zh_hans: "水平 + 全屏", zh_hant: "水平 + 全螢幕", en: "Horizontal + fullscreen" },
     StyleChoice { value: "vertical_text+fullscreen", zh_hans: "竖直 + 文字竖排 + 全屏", zh_hant: "直書 + 全螢幕", en: "Vertical text + fullscreen" },
+    // Rime-Next 三模式（挤压版）
+    StyleChoice { value: "horizontal_squeeze", zh_hans: "横流", zh_hant: "橫流", en: "Horizontal squeeze" },
+    StyleChoice { value: "vertical_squeeze", zh_hans: "飞瀑", zh_hant: "飛瀑", en: "Vertical squeeze" },
+    StyleChoice { value: "cells", zh_hans: "竹简", zh_hant: "竹簡", en: "Cells" },
 ];
 
 /// 官方 kAlignTypeChoices。

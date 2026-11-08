@@ -3,6 +3,26 @@ local M = {}
 M.header = '# 虎整句自学习记录（每条学习行代表一次人工纠正；等级上限10）\n' ..
     '# 操作\t时间(UTC)\t片段\t编码\t前文\t本次升级\t模式\t记录编号\t撤销目标\n'
 M.limit = 16 * 1024 * 1024
+-- Windows Lua's wide-file wrapper can interpret UTF-8 through LC_CTYPE.
+-- Under its initial C locale even our journal basename raises EILSEQ. Scope
+-- UTF-8 to opening the handle; never leave the host's locale changed, and do
+-- not change LC_NUMERIC (decoder numbers and serialized scores depend on it).
+local function open_file(path, mode)
+    if package.config:sub(1,1) == '\\' and path:find('[\128-\255]') then
+        local previous = os.setlocale(nil, 'ctype')
+        if previous and os.setlocale('.UTF-8', 'ctype') then
+            local ok, file, err, code = pcall(io.open, path, mode)
+            local restored = os.setlocale(previous, 'ctype')
+            if not restored then
+                if ok and file then file:close() end
+                error('无法恢复文件操作前的字符区域设置')
+            end
+            if not ok then error(file, 0) end
+            return file, err, code
+        end
+    end
+    return io.open(path, mode)
+end
 local function escape(s)
     return (s:gsub('\\', '\\\\'):gsub('\t', '\\t'):gsub('\r', '\\r'):gsub('\n', '\\n'))
 end
@@ -76,11 +96,11 @@ function M.open(name)
     -- the named text file; no opaque data database or exported mirror is read.
     local guard = LevelDb('自学习锁-' .. name)
     assert(guard and guard:open(), '自学习文件正在被其他进程使用')
-    local path = root .. '/' .. name .. '.txt'
+    local path = root .. '/eassy/' .. name .. '.txt'
     local db = {path=path, guard=guard, expected=0, separate=false}
     function db:close() if self.guard then self.guard:close(); self.guard=nil end end
     function db:read()
-        local f, err, code = io.open(self.path,'rb')
+        local f, err, code = open_file(self.path,'rb')
         if not f then if code == 2 then return '' end; error(err or '读取自学习文件失败') end
         local data = f:read(M.limit+1) or ''; f:close()
         assert(#data<=M.limit,'自学习文件超过16 MiB')
@@ -88,7 +108,7 @@ function M.open(name)
         return data
     end
     function db:update(_, value)
-        local f = io.open(self.path,'ab'); if not f then return false end
+        local f = open_file(self.path,'ab'); if not f then return false end
         if f:seek('end') ~= self.expected then f:close(); return false end
         local addition = (self.expected==0 and M.header or self.separate and '\n' or '') .. value
         if self.expected + #addition > M.limit then f:close(); return false end

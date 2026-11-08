@@ -14,3 +14,4 @@ mod theme;
 weasel_theme_api::export_theme!(theme::Factory);
 
 mod presenter;
+mod panels;

@@ -76,6 +76,12 @@ impl Factory {
                 }
                 let description: Result<Description, String> = read(api, (api.describe)())?;
                 let description = description?;
+                if description.api_version != 1 {
+                    return Err(format!(
+                        "theme DLL api_version {} != 1 — DLL 与渲染器必须同版重编",
+                        description.api_version
+                    ));
+                }
                 if description.name != name || !description.defaults.is_object() {
                     return Err("theme metadata does not match its registration".into());
                 }

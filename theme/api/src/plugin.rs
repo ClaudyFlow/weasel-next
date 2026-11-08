@@ -60,6 +60,13 @@ pub struct PluginApi {
 /// `describe` 操作的 JSON 结果。
 #[derive(Serialize, Deserialize)]
 pub struct Description {
+    /// 主题 API 契约版本;宿主要求与此常量一致,不一致明确拒载
+    /// (对齐 fxliang/rime-plugin-template 的 API_VERSION 显式化)。
+    #[serde(default)]
+    pub api_version: u32,
+    /// 插件标识(出厂主题=weasel-next-theme)。
+    #[serde(default)]
+    pub plugin_id: String,
     /// 工厂提供的主题名称。
     pub name: String,
     /// 主题声明的展示能力。
@@ -158,6 +165,8 @@ fn describe_panic(payload: &Box<dyn core::any::Any + Send>) -> String {
 pub fn describe(factory: &dyn ThemeFactory) -> Buffer {
     let result = catch_unwind(AssertUnwindSafe(|| {
         Ok::<_, String>(Description {
+            api_version: 1,
+            plugin_id: "weasel-next-theme".into(),
             name: factory.name().into(),
             capabilities: factory.capabilities(),
             defaults: factory.default_settings()?,

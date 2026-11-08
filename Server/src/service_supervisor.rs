@@ -316,6 +316,12 @@ pub(crate) fn monitor_children() {
                 );
             }
         }
+        // 空闲态轮询不能睡死:子进程全退后 timeout 退化成重试计时的长等待,
+        // GetLastInputInfo 几分钟都轮不到查——打字自然拉不起(用户 2026-11-07)。
+        // 空闲时强制每秒醒一次,键盘活动检测才有意义。
+        if state.idle {
+            timeout = timeout.min(1000);
+        }
         drop(state);
         let mut raw = vec![HANDLE(
             MONITOR_WAKE

@@ -47,7 +47,7 @@ pub fn run() -> Result<(), String> {
     let settings = runtime.block_on(load_theme(false)).unwrap_or_else(|error| {
         crate::diagnostics::record(format_args!("{error}; using embedded settings"));
         weasel_common::settings::ConfigSnapshot::new(
-            weasel_common::yaml::to_value(include_str!("../../Rime-Next/weasel.yaml"))
+            weasel_common::yaml::to_value(include_str!("../../Rime-Next/setting.yaml"))
                 .expect("embedded settings must be valid YAML"),
         )
     });
@@ -156,8 +156,20 @@ async fn run_rpc(server: RpcServer, mut ui: UiHandle) -> Result<(), String> {
             }
             event = ui.events.recv() => {
                 if let Some((owner, event)) = event {
-                    if commands.is_owner(owner) {
-                        if let Some(route) = routes.get(&owner) { let _ = route.try_send(event); }
+                    // 直拟上屏(CommitText)不绑快照所有者:面板打开后任何新快照都会
+                    // 换 owner,按快照门控会把符号/剪贴板的上屏全丢(2026-11-07 实测)。
+                    let is_commit = matches!(&event, RendererEvent { action, .. }
+                        if *action == weasel_common::message::RendererEventAction::CommitText as i32);
+                    if commands.is_owner(owner) || is_commit {
+                        let route = routes.get(&owner)
+                            .or_else(|| is_commit.then(|| routes.values().next()).flatten());
+                        match route {
+                            Some(route) => { let _ = route.try_send(event); }
+                            None if is_commit => {
+                                crate::diagnostics::record(format_args!("commit 事件无活动路由"));
+                            }
+                            None => {}
+                        }
                     }
                 } else { break Err("UI event channel closed".into()); }
             }

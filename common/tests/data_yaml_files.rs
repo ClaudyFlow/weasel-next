@@ -33,7 +33,8 @@ fn default_eassy_yaml_parses() {
     }
 }
 
-/// 出厂主题（由官方皮肤 `weasel.official.yaml` 经 `theme-yaml` 生成）。
+/// 出厂主题（由官方皮肤 `weasel.official.yaml` 经 `theme-yaml` 生成；官方皮肤 2026-11-08
+/// 起不再随包分发，原文件只保留为 `style/tests/data/` 的解析器夹具）。
 #[test]
 fn default_theme_yaml_parses() {
     let path = data_root().join("theme").join("default").join("default.theme.yaml");
@@ -79,13 +80,16 @@ fn shuangpin_tables_parse() {
     assert!(syllables.len() >= 400, "音节数异常：{}", syllables.len());
 }
 
-/// 宿主出厂默认配置：现在住在 `Rime-Next/weasel.yaml`（2026-10-27 从仓库根搬进来）。
+/// 宿主出厂默认配置：现在住在 `Rime-Next/setting.yaml`（2026-11-08 由 `weasel.yaml` 改名；
+/// 2026-10-27 从仓库根搬进 `Rime-Next/`）。运行时仍部署成 `<程序文件夹>\weasel.yaml`。
 ///
 /// 只验「能被我们的 YAML 解析、且有那几个程序级键」，值本身由 Setting 的
 /// `native_metadata_and_defaults` 用 richschema 校验。
 #[test]
 fn host_default_config_parses() {
-    let path = data_root().join("weasel.yaml");
+    // 2026-11-08 改名:宿主出厂配置 weasel.yaml → setting.yaml;
+    // 官方皮肤 weasel.official.yaml 删除——皮肤归 theme\ 文件夹负责。
+    let path = data_root().join("setting.yaml");
     assert!(path.is_file(), "宿主出厂默认缺失：{}", path.display());
 
     let text = std::fs::read_to_string(&path).unwrap();
@@ -94,13 +98,4 @@ fn host_default_config_parses() {
     for key in ["theme", "ascii_mode", "sound", "app_options"] {
         assert!(root.contains_key(key), "缺少程序级键 `{key}`");
     }
-    // 官方原版皮肤改名后必须与它分开存放，别再被当成宿主配置
-    let official = data_root().join("weasel.official.yaml");
-    assert!(official.is_file(), "官方皮肤缺失：{}", official.display());
-    let official_text = std::fs::read_to_string(&official).unwrap();
-    let official_value = weasel_common::yaml::to_value(&official_text).expect("官方皮肤必须能解析");
-    assert!(
-        official_value.as_object().unwrap().contains_key("preset_color_schemes"),
-        "官方皮肤应带配色表"
-    );
 }

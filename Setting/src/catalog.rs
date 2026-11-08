@@ -112,7 +112,7 @@ pub fn load(paths: &RuntimePaths, document: &Document) -> Result<Catalog, String
         title: "常规".into(),
         mount: vec![],
         metadata: embedded(
-            include_bytes!("../../Rime-Next/weasel.yaml"),
+            include_bytes!("../../Rime-Next/setting.yaml"),
             include_bytes!("../../weasel.richschema.json"),
             DefaultsFormat::Yaml,
         )?,

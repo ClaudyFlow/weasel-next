@@ -6,6 +6,18 @@ config_version: '0.40'
 schema_list:
   - schema: pinyin.luna
   - schema: wubi.86
+  # 092（码表，李诗歌魔改）：2026-11-02 用户要求「做进去」——出厂清单里带上它，
+  # 装完就能在方案菜单（F4 / Ctrl+`）里选到；源码见 `schema\092\` 与 `dict\092\`。
+  - schema: "092"
+  # 山人（山人全息码，Rime-Next 移植版）：2026-11-08 用户要求「塞进 0187」——
+  # 出厂清单里带上，装完就能在方案菜单（F4 / Ctrl+`）里选到。
+  # 源码见 `schema\sunman\sunman.schema.yaml` 与 `dict\sunman\{sunman,sunman.extended}.dict.yaml`。
+  - schema: sunman
+  # 虎整句（TigerClaw 1.6.20261030.1，已适配 Rime-Next）：2026-11-08 用户要求「塞进 0187」。
+  # 走 Lua（`plugin\tiger_sentence*\`，bootstrap-v3 恒等式布局）+ 明文表（`eassy\tiger_sentence.*.txt`）；
+  # 405MB 统计模型按 2026-11-07 拍板**不部署**（`rime.lua` 里 set_model_enabled(false)），
+  # 整句裁决/选字交给引擎硬挂的神经网络滤镜。
+  - schema: tiger_sentence
 
 switcher:
   caption: 〔方案選單〕
@@ -41,7 +53,10 @@ key_binder:
       - key_bindings:/emacs_editing
       - key_bindings:/move_by_word_with_tab
       - key_bindings:/paging_with_minus_equal
-      - key_bindings:/paging_with_comma_period
+      # 2026-11-08 05:0x 用户定版 A：逗号/句号交给**引擎**（punctuator.rs ⓪ 段）——
+      # 有候选时：逗号 = 高亮在首位→上屏、否则上移一个；句号 = 下移一个。
+      # **不能再引用** `paging_with_comma_period`：key_binder 排在 punctuator 之前，
+      # 一引用就把键全吃掉，引擎那段永远轮不到（04:45「逗号上屏又没了」的根因）。
       - key_bindings:/numbered_mode_switch
 
 recognizer:

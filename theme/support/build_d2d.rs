@@ -243,6 +243,12 @@ pub fn generate() {
             "Windows.Win32.WS_EX_NOACTIVATE", "Windows.Win32.HWND_TOPMOST", "Windows.Win32.SWP_NOACTIVATE",
             "Windows.Win32.SW_SHOWNOACTIVATE", "Windows.Win32.SW_HIDE",
             "Windows.Win32.WM_NCCREATE", "Windows.Win32.WM_NCDESTROY", "Windows.Win32.WM_PAINT",
+            // ⚠️ 2026-11-07 三按钮「按不了」的**根因**：WM_NCCALCSIZE 曾经不在这个白名单里。
+            //    没生成常量 ⇒ mod.rs 里 `WM_NCCALCSIZE if wp.0 != 0 => return LRESULT(0)`
+            //    被当成「变量绑定 + 守卫」的**通配臂**（编译器只给一条 non_snake_case 警告），
+            //    于是任何 wParam != 0 的消息（鼠标按下 MK_LBUTTON=1、WM_TIMER、滚轮…）
+            //    都在消息 match 之前被 return 0 吞掉。加白名单后才是真正的常量模式。
+            "Windows.Win32.WM_NCCALCSIZE",
             "Windows.Win32.WM_ERASEBKGND", "Windows.Win32.WM_SIZE", "Windows.Win32.WM_DPICHANGED",
             "Windows.Win32.WM_LBUTTONDOWN", "Windows.Win32.WM_LBUTTONUP", "Windows.Win32.WM_MOUSEMOVE",
             "Windows.Win32.WM_MOUSEWHEEL",
@@ -252,6 +258,41 @@ pub fn generate() {
             "Windows.Win32.WM_SETICON", "Windows.Win32.ICON_SMALL", "Windows.Win32.ICON_BIG",
             "Windows.Win32.SendMessageW",
             "Windows.Win32.CREATESTRUCTW",
+
+            // ★ 编码栏弹窗面板（✂ 剪贴板 / 🔣 符号 / 🔄 同步）所需 Win32 / D2D 符号
+            //   filters 是白名单，不在里面就不会进绑定 —— 之前编译报的一大堆
+            //   "cannot find type/function" 就是这些没列进来导致的。
+            "Windows.Win32.OpenClipboard",
+            "Windows.Win32.EmptyClipboard",
+            "Windows.Win32.CloseClipboard",
+            "Windows.Win32.GlobalAlloc",
+            "Windows.Win32.GlobalLock",
+            "Windows.Win32.GlobalUnlock",
+            "Windows.Win32.SetClipboardData",
+            "Windows.Win32.HGLOBAL",
+            "Windows.Win32.HANDLE",
+            "Windows.Win32.HRGN",
+            "Windows.Win32.LRESULT",
+            "Windows.Win32.CF_UNICODETEXT",
+            "Windows.Win32.GMEM_MOVEABLE",
+            "Windows.Win32.MessageBoxW",
+            "Windows.Win32.MB_OK",
+            "Windows.Win32.GetSystemMetrics",
+            "Windows.Win32.SM_CXSCREEN",
+            "Windows.Win32.SM_CYSCREEN",
+            "Windows.Win32.SWP_SHOWWINDOW",
+            "Windows.Win32.CS_HREDRAW",
+            "Windows.Win32.CS_VREDRAW",
+            "Windows.Win32.WM_CREATE",
+            "Windows.Win32.WM_DESTROY",
+            "Windows.Win32.WM_CHAR",
+            "Windows.Win32.WM_KEYDOWN",
+            "Windows.Win32.D2D1_RENDER_TARGET_TYPE",
+            "Windows.Win32.D2D1_RENDER_TARGET_TYPE_DEFAULT",
+            "Windows.Win32.D2D1_RENDER_TARGET_USAGE",
+            "Windows.Win32.D2D1_RENDER_TARGET_USAGE_NONE",
+            "Windows.Win32.D2D1_FEATURE_LEVEL",
+            "Windows.Win32.D2D1_FEATURE_LEVEL_DEFAULT",
         ])
         .write();
     println!("cargo:rerun-if-changed=build_d2d.rs");

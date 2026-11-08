@@ -65,6 +65,12 @@ export component SettingsWindow inherits Window {
     in-out property <int> candidate-material: 0;
     in property <string> material-status: "";
     callback material-picked(int);
+    // 候选窗布局（2026-11-05）：0 横流 / 1 飞瀑 / 2 竹简（用户拍板只要这三种）。
+    // 值写用户目录 theme.yaml 的 layout/type；-1 = 当前还是官方水平/竖直，
+    // 三个按钮都不高亮，点任意一个才切进挤压三模式。
+    in-out property <int> layout-index: 0;
+    in property <string> layout-status: "";
+    callback layout-picked(int);
     // 方案选单页（Rust 侧读 `weasel_style::switcher`，与官方对话框同一份数据）
     in property <[SchemaRow]> schema-rows;
     in property <[SeriesNav]> series-nav;
@@ -163,6 +169,7 @@ export component SettingsWindow inherits Window {
     in property <[int]> stat-key-counts: [];
     // 时段统计（24 个小时桶，0..100 百分比）
     in property <[int]> stat-hour-keys: [];
+    in property <[int]> stat-hour-alpha: [];
     in property <int> stat-hour-peak: 0;
     in property <string> stat-hour-summary: "";
     // 词库页
@@ -392,6 +399,7 @@ export component SettingsWindow inherits Window {
             words3: root.stat-words3;
             key-counts: root.stat-key-counts;
             hour-keys: root.stat-hour-keys;
+            hour-alpha: root.stat-hour-alpha;
             hour-peak: root.stat-hour-peak;
             hour-summary: root.stat-hour-summary;
             code-lens: root.stat-code-lens;
@@ -449,6 +457,41 @@ export component SettingsWindow inherits Window {
                 // 这类真错误，正常情况一个字都不显示。
                 if root.material-status != "" : Text {
                     text: root.material-status;
+                    font-size: 12px;
+                    color: #b91c1c;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+            }
+            // ── 候选窗布局（只要挤压三模式）──────────────────────────────
+            // 顺序与 Rust 侧 `dialogs::LAYOUT_VALUES` 严格一致，别单改一边。
+            HorizontalLayout {
+                height: 34px;
+                spacing: 8px;
+                alignment: start;
+                Text {
+                    text: "候选窗布局";
+                    font-size: 13px;
+                    color: #374151;
+                    width: 84px;
+                    vertical-alignment: center;
+                }
+                for opt in [
+                    { label: "横流", idx: 0 },
+                    { label: "飞瀑", idx: 1 },
+                    { label: "竹简", idx: 2 }
+                ] : Button {
+                    width: 76px;
+                    height: 30px;
+                    text: opt.label;
+                    primary: root.layout-index == opt.idx;
+                    clicked => {
+                        root.layout-index = opt.idx;
+                        root.layout-picked(opt.idx);
+                    }
+                }
+                if root.layout-status != "" : Text {
+                    text: root.layout-status;
                     font-size: 12px;
                     color: #b91c1c;
                     vertical-alignment: center;

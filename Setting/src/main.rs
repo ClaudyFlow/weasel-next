@@ -835,6 +835,25 @@ fn wire_skins(ui: &SettingsWindow) {
             }
         });
     }
+
+    // 候选窗布局：三个按钮（横流 / 飞瀑 / 竹简），用户 2026-11-05 拍板删掉官方水平/竖直。
+    // 启动时若 theme.yaml 还是官方布局，`layout_index()` 返回 -1 ⇒ 三个按钮都不高亮，
+    // 点任意一个才切进挤压三模式，不擅自替用户改布局。值走
+    // `dialogs::write_theme_style` 同一套 YAML 行编辑，三个布尔与 layout/type 字符串
+    // 一起写，避免旧字符串值残留覆盖布尔。
+    ui.set_layout_index(dialogs::layout_index(&dialogs::current_layout_value(&user)));
+    {
+        let ui_weak = ui.as_weak();
+        let user = user.clone();
+        ui.on_layout_picked(move |index| {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            let index = (index.max(0) as usize).min(dialogs::LAYOUT_VALUES.len() - 1);
+            match dialogs::write_layout_value(&user, dialogs::LAYOUT_VALUES[index]) {
+                Ok(_) => ui.set_layout_status("".into()),
+                Err(error) => ui.set_layout_status(format!("写布局失败：{error}").into()),
+            }
+        });
+    }
 }
 
 /// 把数据层的状态推给界面：行模型、当前配色、状态栏、预览颜色。
@@ -1212,112 +1231,39 @@ fn format_percent(x10: u32) -> String {
     format!("{}.{}", x10 / 10, x10 % 10)
 }
 
-/// 常用字词云：字号 = 14 + 30·√(频次 / 最高频次)（44px 顶格、14px 垫底），
-/// 按名次切三行：最大的 3 个 / 接下来 7 个 / 其余（最多 20 个，见 `stats::MAX_WORDS`）。
+/// 统计页里「常用字」两行 + 词云的模型。
 ///
-/// 用户 2026-10-30：「常用字做成词云」——原来 20 个等大方块看不出「哪个最常用」，
-/// 现在一眼就是大小差别；次数只留给最大的三个（词云里再标 20 个数字就成表格了）。
+/// 词云的数据**不是** `stat.bin` 的常用字，而是用户词典里的词条（`commit_count` 当频次）：
+/// 前者只有单字，做出来是一堆「的一是了」；后者才是「文件夹 / 部署 / 打包」这种真词。
+struct StatWordModels {
+    cloud: Vec<CloudWord>,
+    cloud_note: slint::SharedString,
+    big: Vec<StatWord>,
+    mid: Vec<StatWord>,
+    small: Vec<StatWord>,
+}
 
-/// 词云：最常用的字在**正中**，其余按频率降序沿「黄金角向日葵螺旋」向外散开。
-///
-/// - 第 0 个字（出现次数最高）固定钉在画布正中心，字号最大最显眼；
-/// - 其余字按黄金角螺旋（每步转 137.5°）从中心向外找空位，带 AABB 碰撞检测，
-///   碰到已落位的字就继续往外螺旋，直到不重叠且落在画布内；
-/// - 水平方向轻微拉抜（SX）让宽画布（1084×230）用得更饱满，竖直方向不压缩，
-///   整体是一个以中心为核、向外均匀发散的「云」，**不套环、不连线、不重叠**。
-/// 坐标原点是画布左上角（Slint 侧绝对定位），落点按字中心算、再转左上角。
-fn cloud_layout(words: &[(String, u64)]) -> Vec<CloudWord> {
-    const CANVAS_W: f32 = 1064.0;
-    const CANVAS_H: f32 = 230.0;
-    const CX: f32 = CANVAS_W / 2.0;
-    const CY: f32 = CANVAS_H / 2.0;
-    const SX: f32 = 2.8; // 水平轻微拉伸，让宽画布用得更饱满（非同心环）
-    const SY: f32 = 1.0;
-    const GOLDEN: f32 = 2.39996323; // 黄金角（弧度）
-    const DR: f32 = 2.0; // 每步螺旋外扩半径
-    const DA: f32 = 0.35; // 每步角增量（让螺旋平滑转向）
-    const MAX_R: f32 = 108.0; // 半径上限：保证竖直方向不出 230 高
-
-    struct Box {
-        l: f32,
-        r: f32,
-        t: f32,
-        b: f32,
+fn stat_word_models(words: &[(String, u64)]) -> StatWordModels {
+    let (words_big, words_mid, words_small) = split_words(words);
+    let (cloud, summary) = weasel_settings::wordcloud::build();
+    StatWordModels {
+        cloud: cloud
+            .into_iter()
+            .map(|it| CloudWord {
+                word: it.word.as_str().into(),
+                size: it.size,
+                x: it.x,
+                y: it.y,
+                advance: it.w,
+                tint: it.tint,
+                count: it.count.min(i32::MAX as u32) as i32,
+            })
+            .collect(),
+        cloud_note: summary.note().into(),
+        big: words_big,
+        mid: words_mid,
+        small: words_small,
     }
-    let mut out = Vec::new();
-    let mut boxes: Vec<Box> = Vec::new();
-
-    let Some((_, max)) = words.first() else {
-        return out;
-    };
-    let max = (*max).max(1) as f64;
-
-    let size_of = |index: usize, count: u64| -> f32 {
-        if index == 0 {
-            44.0
-        } else {
-            let ratio = (count as f64 / max).sqrt() as f32;
-            (14.0f32 + 26.0f32 * ratio).round()
-        }
-    };
-
-    for (index, (ch, count)) in words.iter().take(90).enumerate() {
-        let s = size_of(index, *count);
-        let tint = (index % 4) as i32;
-
-        // 第 0 个：正中固定
-        let (cxw, cyw) = if index == 0 {
-            (CX, CY)
-        } else {
-            // 从中心向外螺旋搜索无碰撞落点
-            let mut r = (s / 2.0 + 4.0).max(6.0);
-            let mut a = index as f32 * GOLDEN;
-            let mut found = None;
-            for _ in 0..400 {
-                let x = CX + (r * a.cos()) * SX;
-                let y = CY + (r * a.sin()) * SY;
-                let l = x - s / 2.0;
-                let rr = x + s / 2.0;
-                let t = y - s / 2.0;
-                let b = y + s / 2.0;
-                let in_bounds = l >= 0.0 && rr <= CANVAS_W && t >= 0.0 && b <= CANVAS_H;
-                let hit = boxes
-                    .iter()
-                    .any(|p| l < p.r && rr > p.l && t < p.b && b > p.t);
-                if in_bounds && !hit {
-                    found = Some((x, y));
-                    break;
-                }
-                r += DR;
-                a += DA;
-                if r > MAX_R {
-                    break;
-                }
-            }
-            match found {
-                Some(p) => p,
-                // 实在放不下就放弃这个字（长尾小字极少触发，避免重叠）
-                None => continue,
-            }
-        };
-
-        let l = cxw - s / 2.0;
-        let t = cyw - s / 2.0;
-        out.push(CloudWord {
-            word: ch.as_str().into(),
-            size: s as i32,
-            x: l.round() as i32,
-            y: t.round() as i32,
-            tint,
-        });
-        boxes.push(Box {
-            l,
-            r: l + s,
-            t,
-            b: t + s,
-        });
-    }
-    out
 }
 
 fn split_words(words: &[(String, u64)]) -> (Vec<StatWord>, Vec<StatWord>, Vec<StatWord>) {
@@ -1442,13 +1388,13 @@ fn apply_stats_to_settings(window: &SettingsWindow) -> weasel_settings::stats::S
         snapshot.month_week.iter().map(|w| *w).collect::<Vec<i32>>(),
     )));
 
-    // 常用字排两行（用户 2026-10-25：做成两行）：前 10 个一行，其余一行。
-    let (words_big, words_mid, words_small) = split_words(&snapshot.words);
-    window.set_stat_words(slint::ModelRc::new(slint::VecModel::from(words_big)));
-    // 词云：排版在 Rust 侧算（字号 + 坐标），Slint 只按坐标绝对定位画
-    window.set_stat_cloud(slint::ModelRc::new(slint::VecModel::from(cloud_layout(&snapshot.words))));
-    window.set_stat_words2(slint::ModelRc::new(slint::VecModel::from(words_mid)));
-    window.set_stat_words3(slint::ModelRc::new(slint::VecModel::from(words_small)));
+    // 常用字两行 + 词云：两个入口（主界面内嵌 / 独立 `/stat`）共用同一份模型。
+    let models = stat_word_models(&snapshot.words);
+    window.set_stat_words(slint::ModelRc::new(slint::VecModel::from(models.big)));
+    window.set_stat_cloud(slint::ModelRc::new(slint::VecModel::from(models.cloud)));
+    window.set_stat_cloud_note(models.cloud_note.into());
+    window.set_stat_words2(slint::ModelRc::new(slint::VecModel::from(models.mid)));
+    window.set_stat_words3(slint::ModelRc::new(slint::VecModel::from(models.small)));
 
     // 键盘热力图 / 码长直方图（stat.bin 的尾部扩展；老文件没有就传空）。
     let (key_counts, code_lens) = weasel_settings::stats::load_hist();
@@ -1469,11 +1415,19 @@ fn apply_stats_to_settings(window: &SettingsWindow) -> weasel_settings::stats::S
     let hour_total_min = hour_ms.iter().sum::<u64>() / 60_000;
     let hour_summary = format!("最活跃 {hour_peak_idx} 时 · 共 {hour_total_min} 分（按有效输入时长）");
     let hour_peak = hour_keys.iter().copied().max().unwrap_or(0).max(1) as f32;
-    let hour_pct: Vec<i32> = hour_keys
+    let mut hour_pct: Vec<i32> = hour_keys
         .iter()
         .map(|value| ((*value as f32 / hour_peak) * 100.0).round() as i32)
         .collect();
+    // 前 7 天日总量柱接在 24 小时柱后(用户 2026-11-07):越久越淡。
+    let week = weasel_settings::stats::load_week_bars();
+    let mut hour_alpha: Vec<i32> = vec![100; hour_pct.len()];
+    for (pct, alpha) in &week {
+        hour_pct.push(*pct);
+        hour_alpha.push(*alpha);
+    }
     window.set_stat_hour_keys(Rc::new(VecModel::from(hour_pct)).into());
+    window.set_stat_hour_alpha(Rc::new(VecModel::from(hour_alpha)).into());
     window.set_stat_hour_peak(hour_peak_idx);
     window.set_stat_hour_summary(hour_summary.as_str().into());
     // 键准/词长：能用近 7 天（v3 天记录）就用近 7 天，否则回落到全期直方图口径
@@ -1561,6 +1515,15 @@ pub fn show_stats() -> Result<(), String> {
         ui.set_realm(career_realm(snapshot.total_chars).into());
         ui.set_book_note(book_level(snapshot.total_chars).into());
 
+        // 常用字两行 + 词云：独立 `/stat` 窗口原来这两块是空的（只有主界面内嵌那份填了），
+        // 现在和主界面共用同一个模型构造函数。
+        let models = stat_word_models(&snapshot.words);
+        ui.set_words(slint::ModelRc::new(slint::VecModel::from(models.big)));
+        ui.set_cloud(slint::ModelRc::new(slint::VecModel::from(models.cloud)));
+        ui.set_cloud_note(models.cloud_note);
+        ui.set_words2(slint::ModelRc::new(slint::VecModel::from(models.mid)));
+        ui.set_words3(slint::ModelRc::new(slint::VecModel::from(models.small)));
+
         ui.set_quarter_label(snapshot.quarter_label.clone().into());
         ui.set_today_week(snapshot.today_week);
         ui.set_today_day(snapshot.today_day);
@@ -1620,11 +1583,19 @@ pub fn show_stats() -> Result<(), String> {
     let hour_total_min = hour_ms.iter().sum::<u64>() / 60_000;
     let hour_summary = format!("最活跃 {hour_peak_idx} 时 · 共 {hour_total_min} 分（按有效输入时长）");
     let hour_peak = hour_keys.iter().copied().max().unwrap_or(0).max(1) as f32;
-    let hour_pct: Vec<i32> = hour_keys
+    let mut hour_pct: Vec<i32> = hour_keys
         .iter()
         .map(|value| ((*value as f32 / hour_peak) * 100.0).round() as i32)
         .collect();
+    // 前 7 天日总量柱接在 24 小时柱后(用户 2026-11-07):越久越淡。
+    let week = weasel_settings::stats::load_week_bars();
+    let mut hour_alpha: Vec<i32> = vec![100; hour_pct.len()];
+    for (pct, alpha) in &week {
+        hour_pct.push(*pct);
+        hour_alpha.push(*alpha);
+    }
     ui.set_hour_keys(Rc::new(VecModel::from(hour_pct)).into());
+    ui.set_hour_alpha(Rc::new(VecModel::from(hour_alpha)).into());
     ui.set_hour_peak(hour_peak_idx);
     ui.set_hour_summary(hour_summary.as_str().into());
         // 键准/词长：能用近 7 天（v3 天记录）就用近 7 天，否则回落到全期直方图口径

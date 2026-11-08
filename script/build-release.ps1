@@ -90,9 +90,10 @@ try {
         }
     }
 
-    # 宿主配置的正式格式是 YAML（`weasel.yaml`，2026-10-23 起）：`style::parse_file` 只认 YAML，
-    # 配置树与序列化也统一成 YAML。TOML 既不读也不写，这里顺手清掉构建目录里的旧副本。
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'Rime-Next\weasel.yaml') -Destination (Join-Path $targetDirectory 'x86_64-pc-windows-msvc\release\weasel.yaml')
+    # 宿主配置的正式格式是 YAML：`style::parse_file` 只认 YAML，配置树与序列化也统一成 YAML。
+    # TOML 既不读也不写，这里顺手清掉构建目录里的旧副本。
+    # 2026-11-08 源文件改名 setting.yaml；构建/运行目录里仍叫 `weasel.yaml`（跟 exe 走）。
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'Rime-Next\setting.yaml') -Destination (Join-Path $targetDirectory 'x86_64-pc-windows-msvc\release\weasel.yaml')
     Remove-Item -LiteralPath (Join-Path $targetDirectory 'x86_64-pc-windows-msvc\release\weasel.toml') -ErrorAction SilentlyContinue
     # Match the installed/portable DLL layout next to the renderer.
     $releaseDirectory = Join-Path $targetDirectory 'x86_64-pc-windows-msvc\release'

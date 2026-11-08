@@ -28,6 +28,24 @@ pub fn parse_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<
             INDICATOR_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
             Ok(UiMode::Preview)
         }
+        // 「组字中切中英」的样本：候选 + 预编辑 + mode_indicator 三者同时在。
+        [arg] if arg == "--preview-badge" => {
+            BADGE_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(UiMode::Preview)
+        }
+        // 「上屏后联想」样本：无组字、无 preedit，只有 4 条预测词
+        // （2026-11-08 用户口径：联想条 3 → 4 条，数字键 1/2/3/4）。
+        [arg] if arg == "--preview-predict" => {
+            PREDICT_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(UiMode::Preview)
+        }
+        // 「打字时的预测候选」样本：普通候选 + 带「预测」标签的预测候选混在同一帧。
+        // 用来核对 2026-11-08 用户口径「预测这个标签做成小一号，预测的候选字号不变」：
+        // 只有 secondary_text（comment「预测」）用半字号，primary_text 与普通候选同字号。
+        [arg] if arg == "--preview-predict-tag" => {
+            PREDICT_TAG_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(UiMode::Preview)
+        }
         _ => Err(
             "usage: Weasel-Next-Renderer.exe [--preview|--preview-indicator]".into(),
         ),
@@ -39,6 +57,25 @@ pub fn parse_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<
 /// 模式提示平时只闪现 800 毫秒，没法截图核对；这个开关让预览直接停在提示窗上。
 static INDICATOR_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// 预览"组字中切中英"的徽标样本（有候选 + 有预编辑 + 带 mode_indicator）。
+///
+/// 这条路径 2026-11-02 之前一直是坏的：主题一看到 `mode_indicator` 就只画徽标、
+/// 候选一个不画（用户当场："候选窗完全不显示"）。现在有它才测得到。
+static BADGE_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 预览「上屏后联想」样本：无组字、无 preedit，只有引擎给的预测词。
+///
+/// 2026-11-07 用户要求「预测一些上屏十次以上的用户词」——上屏后这条窗口就是
+/// 联想条的样子，靠它截图核对（真实链路要等引擎侧 predictions 接上）。
+static PREDICT_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 预览「打字时的预测候选」样本：普通候选与带「预测」标签的预测候选同帧。
+///
+/// 2026-11-08 用户纠正口径：「预测这个标签做成小一号，预测的候选字号不变」。
+/// 真实链路里预测候选由 librime 的 `NeuralPredictFilter` 追加，`comment == "预测"`，
+/// `Renderer::render_snapshot` 据此把它标成 `kind = "prediction"`。
+static PREDICT_TAG_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// 构造用于展示主题各部分的合成候选快照。
 ///
 /// 内容刻意与官方候选窗的观感对照：首屏、第一个候选高亮、其中几条带注释，
@@ -47,6 +84,82 @@ pub fn synthetic_snapshot() -> RenderSnapshot {
     if INDICATOR_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
         return mode_indicator_snapshot();
     }
+    if BADGE_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
+        return badge_snapshot();
+    }
+    if PREDICT_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
+        return prediction_snapshot();
+    }
+    if PREDICT_TAG_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
+        return prediction_tag_snapshot();
+    }
+    candidate_snapshot()
+}
+
+/// 「上屏后联想」样本：无组字、无 preedit，只有 4 条预测词（与引擎 `render_snapshot`
+/// 在 `response.candidates` 为空时的产出同形：`kind = "prediction"`、索引 0、不可翻页）。
+///
+/// 2026-11-08 用户口径：联想条 3 → 4 条（数字键 1/2/3 变 1/2/3/4）。
+fn prediction_snapshot() -> RenderSnapshot {
+    let mut snapshot = candidate_snapshot();
+    snapshot.preedit = None;
+    snapshot.items = ["现在", "这个", "然后", "应该"]
+        .into_iter()
+        .map(|text| RenderItem {
+            primary_text: text.into(),
+            secondary_text: String::new(),
+            enabled: true,
+            kind: "prediction".into(),
+        })
+        .collect();
+    snapshot.selected_index = 0;
+    snapshot.page_start = 0;
+    snapshot.total_item_count = None;
+    snapshot.can_page_previous = false;
+    snapshot.can_page_next = false;
+    snapshot
+}
+
+/// 「打字时的预测候选」样本：普通候选 + 预测候选混排，带预编辑。
+///
+/// 预测候选的 `secondary_text` 就是「预测」标签（引擎侧 `comment == "预测"`）；
+/// 主题应只把这个标签画小一号，prediction 的 `primary_text` 与普通候选同字号。
+fn prediction_tag_snapshot() -> RenderSnapshot {
+    let mut snapshot = candidate_snapshot();
+    snapshot.preedit = Some(weasel_common::message::RenderPreedit {
+        text: "jie".into(),
+        cursor_utf16: 3,
+    });
+    let samples = [
+        ("界面", "jiemian", "candidate"),
+        ("解谜", "jiemi", "candidate"),
+        ("你好", "预测", "prediction"),
+        ("你们", "预测", "prediction"),
+    ];
+    snapshot.items = samples
+        .into_iter()
+        .map(|(primary, secondary, kind)| RenderItem {
+            primary_text: primary.into(),
+            secondary_text: secondary.into(),
+            enabled: true,
+            kind: kind.into(),
+        })
+        .collect();
+    snapshot.selected_index = 0;
+    snapshot.page_start = 0;
+    snapshot.total_item_count = Some(4);
+    snapshot.can_page_previous = false;
+    snapshot.can_page_next = false;
+    snapshot
+}
+
+/// 候选窗样本：与外观对照用的五条候选（不读 `INDICATOR_ONLY`）。
+///
+/// 2026-11-02 02:2x：原来自测台的 `mode_indicator_snapshot()` 直接调
+/// `synthetic_snapshot()`，而 `synthetic_snapshot()` 在 `--preview-indicator` 下又调回
+/// `mode_indicator_snapshot()` —— **无限递归**，进程直接 `has overflowed its stack`。
+/// 所以"中英提示"这条自测台一直是坏的，谁都验证不了。拆出这个不递归的构造函数。
+fn candidate_snapshot() -> RenderSnapshot {
     let samples = [
         ("界面", "jiemian"),
         ("解谜", "jiemi"),
@@ -102,16 +215,38 @@ pub fn run(_mode: UiMode) -> Result<(), String> {
     crate::preview_window::run()
 }
 
-/// 只含模式提示的合成快照：走主题的 `Layout::mode_indicator` 那条路。
-fn mode_indicator_snapshot() -> RenderSnapshot {
-    let mut snapshot = synthetic_snapshot();
-    snapshot.items.clear();
-    snapshot.preedit = None;
-    snapshot.selected_index = 0;
+/// 组字中切中英的徽标样本。
+fn badge_snapshot() -> RenderSnapshot {
+    let mut snapshot = candidate_snapshot();
+    snapshot.preedit = Some(weasel_common::message::RenderPreedit {
+        text: "jie m".into(),
+        cursor_utf16: 5,
+    });
+    snapshot.ascii_mode = Some(true);
     snapshot.mode_indicator = Some(weasel_common::message::ModeIndicator {
         id: 1,
         ascii_mode: true,
         reason: weasel_common::message::ModeIndicatorReason::UserSwitch as i32,
+        caps_lock: false,
+    });
+    snapshot
+}
+
+/// 只含模式提示的合成快照：走主题的 `Layout::mode_indicator` 那条路。
+fn mode_indicator_snapshot() -> RenderSnapshot {
+    let mut snapshot = candidate_snapshot();
+    snapshot.items.clear();
+    snapshot.preedit = None;
+    snapshot.selected_index = 0;
+    snapshot.visible = false;
+    // 主题画提示读的是 `snapshot.ascii_mode`（不是 mode_indicator 里那个），
+    // 两处都写，预览和真实链路才一致。
+    snapshot.ascii_mode = Some(true);
+    snapshot.mode_indicator = Some(weasel_common::message::ModeIndicator {
+        id: 1,
+        ascii_mode: true,
+        reason: weasel_common::message::ModeIndicatorReason::UserSwitch as i32,
+        caps_lock: false,
     });
     snapshot
 }
@@ -124,6 +259,9 @@ mod tests {
         let parse = |args: &[&str]| parse_args(args.iter().map(std::ffi::OsString::from));
         assert_eq!(parse(&[]).unwrap(), UiMode::Live);
         assert_eq!(parse(&["--preview"]).unwrap(), UiMode::Preview);
+        assert_eq!(parse(&["--preview-badge"]).unwrap(), UiMode::Preview);
+        assert_eq!(parse(&["--preview-predict"]).unwrap(), UiMode::Preview);
+        assert_eq!(parse(&["--preview-predict-tag"]).unwrap(), UiMode::Preview);
         assert!(parse(&["--preview", "--preedit"]).is_err());
         assert!(parse(&["--preedit"]).is_err());
         assert!(parse(&["--preview", "--preview"]).is_err());

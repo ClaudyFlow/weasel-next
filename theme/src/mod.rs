@@ -22,7 +22,7 @@ use crate::d2d_bindings::*;
 use crate::theme::paint::{d2d_color, Formats, Painter};
 use crate::theme_api::{CandidateView, EventSink, ThemeBackend, UiAction, UiMode};
 use config::Metrics;
-use layout::{Hit, Layout, Measured, Parts, Rect, Size};
+use layout::{Hit, Layout, Measured, PREDICTION_KIND, Parts, Rect, Size};
 use std::{
     cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -30,6 +30,17 @@ use std::{
 };
 use weasel_style::ColorScheme;
 use windows_strings::w;
+
+/// `hide()` 诊断（2026-11-07 23:xx）：候选窗被**谁**成串地收起。
+///
+/// 用户报「输入时不要关掉候选窗」；live `theme.log` 里出现过连续 154 行
+/// `[panel] 候选窗收起 → 面板保留（常驻）`——说明有东西在成串地喂「不可见快照」。
+/// 这里给每条收起路径打来源标记，并做 1 秒限频（被压掉的次数并入下一秒首条），
+/// 免得诊断日志自己变成风暴。
+static HIDE_LOG_ANCHOR: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+static HIDE_LOG_AT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static HIDE_LOG_SINCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static HIDE_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 const CLASS: windows_strings::PCWSTR = w!("Weasel.NextTheme.Default");
 const RETRY_TIMER: usize = 1;
@@ -107,6 +118,18 @@ struct Graphics {
     indicator: IDWriteTextFormat,
     /// 与此 HWND 关联的呈现层：D3D11 + DXGI 组合交换链 + DirectComposition + D2D 设备上下文。
     target: Option<crate::presenter::Presenter>,
+}
+
+/// 预测标签（预测项的 `secondary_text`）字号 = 候选字号的 1/2。
+///
+/// 2026-11-08 用户口径：「我说的是预测这个标签做成小一号，预测的候选字号不变」
+/// —— 小一号的是「预测」这两个字的标签，**不是**预测候选的正文文字（正文仍用
+/// `formats.text`，字号跟普通候选一致）。「小一号」= `font_point * 0.5`，此前已确认。
+///
+/// 抽成独立函数是为了让单测能钉住 1/2 这个口径（真实 DirectWrite 格式无法在
+/// 单测里建）；`Graphics::make_formats` 用它建 `Formats::prediction_tag`。
+fn prediction_tag_point(m: &Metrics) -> f32 {
+    m.font_point * 0.5
 }
 
 impl Graphics {
@@ -208,6 +231,17 @@ impl Graphics {
                 wrapping,
                 m,
             )?,
+            // 「预测」标签小一号（2026-11-08 用户：「预测这个标签做成小一号，预测的
+            // 候选字号不变」）：只缩预测项的 secondary_text，正文文字仍用 `text`。
+            // 1/2 的口径此前已确认（小号 = 候选字号的一半）；其余参数与 `comment`
+            // 完全相同（face / wrapping / linespacing / baseline 都走 `make_format`）。
+            prediction_tag: Self::make_format(
+                write,
+                &m.comment_font_face,
+                prediction_tag_point(m),
+                wrapping,
+                m,
+            )?,
         })
     }
 
@@ -300,7 +334,16 @@ impl Graphics {
                 Size::ZERO
             });
             measured.comment.push(if m.comment_font_valid {
-                self.measure(&item.secondary_text, &self.formats.comment, m)
+                // 2026-11-08 用户口径：「预测」这个标签做成小一号，预测的候选字号不变。
+                // kind == prediction 的 secondary_text 就是「预测」标签（引擎按
+                // comment == "预测" 标 kind，见 `renderer_bridge::render_snapshot`），
+                // 用 font_point/2 的小号格式量；普通候选的注释仍用 `comment`。
+                let format = if item.kind == PREDICTION_KIND {
+                    &self.formats.prediction_tag
+                } else {
+                    &self.formats.comment
+                };
+                self.measure(&item.secondary_text, format, m)
             } else {
                 Size::ZERO
             });
@@ -384,6 +427,12 @@ struct App {
     stamp: Option<std::time::SystemTime>,
     graphics: Graphics,
     content: Option<Content>,
+    /// 最近一次渲染拿到的 `EventSink`。
+    ///
+    /// 2026-11-07 用户要求「三辅助面板常驻」：候选窗收起后（`content = None`）面板
+    /// 还要能点符号/剪贴板卡片直拟上屏，不能再退化成复制到剪贴板 —— 这里留着最新
+    /// 的 sink（携带当前会话/令牌/修订号），`WM_APP_COMMIT_TEXT` 在 content 为空时用它。
+    last_events: Option<EventSink>,
     /// 原始（未按 DPI 缩放）的 style：DPI 变化时靠它重新缩放。
     raw_style: weasel_style::UIStyle,
     /// 当前生效的 style（含 DPI 缩放）与配色。
@@ -414,6 +463,7 @@ const ANIM_DURATION: f32 = 0.10;
 /// 帧 `PostMessageW` 下一帧 —— 就是 VSCode / CSS 那套 `requestAnimationFrame` 模型，
 /// 帧消息是普通投递消息，一定会被取走派发，不再看计时器的脸色。
 const ANIM_MSG: i32 = WM_APP + 0x2a;
+
 /// 一帧的目标间隔（毫秒）：100ms ≈ 12 帧，是 60Hz 下 CSS 过渡（6 帧）的两倍。
 const ANIM_FRAME_MS: u32 = 8;
 
@@ -569,6 +619,32 @@ fn pixels(dip: f32, dpi: u32) -> i32 {
     (dip * dpi.max(1) as f32 / 96.0).round() as i32
 }
 
+/// 把窗口从 DWM 合成树里摘除/放回（`DWMWA_CLOAK`，2026-11-07 残留根治）。
+///
+/// `WS_EX_NOREDIRECTIONBITMAP` 窗口的 D2D `Present` 与 `DwmFlush` 不同步：
+/// hide() 里"清成全透明再 SW_HIDE"的最后一帧偶尔没真正进合成器，DWM 就把
+/// 上一帧缓存住了 —— 屏幕上留一块几分钟不散的透明面板。Cloak 之后合成器
+/// 不再持有该窗口的任何视觉，残留从机制上不可能。显示前先解 Cloak，配对不漏。
+fn cloak_window(hwnd: HWND, on: bool) {
+    unsafe extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: HWND,
+            attribute: u32,
+            value: *const core::ffi::c_void,
+            size: u32,
+        ) -> i32;
+    }
+    let cloak: i32 = on as i32;
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            13, // DWMWA_CLOAK
+            &cloak as *const _ as *const core::ffi::c_void,
+            core::mem::size_of::<i32>() as u32,
+        );
+    }
+}
+
 /// 快照是否"没有内容"（官方 `Context::empty`：无候选、无预编辑、无辅助串）。
 fn empty_context(view: &CandidateView) -> bool {
     view.items.is_empty() && view.preedit.is_none()
@@ -578,6 +654,11 @@ fn empty_context(view: &CandidateView) -> bool {
 
 fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
     let preview = mode != UiMode::Live;
+    // 编码栏三面板的后台服务（剪贴板采集 + 自动同步）在真实运行模式下随渲染器启动一次；
+    // 预览窗口不启线程，免得开个设置预览就开始写用户数据。
+    if !preview {
+        crate::panels::start_services();
+    }
     let loaded = config::load(crate::appearance::is_dark());
     let antialias = config::Antialias::from_name(&loaded.style.antialias_mode);
     // 毛玻璃：配置文件 `style/glass` 说了算（缺省 true，老配置没有该键也走 true）；
@@ -835,6 +916,7 @@ impl App {
             source: loaded.source.clone(),
             graphics: Graphics::new(&metrics).map_err(|e| e.to_string())?,
             content: None,
+            last_events: None,
             raw_style: loaded.style,
             metrics,
             scheme: loaded.scheme,
@@ -924,10 +1006,41 @@ impl Window {
             let _ = InvalidateRect(Some(self.hwnd.get()), None, false);
         }
     }
+    /// `hide()` 限频诊断：1 秒内的连发只打首条，下一秒首条带出被压掉的次数。
+    ///
+    /// `panels_open` 只影响文案（面板开着才是「面板保留（常驻）」）；面板没开时也照记 ——
+    /// 用户报的「输入时候选窗被关掉」不一定只在开面板时出现，漏记就查不到来源。
+    fn log_hide(why: &'static str, panels_open: bool) {
+        let total = HIDE_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let anchor = HIDE_LOG_ANCHOR.get_or_init(std::time::Instant::now);
+        let now_ms = anchor.elapsed().as_millis() as u64;
+        let last = HIDE_LOG_AT_MS.load(std::sync::atomic::Ordering::Relaxed);
+        let since = HIDE_LOG_SINCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if now_ms.saturating_sub(last) >= 1000 {
+            HIDE_LOG_AT_MS.store(now_ms, std::sync::atomic::Ordering::Relaxed);
+            HIDE_LOG_SINCE.store(0, std::sync::atomic::Ordering::Relaxed);
+            let tail = if panels_open {
+                " → 面板保留（常驻）"
+            } else {
+                ""
+            };
+            crate::diagnostics::record(format_args!(
+                "[panel] 候选窗收起{tail} src={why} 累计{total}次（上1秒压掉{since}次）"
+            ));
+        }
+    }
     fn cancel(&self) {
-        let mut app = self.app.borrow_mut();
-        app.pressed = None;
-        app.hovered = None;
+        // 2026-11-07 修重入 panic：**先把 RefCell 借用放掉，再 ReleaseCapture**。
+        // ReleaseCapture 会**同步**把 WM_CAPTURECHANGED 派发回本窗口过程，那个分支
+        // 又调用 cancel()；如果这里还握着 `app.borrow_mut()`，嵌套借第二层就 panic
+        // 「RefCell already borrowed」（本棒用合成点击复现，确为 msg=0x215）——
+        // 而 panic 会被 wnd_proc 的 catch_unwind 记成主题错误，候选窗从此不再重绘。
+        // 释放捕获本身不需要借用，字段清空在借用作用域内完成即可。
+        {
+            let mut app = self.app.borrow_mut();
+            app.pressed = None;
+            app.hovered = None;
+        }
         unsafe {
             if GetCapture() == self.hwnd.get() {
                 let _ = ReleaseCapture();
@@ -969,6 +1082,9 @@ impl Drop for Window {
                 let _ = DestroyWindow(hwnd);
             }
         }
+        // 主题后端销毁 = 渲染器/服务退出：常驻面板这时才收起（用户 2026-11-07：
+        // 只有点关闭钮或退出服务才消失）。同时清掉候选窗句柄，避免面板向已销毁窗口投消息。
+        crate::panels::close_all_panels();
     }
 }
 
@@ -977,7 +1093,7 @@ impl ThemeBackend for Ten {
         self.window.render(snapshot, events)
     }
     fn hide(&mut self) {
-        self.window.hide();
+        self.window.hide("backend_hide");
     }
     fn refresh_appearance(&mut self) -> Result<(), String> {
         let dark = crate::appearance::is_dark();
@@ -1104,10 +1220,21 @@ impl Window {
             // 圆角遮罩：背景只留在**面板**范围内（窗口比面板大 offset 一圈，那圈给阴影/描边，
             // 必须透明），半径就用面板圆角本身——之前写 `radius / 2.0`，遮罩比面板圆角小一半，
             // 圆角外的背景没被裁掉，四角就露出方角（用户 11-01："圆角怎么还没切掉"）。
-            // ⚠️ `round_corner_ex` 已经是**像素**（`Metrics` 里按 DPI 缩放过），
+            // ⚠️ `panel_radius()` 已经是**像素**（`Metrics` 里按 DPI 缩放过），
             // 再乘 dpi/96 会让遮罩半径大 25% ⇒ 面板弧和遮罩弧曲率不一致（21:1x 用户报的）。
-            let radius = metrics.round_corner_ex;
-            let (inset_x, inset_y) = metrics.offset();
+            // 2026-11-06：挤压三模式大圆角减半，遮罩必须跟着窗口/灰壳一起减半。
+            let radius = metrics.panel_radius();
+            // 2026-11-06「接入默认玻璃亚克力三个配色」：挤压三模式的**窗口就是面板**
+            // （`draw_squeeze` 从 (0,0) 画满 `content_size`，没有给投影/描边留的那圈
+            // `offset`）。这里若还按 `offset()` 内缩（用户主题 border=3 ⇒ 6px），
+            // 模糊位图四周就有一圈透明 ⇒ 玻璃档露出一圈**没糊的桌面**锐边；
+            // 亚克力档那圈又被半透明蒙版单独染一遍，颜色也对不上。
+            // 官方六种布局仍用原 inset（那圈是给描边/阴影的），零回归。
+            let (inset_x, inset_y) = if metrics.squeeze {
+                (0.0, 0.0)
+            } else {
+                metrics.offset()
+            };
             // 抓屏位图可能跟窗口不同尺寸，按比例换算到像素
             let sx = bw as f32 / w.max(1) as f32;
             let sy = bh as f32 / h.max(1) as f32;
@@ -1169,6 +1296,11 @@ impl Window {
 
     /// 应用候选快照：内容没变就只重新定位，变了就重新测量 + 布局 + 绘制。
     fn render(&self, snapshot: &CandidateView, events: &EventSink) -> Result<(), String> {
+        // 面板常驻（2026-11-07 用户要求）：**每次**渲染都留下最新的 EventSink。
+        // 候选窗收起后 `content` 会被清空，面板点按（`WM_APP_COMMIT_TEXT`）靠它把
+        // 文本送进引擎；配合 `Factory::capabilities` 的 `resident=true`，渲染器在
+        // 「输入上下文仍活动但无候选」的快照上也会调到这里（否则只有 hide()，拿不到新 sink）。
+        self.app.borrow_mut().last_events = Some(events.clone());
         let same = {
             let mut app = self.app.borrow_mut();
             let App {
@@ -1219,7 +1351,7 @@ impl Window {
         if !(crate::presentation::is_visible(snapshot)
             || crate::presentation::is_mode_indicator_visible(snapshot))
         {
-            self.hide();
+            self.hide("render_invisible");
             return Ok(());
         }
         // 主题文件被改过（例如刚在设置里换了皮肤）就重载一次，不必重启输入法。
@@ -1289,6 +1421,8 @@ impl Window {
             }
         }
         unsafe {
+            // 显示前先解除 hide() 留下的 Cloak(配对见 cloak_window 注)。
+            cloak_window(self.hwnd.get(), false);
             let _ = ShowWindow(
                 self.hwnd.get(),
                 if self.preview { SW_SHOW } else { SW_SHOWNOACTIVATE },
@@ -1301,7 +1435,18 @@ impl Window {
     }
 
     /// 隐藏窗口并释放交互状态。
-    fn hide(&self) {
+    ///
+    /// `why` 是来源标记（诊断，2026-11-07）：
+    /// `render_invisible` = `render()` 收到不可见快照；`backend_hide` = 渲染器
+    /// `Presentation::apply/hide` 直接调后端；`autohide_timer` = 模式提示到期。
+    fn hide(&self, why: &'static str) {
+        // 2026-11-07 用户口径「面板常驻」：候选窗收起（组字结束/上屏/失焦）**不再**
+        // 关闭三辅助面板 —— 面板要能继续点、继续拖，输入结束也不消失。
+        // 只有面板自己的关闭钮或主题后端销毁（服务退出）才关，见 `panels::close_all_panels`。
+        Self::log_hide(why, crate::panels::any_panel_open());
+        // 是否真的显示着：已经隐藏时不必再做「D2D 清透明 + DwmFlush」这两步最贵的动作
+        // （hide 风暴下它们是纯浪费），但 SW_HIDE/Cloak/亚克力关等保障性动作照做。
+        let was_shown = self.shown.get();
         self.cancel();
         self.app.borrow_mut().content = None;
         self.recovery.borrow_mut().waiting = false;
@@ -1324,29 +1469,35 @@ impl Window {
             // 撤出合成，残留的就会是上一帧那张模糊背景（用户 18:1x：「打完字有时
             // 候这个背景还是会显示」）。清成空气之后，就算晚一帧也看不见东西。
             let presenter = self.app.borrow().graphics.target.is_some();
-            if let Some(presenter) = self.app.borrow().graphics.target.as_ref() {
-                // ⚠️ D2D 的 `Clear` 必须在 `BeginDraw`/`EndDraw` 之间调，否则上下文进入
-                // 非法状态 —— 下一次 `EndDraw` 就报 `0x88990001 (D2DERR_WRONG_STATE)`，
-                // 进而 `graphics_error` → 健康检查失败 → **渲染器整个退出**（候选窗消失）。
-                // 2026-11-01 18:3x 就这么把候选窗整没了。
-                presenter.begin_draw();
-                presenter.clear_transparent();
-                let _ = presenter.end_draw();
-            } else {
-                // 没画布可清：这一帧注定留在屏幕上，至少留个可查的痕迹。
-                crate::diagnostics::record(format_args!("hide 时没有绘制目标，无法清屏"));
-            }
-            // 2026-11-02 03:1x **修「打完字残留磨砂面板」**：
-            // 光清屏不够 —— `Present` 只是把帧排进队列，紧接着的 `SW_HIDE` 会让 DWM
-            // 直接按"窗口已隐藏"合成，**那一帧全透明的画面根本不会上屏**，屏幕上留着的
-            // 还是上一帧那块高斯模糊面板。实测（用户 03:1x 截图 + 外部枚举窗口）：
-            // 此时 `IsWindowVisible=false`，但屏幕 (1321,678)-(1920,885) 那块一直是糊的，
-            // 能停好几分钟不动。
-            // ⇒ 清屏之后必须 `DwmFlush()` 等这一帧真的被合成出去，再撤窗口。
-            if presenter {
-                let _ = DwmFlush();
+            // 只在「真的显示着」时做清屏 + DwmFlush：已经隐藏时合成器里早没有这帧了，
+            // 再清一遍是白费 —— hide 风暴里这两步是最贵的（2026-11-07 诊断需求）。
+            if was_shown {
+                if let Some(presenter) = self.app.borrow().graphics.target.as_ref() {
+                    // ⚠️ D2D 的 `Clear` 必须在 `BeginDraw`/`EndDraw` 之间调，否则上下文进入
+                    // 非法状态 —— 下一次 `EndDraw` 就报 `0x88990001 (D2DERR_WRONG_STATE)`，
+                    // 进而 `graphics_error` → 健康检查失败 → **渲染器整个退出**（候选窗消失）。
+                    // 2026-11-01 18:3x 就这么把候选窗整没了。
+                    presenter.begin_draw();
+                    presenter.clear_transparent();
+                    let _ = presenter.end_draw();
+                } else {
+                    // 没画布可清：这一帧注定留在屏幕上，至少留个可查的痕迹。
+                    crate::diagnostics::record(format_args!("hide 时没有绘制目标，无法清屏"));
+                }
+                // 2026-11-02 03:1x **修「打完字残留磨砂面板」**：
+                // 光清屏不够 —— `Present` 只是把帧排进队列，紧接着的 `SW_HIDE` 会让 DWM
+                // 直接按"窗口已隐藏"合成，**那一帧全透明的画面根本不会上屏**，屏幕上留着的
+                // 还是上一帧那块高斯模糊面板。实测（用户 03:1x 截图 + 外部枚举窗口）：
+                // 此时 `IsWindowVisible=false`，但屏幕 (1321,678)-(1920,885) 那块一直是糊的，
+                // 能停好几分钟不动。
+                // ⇒ 清屏之后必须 `DwmFlush()` 等这一帧真的被合成出去，再撤窗口。
+                if presenter {
+                    let _ = DwmFlush();
+                }
             }
             let _ = ShowWindow(self.hwnd.get(), SW_HIDE);
+            // SW_HIDE 之后再 Cloak:合成器彻底丢弃本窗口的视觉(见 cloak_window 注)。
+            cloak_window(self.hwnd.get(), true);
         }
         self.shown.set(false);
     }
@@ -1498,6 +1649,10 @@ impl Window {
                     Some(Hit::Candidate(i)) => Some(*i),
                     _ => None,
                 };
+                painter.hover_button = match hovered {
+                    Some(Hit::BarButton(i)) => Some(*i),
+                    _ => None,
+                };
                 let indicator = content.snapshot.mode_indicator.is_some();
                 // 提示窗有两种形态：**只有图标**（68×68 的小窗，无候选）
                 // 和 **组字中徽标**（候选窗还开着，在预编辑后面叠一个小「中/英」）。
@@ -1616,12 +1771,12 @@ impl Window {
                     let (x, y) = crate::presentation::preview_position(width, height);
                     Some((x, y, width, height, None))
                 } else {
-                    content
-                        .snapshot
-                        .anchor
-                        .as_ref()
-                        .filter(|anchor| anchor.valid)
-                        .map(|anchor| {
+                    // 2026-11-07：锚点无效（重启后从未打过字的首键方案選單/候选窗）
+                    // 不再整体放弃定位——那会让窗口停在旧位置甚至从不显示，
+                    // 看起来像"按键直接过去了"。回退到主屏工作区居中（与预览同源），
+                    // 等真实锚点/布局到达后自然重定位。
+                    match content.snapshot.anchor.as_ref().filter(|a| a.valid) {
+                        Some(anchor) => {
                             let work = crate::presentation::work_area(anchor);
                             let placed = reposition(
                                 anchor,
@@ -1634,8 +1789,13 @@ impl Window {
                                 dpi,
                                 sticky,
                             );
-                            (placed.x, placed.y, width, height, Some(placed.sticky))
-                        })
+                            Some((placed.x, placed.y, width, height, Some(placed.sticky)))
+                        }
+                        None => {
+                            let (x, y) = crate::presentation::preview_position(width, height);
+                            Some((x, y, width, height, None))
+                        }
+                    }
                 }
             };
             let Some((x, y, width, height, new_sticky)) = bounds else {
@@ -1678,11 +1838,11 @@ impl Window {
             let dpi = self.dpi.get();
             let w = pixels(content.layout.content_size.cx, dpi);
             let h = pixels(content.layout.content_size.cy, dpi);
-            // 面板把 `round_corner_ex` 当 D2D 坐标用（D2D 目标已 SetDpi），所以面板角的
-            // 设备像素半径 = `pixels(round_corner_ex, dpi)`。窗口角半径一致取这个值，
+            // 面板把 `panel_radius()` 当 D2D 坐标用（D2D 目标已 SetDpi），所以面板角的
+            // 设备像素半径 = `pixels(panel_radius(), dpi)`。窗口角半径一致取这个值，
             // 再叠加 offset 的像素——这样窗口圆角与面板圆角**同心同半径**外扩 offset，
             // 面板角正好嵌在里面，offset 环里的阴影也跟着被圆角裁掉，方角不再出现。
-            let rad = (pixels(app.metrics.round_corner_ex, dpi) as f32
+            let rad = (pixels(app.metrics.panel_radius(), dpi) as f32
                 + pixels(app.metrics.offset().0, dpi) as f32)
                 .max(0.0) as i32;
             (w, h, rad)
@@ -2000,10 +2160,81 @@ impl Drop for DrawGuard<'_> {
     }
 }
 
+/// 这一帧是不是「上屏后联想条」：**无预编辑**，非空，且整屏 items 都是 `kind == "prediction"`。
+///
+/// 联想条**不是**候选列表 —— 引擎只是为了按官方候选画法给第一个词画个高亮，
+/// 才把 `selected_index` 写死成 0（见 `renderer_bridge::render_snapshot`），
+/// 它没有"用户当前选中项"的语义。
+///
+/// 保险（2026-11-08）：打字时 librime 追加的预测候选也标 `kind == "prediction"`
+/// （comment == "预测"），但那一帧**带 preedit**（组字中）——不能按联想条处理，
+/// 否则编码栏/点击语义会被一起收掉。所以「整屏 prediction」的判定必须再加
+/// `preedit.is_none()`，与 `layout::Layout::build` 的 `show_bar` 同口径。
+fn is_prediction_strip(snapshot: &CandidateView) -> bool {
+    snapshot.preedit.is_none()
+        && !snapshot.items.is_empty()
+        && snapshot
+            .items
+            .iter()
+            .all(|item| item.kind == PREDICTION_KIND)
+}
+
+/// 鼠标抬起时是否派发 `ItemInvoked(index)`。
+///
+/// 官方 `WeaselPanel::OnLeftClickDown`（WeaselPanel.cpp:1145-1152）在**按下**时就把
+/// 非高亮候选改成高亮（`m_uiCallback(NULL, &i, ...)`），抬起再按高亮项回调；
+/// 我们的 `UiAction` 没有"改选中"这个动作，于是普通候选只能点**当前高亮**那一项
+/// （等价于官方在 `hover_type = none` 下的行为）。
+///
+/// 联想条必须例外：用户要的是"想点哪个词就上屏哪个"（2026-11-08 需求「可点」），
+/// 而联想条永远只有第一个词带高亮。所以：整屏都是 prediction 时，按下/抬起落在
+/// **同一项**就派发，不再要求它是高亮项。普通候选的判定一个像素不动。
+fn release_invocation(
+    pressed: Option<Hit>,
+    released: Option<Hit>,
+    selected: Option<usize>,
+    prediction_strip: bool,
+) -> Option<u32> {
+    let (Some(Hit::Candidate(pressed_index)), Some(Hit::Candidate(released_index))) =
+        (pressed, released)
+    else {
+        return None;
+    };
+    if pressed_index != released_index {
+        return None;
+    }
+    if prediction_strip || selected == Some(pressed_index) {
+        Some(pressed_index as u32)
+    } else {
+        None
+    }
+}
+
+/// 候选窗的屏幕矩形 (left, top, right, bottom)，面板停靠的锚点；取不到给 `None`。
+fn cand_anchor(window: &Window) -> Option<(i32, i32, i32, i32)> {
+    let mut r = RECT::default();
+    if unsafe { GetWindowRect(window.hwnd.get(), &mut r) }.as_bool() {
+        Some((r.left, r.top, r.right, r.bottom))
+    } else {
+        None
+    }
+}
+
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match catch_unwind(AssertUnwindSafe(|| unsafe { dispatch(hwnd, msg, wp, lp) })) {
         Ok(result) => result,
-        Err(_) => {
+        Err(e) => {
+            // 2026-11-07 三按钮排查:panic 不再无声——把载荷写进 theme.log。
+            let what = e
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| e.downcast_ref::<&'static str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "非字符串 panic".into());
+            crate::diagnostics::record(format_args!(
+                "[panic] msg={msg:#x} wp={:#x} lp={:#x}: {what}",
+                wp.0,
+                lp.0
+            ));
             unsafe {
                 let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Window;
                 if let Some(window) = ptr.as_ref() {
@@ -2030,6 +2261,49 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr as isize);
             return LRESULT(1);
         }
+        // 2026-11-07 符号面板直拟上屏：面板把 `Box<String>` 指针 PostMessage 过来，
+        // 这里取走文本、经 EventSink 发 `CommitText` 给宿主 → 引擎 `commit_string`。
+        // 放在 match 之前是自定义消息（WM_APP 段），不参与下面的官方消息分发。
+        if msg as u32 == crate::panels::WM_APP_COMMIT_TEXT as u32 {
+            let text = unsafe { Box::from_raw(lp.0 as *mut String) };
+            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const Window;
+            if let Some(window) = unsafe { ptr.as_ref() } {
+                let app = window.app.borrow();
+                // 面板常驻后候选窗可能已经收起（content=None）：用最近一次渲染留下的
+                // EventSink 直拟上屏。没有 sink 才退回复制（真·无活动会话，例如预览）。
+                let events = app
+                    .last_events
+                    .clone()
+                    .or_else(|| app.content.as_ref().map(|c| c.events.clone()));
+                drop(app);
+                crate::diagnostics::record(format_args!(
+                    "[commit] 转发 {} 字符",
+                    text.chars().count()
+                ));
+                if let Some(events) = events {
+                    events.send(UiAction::CommitText(*text));
+                } else {
+                    // 没有可用事件通道（预览/服务刚退出）：退回复制，至少不丢字。
+                    // 2026-11-07 加诊断：走这条路 = **没上屏**，日志里必须能直接看出来。
+                    crate::diagnostics::record(format_args!(
+                        "[commit] 无可用事件通道 → 复制到剪贴板（未上屏）"
+                    ));
+                    crate::panels::copy_text_to_clipboard(&text);
+                }
+            }
+            return LRESULT(0);
+        }
+        // 2026-11-07 三按钮「按不了」修复记录（别再把这套临时补丁加回来）：
+        //   这里原有一段「点击族消息直通」补丁（`[in]`/`[direct]` 诊断 + 0x201 直接
+        //   `panels::open_*`）。它存在的唯一原因，是当时 `WM_NCCALCSIZE` 不在构建脚本
+        //   白名单里（见 `theme/support/build_d2d.rs`），导致下面 match 的
+        //   `WM_NCCALCSIZE if wp.0 != 0` 臂被编译成「**任何** wParam != 0 的消息一律
+        //   return 0」的通配臂 —— WM_LBUTTONDOWN 的 wParam 恒含 MK_LBUTTON(1)，于是
+        //   永远到不了 match 里的按钮分支，点三按钮毫无反应。
+        //   白名单补上后该臂恢复成真正的常量模式，点击走下面 match 的 WM_LBUTTONDOWN 臂；
+        //   若保留直通块，同一次点击会 open_* 两次 ⇒ 用户看到的是「点了没反应」
+        //   （旧 open 语义=同类再点收起；2026-11-07 22:3x 起改成「同类再点只置顶、
+        //   永不销毁」，但直通块仍是重复打开，别加回来）。所以直通块整体删除。
         let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Window;
         if let Some(window) = ptr.as_ref() {
             match msg as i32 {
@@ -2045,6 +2319,11 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                     return LRESULT(0);
                 }
                 // 加了 WS_THICKFRAME 之后：客户区要铺满整个窗口，且不提供缩放/拖动边框。
+                // ⚠️ `WM_NCCALCSIZE` 这个常量必须列在 `theme/support/build_d2d.rs` 的
+                //   白名单里！漏了它编译器不会报错，而是把这条臂当成「变量绑定 + 守卫」的
+                //   **通配臂**（只有 non_snake_case 警告）＝「任何 wParam != 0 的消息一律
+                //   return 0」—— 2026-11-07「编码栏三按钮按不了」就是这么来的：鼠标左键
+                //   按下 wParam 恒含 MK_LBUTTON(1)，在进 match 之前就被这条臂吞掉了。
                 WM_NCCALCSIZE if wp.0 != 0 => return LRESULT(0),
                 WM_NCHITTEST => return LRESULT(1), // HTCLIENT
                 // 动画定时器：到点**直接画**一帧（不走 invalidate → WM_PAINT，
@@ -2151,7 +2430,7 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                     if badge_on_candidates {
                         window.invalidate();
                     } else {
-                        window.hide();
+                        window.hide("autohide_timer");
                     }
                     return LRESULT(0);
                 }
@@ -2216,10 +2495,13 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                     let mut app = window.app.borrow_mut();
                     let changed = app.hovered != hit;
                     // 官方 hover_type = none 时完全不悬停
-                    app.hovered = if app.metrics.hover == config::Hover::None {
-                        None
-                    } else {
+                    // 编码栏三按钮即使 `hover_type = none` 也要亮（它们是按钮，不是候选）。
+                    app.hovered = if matches!(hit, Some(Hit::BarButton(_)))
+                        || app.metrics.hover != config::Hover::None
+                    {
                         hit
+                    } else {
+                        None
                     };
                     if changed {
                         crate::diagnostics::record(format_args!(
@@ -2234,7 +2516,37 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                     return LRESULT(0);
                 }
                 WM_LBUTTONDOWN => {
+                    // 2026-11-07 排查:hit 前后各记一条,死在哪一半一眼可见。
+                    crate::diagnostics::record(format_args!("[lb] 前 lp={:#x}", lp.0));
                     let hit = window.hit(lp);
+                    crate::diagnostics::record(format_args!(
+                        "[click] lp={:#x} hit={:?}",
+                        lp.0, hit
+                    ));
+                    // 编码栏三按钮：打开对应面板（🔄 同步 / ✂ 剪贴板 / 🔣 符号），
+                    // 不走候选按压流程、不抢焦点、不触发 SetCapture。
+                    if let Some(Hit::BarButton(idx)) = hit {
+                        crate::diagnostics::record(format_args!("[panel] click bar button {idx}"));
+                        let horizontal = {
+                            // 记下候选窗句柄（面板点符号要经它把文本送回输入流直拟上屏）
+                            // 和当前主题配色（面板接入 theme，用户 2026-11-07）。
+                            let app = window.app.borrow();
+                            crate::panels::set_candidate_hwnd(
+                                window.hwnd.get().0 as isize,
+                                app.metrics.font_point,
+                            );
+                            crate::panels::set_theme_scheme(&app.scheme);
+                            // 横流（挤压水平）时符号条右侧放不下要改贴同步面板右侧（用户 21:1x ④）。
+                            app.metrics.layout_type == config::LayoutType::HorizontalSqueeze
+                        };
+                        let anchor = cand_anchor(window);
+                        match idx {
+                            0 => crate::panels::open_sync(anchor),
+                            1 => crate::panels::open_clipboard(anchor),
+                            _ => crate::panels::open_symbol(anchor, horizontal),
+                        }
+                        return LRESULT(0);
+                    }
                     let event = {
                         let mut app = window.app.borrow_mut();
                         match hit {
@@ -2271,25 +2583,31 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                 }
                 WM_LBUTTONUP => {
                     let hit = window.hit(lp);
-                    let event = {
+                    let (event, prediction_strip) = {
                         let mut app = window.app.borrow_mut();
                         let pressed = app.pressed.take();
-                        let selected = app
-                            .content
-                            .as_ref()
-                            .map(|c| c.snapshot.selected_index as usize);
-                        match (pressed, hit) {
-                            // 官方：只有点在**当前高亮**的候选上才算选中（L1050-1057）
-                            (Some(Hit::Candidate(i)), Some(Hit::Candidate(j)))
-                                if i == j && Some(i) == selected =>
-                            {
-                                Some(UiAction::ItemInvoked(i as u32))
-                            }
-                            _ => None,
-                        }
+                        let (selected, prediction_strip) = match app.content.as_ref() {
+                            Some(content) => (
+                                Some(content.snapshot.selected_index as usize),
+                                is_prediction_strip(&content.snapshot),
+                            ),
+                            None => (None, false),
+                        };
+                        (
+                            release_invocation(pressed, hit, selected, prediction_strip)
+                                .map(UiAction::ItemInvoked),
+                            prediction_strip,
+                        )
                     };
                     window.cancel();
                     if let Some(action) = event {
+                        if let UiAction::ItemInvoked(index) = &action {
+                            // 2026-11-08：联想条点击以前只点得动高亮的第一项（官方候选口径），
+                            // 2/3 号词点了没反应。留一行日志让真机 theme.log 能直接看出派发与否。
+                            crate::diagnostics::record(format_args!(
+                                "[click] 派发 ItemInvoked({index})（联想条={prediction_strip}）"
+                            ));
+                        }
                         let sender = window
                             .app
                             .borrow()
@@ -2364,10 +2682,15 @@ impl crate::theme_api::ThemeFactory for Factory {
         "default"
     }
     /// 候选栏 + 预编辑（官方会把未行内显示的组字串画在候选窗里）+ 模式提示。
+    ///
+    /// `resident`（2026-11-07）：用户要求三辅助面板常驻。声明后渲染器在「输入上下文
+    /// 仍活动但没有候选/预编辑」的快照上也会调用 `render`（而不是只调 `hide`），主题
+    /// 借此拿到最新的 `EventSink` —— 面板在组字结束后点符号/卡片仍能直拟上屏。
+    /// 主题自身仍按 `presentation::is_visible` 决定候选窗是否显示，行为不变。
     fn capabilities(&self) -> crate::theme_api::ThemeCapabilities {
         crate::theme_api::ThemeCapabilities {
             preedit: true,
-            resident: false,
+            resident: true,
             mode_indicator: true,
         }
     }
@@ -2488,6 +2811,124 @@ mod tests {
                 D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE as i32,
                 D2D1_TEXT_ANTIALIAS_MODE_ALIASED as i32,
             ]
+        );
+    }
+
+    /// 鼠标抬起派发：普通候选仍只认高亮项（官方候选口径），联想条点哪项都派发。
+    ///
+    /// 2026-11-08 用户要「联想条可点」：联想条的 `selected_index` 恒为 0，若沿用
+    /// 候选口径，2/3 号词点了没反应。正负对照都在这里。
+    #[test]
+    fn release_invokes_highlighted_candidate_but_any_prediction_item() {
+        // 普通候选：正对照——点高亮项派发。
+        assert_eq!(
+            release_invocation(Some(Hit::Candidate(0)), Some(Hit::Candidate(0)), Some(0), false),
+            Some(0)
+        );
+        // 普通候选：负对照——点非高亮项不派发（官方 hover_type=none 的口径）。
+        assert_eq!(
+            release_invocation(Some(Hit::Candidate(2)), Some(Hit::Candidate(2)), Some(0), false),
+            None
+        );
+        // 联想条：2/3 号词不是高亮项，也必须派发。
+        assert_eq!(
+            release_invocation(Some(Hit::Candidate(1)), Some(Hit::Candidate(1)), Some(0), true),
+            Some(1)
+        );
+        assert_eq!(
+            release_invocation(Some(Hit::Candidate(2)), Some(Hit::Candidate(2)), Some(0), true),
+            Some(2)
+        );
+        // 按下/抬起不在同一项（拖动）不派发。
+        assert_eq!(
+            release_invocation(Some(Hit::Candidate(1)), Some(Hit::Candidate(2)), Some(1), true),
+            None
+        );
+        // 翻页箭头 / 编码栏按钮 / 空白不派发。
+        assert_eq!(
+            release_invocation(Some(Hit::Previous), Some(Hit::Previous), Some(0), true),
+            None
+        );
+        assert_eq!(
+            release_invocation(Some(Hit::BarButton(0)), Some(Hit::BarButton(0)), Some(0), true),
+            None
+        );
+        assert_eq!(release_invocation(None, None, Some(0), true), None);
+        // 候选窗已隐藏（拿不到 selected）时：普通候选不派发，联想条仍按同一项派发。
+        assert_eq!(
+            release_invocation(Some(Hit::Candidate(1)), Some(Hit::Candidate(1)), None, false),
+            None
+        );
+        assert_eq!(
+            release_invocation(Some(Hit::Candidate(1)), Some(Hit::Candidate(1)), None, true),
+            Some(1)
+        );
+    }
+
+    /// 2026-11-08 用户口径：「预测」这个标签做成小一号 = 候选字号的 1/2
+    /// （而**不是**把预测候选的正文文字缩小 —— `make_formats` 里 `text` 格式仍按
+    /// `m.font_point` 建，预编辑/候选正文字号一个像素不动）。
+    #[test]
+    fn prediction_tag_is_half_of_candidate_font_size() {
+        let m = metrics(0);
+        assert!(m.font_point > 0.0, "默认 style 字高应 > 0");
+        let tag = prediction_tag_point(&m);
+        assert!(
+            (tag - m.font_point / 2.0).abs() < 0.001,
+            "预测标签字号应为候选字号的一半：{tag} vs {}",
+            m.font_point
+        );
+        // 负对照：默认 style 的注释字号 == 候选字号，标签必须明显更小。
+        assert!(
+            tag < m.comment_font_point,
+            "预测标签必须比候选注释小：{tag} vs {}",
+            m.comment_font_point
+        );
+    }
+
+    /// 联想条识别：非空且**每一项**都是 prediction；空/混合/普通候选/旧版无 kind 都不算。
+    #[test]
+    fn prediction_strip_requires_every_item_to_be_prediction() {
+        fn view(kinds: &[&str]) -> CandidateView {
+            CandidateView {
+                items: kinds
+                    .iter()
+                    .map(|kind| crate::theme_api::CandidateItem {
+                        primary_text: "词".into(),
+                        secondary_text: String::new(),
+                        enabled: true,
+                        kind: (*kind).into(),
+                    })
+                    .collect(),
+                selected_index: 0,
+                ..Default::default()
+            }
+        }
+        assert!(
+            is_prediction_strip(&view(&["prediction", "prediction", "prediction"])),
+            "三条 prediction 就是联想条"
+        );
+        assert!(!is_prediction_strip(&view(&[])), "空快照不是联想条");
+        assert!(
+            !is_prediction_strip(&view(&["prediction", "candidate"])),
+            "混合快照不是联想条"
+        );
+        assert!(!is_prediction_strip(&view(&["candidate"])), "普通候选不是联想条");
+        assert!(
+            !is_prediction_strip(&view(&[""])),
+            "旧渲染器缺 kind（空串）按普通候选处理"
+        );
+        // 负（2026-11-08 保险）：打字时 librime 追加的预测候选帧也是整屏
+        // kind=prediction，但它**带预编辑**（组字中），不能按联想条收掉编码栏/
+        // 点击语义。正对照：同样的 items 去掉 preedit ⇒ 是联想条。
+        let mut composing = view(&["prediction", "prediction", "prediction"]);
+        composing.preedit = Some(crate::theme_api::Preedit {
+            text: "nihao".into(),
+            cursor: 5,
+        });
+        assert!(
+            !is_prediction_strip(&composing),
+            "带预编辑的整屏 prediction 是打字帧，不是上屏后联想条"
         );
     }
 }

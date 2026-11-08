@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Weasel-Next-Engine"
-version = "0.18.6"
+version = "0.18.7"
 dependencies = [
  "bindgen",
  "embed-resource",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "Weasel-Next-Renderer"
-version = "0.18.6"
+version = "0.18.7"
 dependencies = [
  "embed-resource",
  "serde",
@@ -42,13 +42,14 @@ dependencies = [
 
 [[package]]
 name = "Weasel-Next-Server"
-version = "0.18.6"
+version = "0.18.7"
 dependencies = [
  "embed-resource",
  "libloading",
  "serde_json",
  "tokio",
  "weasel-common",
+ "windows",
  "windows-bindgen",
  "windows-collections 0.100.0",
  "windows-core 0.100.0",
@@ -58,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "Weasel-Next-Setting"
-version = "0.18.6"
+version = "0.18.7"
 dependencies = [
  "embed-resource",
  "libloading",
@@ -399,15 +400,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "516b6b4f0e40d50dcda9365d53964ec74560ad4284da2e7fc97122cd83174516"
 dependencies = [
  "stable_deref_trait",
-]
-
-[[package]]
-name = "ash"
-version = "0.38.0+1.3.281"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bb44936d800fea8f016d7f2311c6a4f97aebd5dc86f09906139ec848cf3a46f"
-dependencies = [
- "libloading",
 ]
 
 [[package]]
@@ -3216,6 +3208,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_norway",
+ "tracing",
  "windows",
 ]
 
@@ -6912,7 +6905,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-common"
-version = "0.18.6"
+version = "0.18.7"
 dependencies = [
  "prost",
  "prost-build",
@@ -6935,25 +6928,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "weasel-renderer-vk"
-version = "0.18.6"
-dependencies = [
- "ash",
- "windows",
-]
-
-[[package]]
-name = "weasel-setting-vk"
-version = "0.18.6"
-dependencies = [
- "Weasel-Next-Setting",
- "ash",
- "windows",
-]
-
-[[package]]
 name = "weasel-style"
-version = "0.18.6"
+version = "0.18.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -6963,7 +6939,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-theme-api"
-version = "0.18.6"
+version = "0.18.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -6972,7 +6948,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-theme-default"
-version = "0.18.6"
+version = "0.18.7"
 dependencies = [
  "embed-resource",
  "serde_json",
@@ -6987,7 +6963,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-theme-support"
-version = "0.18.6"
+version = "0.18.7"
 dependencies = [
  "weasel-theme-api",
  "windows-bindgen",
@@ -7003,7 +6979,7 @@ dependencies = [
 
 [[package]]
 name = "weasel-tip"
-version = "0.18.6"
+version = "0.18.7"
 dependencies = [
  "embed-resource",
  "tokio",

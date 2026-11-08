@@ -18,3 +18,4 @@ pub mod metadata;
 pub mod session;
 pub mod stats;
 pub mod themes;
+pub mod wordcloud;

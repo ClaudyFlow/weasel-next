@@ -62,7 +62,7 @@ impl Document {
     /// 合并顺序为内嵌默认值、程序目录 `weasel.yaml`、用户补丁 `weasel.yaml`（用户目录根）。
     /// 缺少用户文件时补丁为空对象且原始快照为 `None`；任何存在但无效的配置或读取错误都会失败。
     pub fn load(paths: &RuntimePaths) -> Result<Self, String> {
-        let mut base = object(include_str!("../../Rime-Next/weasel.yaml"))?;
+        let mut base = object(include_str!("../../Rime-Next/setting.yaml"))?;
         // 程序文件夹只有这一份：weasel.yaml。旧 weasel.toml / weasel.json 既不读也不迁移
         // （用户自己把旧文件改成 YAML）；没有它就用内嵌出厂默认值，不算错误。
         if let Some(text) = read(&weasel_common::settings::program_config_path(

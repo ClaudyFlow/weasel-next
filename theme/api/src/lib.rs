@@ -103,6 +103,11 @@ pub struct ModeIndicator {
     pub ascii_mode: bool,
     /// 触发提示的原因。
     pub reason: ModeIndicatorReason,
+    /// 这次切换是不是 CapsLock（大写锁定）造成的；主题据此画「A」而不是中/英图标。
+    ///
+    /// 主题进程不接收键盘输入，自己读 `GetKeyState(VK_CAPITAL)` 不可靠 —— 由引擎判定后带下来。
+    #[serde(default)]
+    pub caps_lock: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -129,6 +134,16 @@ pub struct CandidateItem {
     pub secondary_text: String,
     /// 候选项是否可被选择或调用。
     pub enabled: bool,
+    /// 项目类别：`"candidate"` = 正常候选，`"prediction"` = 预测项。
+    ///
+    /// 预测项有两种形态：打字时 librime 追加的预测候选（带预编辑，`comment == "预测"`）
+    /// 与上屏后的联想条（无预编辑、整屏都是预测词）。主题据此把预测项的「预测」标签
+    /// 换成小号字体、并在联想条帧收掉编码栏；正文文字与普通候选一致。
+    ///
+    /// 旧渲染器/旧主题不带这个字段，`serde(default)` 保证缺省为空串（按普通候选处理），
+    /// 这样单独换一侧二进制也不会解析失败。
+    #[serde(default)]
+    pub kind: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -228,7 +243,7 @@ impl Preedit {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 /// 主题 UI 可回传给输入服务的用户操作。
 pub enum UiAction {
     /// 调用候选集合中指定索引的候选项。
@@ -241,6 +256,14 @@ pub enum UiAction {
     Dismiss,
     /// 请求打开表情面板。
     OpenEmojiPanel,
+    /// 请求打开剪贴板历史面板（编码栏 ✂ 按钮）。
+    OpenClipboardPanel,
+    /// 请求打开表情/符号面板（编码栏 🔣 按钮）。
+    OpenSymbolPanel,
+    /// 请求打开同步面板/触发同步（编码栏 🔄 按钮）。
+    OpenSyncPanel,
+    /// 直拟上屏：不经组合直接提交这段文本（符号面板点击上屏）。
+    CommitText(String),
 }
 
 /// 供主题将用户操作提交给宿主的线程安全回调。

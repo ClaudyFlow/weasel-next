@@ -224,8 +224,8 @@ fn normalized_renderer_settings(
     let Some(mut root) = config.query(".").ok().flatten().cloned() else {
         return config.clone();
     };
-    // 内嵌出厂默认值是 YAML（`weasel.yaml`，2026-10-23 起唯一格式）。
-    let defaults: serde_json::Value = weasel_common::yaml::to_value(include_str!("../../Rime-Next/weasel.yaml"))
+    // 内嵌出厂默认值是 YAML（源文件 `Rime-Next/setting.yaml`，2026-11-08 由 weasel.yaml 改名）。
+    let defaults: serde_json::Value = weasel_common::yaml::to_value(include_str!("../../Rime-Next/setting.yaml"))
         .expect("embedded settings must be valid YAML");
     let Some(root_object) = root.as_object_mut() else {
         return weasel_common::settings::ConfigSnapshot::new(defaults);
@@ -670,7 +670,9 @@ fn run_ui(
             // 这样 `inline_preedit` 的两种配法都能在预览里看到（实时路径仍按配置来）。
             // 2026-11-02 02:2x：模式提示样本不能带预编辑 —— `update_indicator` 里
             // "组字中不保留提示"的门会把它丢掉，`--preview-indicator` 就永远只能看到空白。
-            if registration.capabilities().preedit && !snapshot.items.is_empty() {
+            if registration.capabilities().preedit
+                && snapshot.items.iter().any(|item| item.kind == "candidate")
+            {
                 snapshot.preedit = Some(weasel_common::message::RenderPreedit {
                     text: "jie m".into(),
                     cursor_utf16: 5,
@@ -954,7 +956,7 @@ mod tests {
     }
 
     #[test]
-    fn presentation_never_shows_invalid_anchor_or_refreshes_old_owner() {
+    fn presentation_shows_even_without_a_valid_anchor_and_refreshes_old_owner() {
         let calls = Arc::new(Mutex::new(Calls::default()));
         let (sender, _) = tokio::sync::mpsc::channel(1);
         let mut ui = Presentation {
@@ -973,24 +975,28 @@ mod tests {
             items: vec![Default::default()],
             ..Default::default()
         };
+        // 2026-11-07：无锚点也渲染——可见性由引擎决定，定位端对无效锚点自行
+        // 回退（首键方案選單不能再被这里整帧扣住）。
         ui.apply(1, Some(snapshot.clone())).unwrap();
-        assert!(calls.lock().unwrap().rendered.is_empty());
+        assert_eq!(calls.lock().unwrap().rendered, [1]);
         snapshot.anchor = Some(weasel_common::message::RenderRect {
             valid: true,
             ..Default::default()
         });
         ui.apply(1, Some(snapshot)).unwrap();
-        ui.refresh(Some(2)).unwrap();
-        assert_eq!(calls.lock().unwrap().rendered, [1]);
-        ui.refresh(Some(1)).unwrap();
         assert_eq!(calls.lock().unwrap().rendered, [1, 1]);
+        // owner 不匹配：不把旧输入重画到新 owner 上
+        ui.refresh(Some(2)).unwrap();
+        assert_eq!(calls.lock().unwrap().rendered, [1, 1]);
+        ui.refresh(Some(1)).unwrap();
+        assert_eq!(calls.lock().unwrap().rendered, [1, 1, 1]);
         ui.apply(1, None).unwrap();
         ui.refresh(Some(1)).unwrap();
-        assert_eq!(calls.lock().unwrap().rendered, [1, 1]);
+        assert_eq!(calls.lock().unwrap().rendered, [1, 1, 1]);
     }
 
     #[test]
-    fn mode_indicator_keeps_its_deadline_and_yields_to_candidates() {
+    fn mode_indicator_keeps_its_deadline_and_coexists_with_candidates() {
         let calls = Arc::new(Mutex::new(Calls::default()));
         let (sender, _) = tokio::sync::mpsc::channel(1);
         let mut ui = Presentation {
@@ -1029,12 +1035,41 @@ mod tests {
         ui.apply(1, Some(snapshot.clone())).unwrap();
         assert_eq!(ui.indicator_deadline(), Some(deadline));
 
+        // 2026-11-02 起：候选 + 徽标同屏（`--preview-badge` 实测通过），
+        // 候选到达不再让徽标消失（旧断言是让位语义，随那次改动一起过时）。
         snapshot.sequence += 1;
         snapshot.visible = true;
         snapshot.items.push(Default::default());
+        ui.apply(1, Some(snapshot.clone())).unwrap();
+        assert_eq!(ui.indicator_deadline(), Some(deadline));
+        assert!(ui.last.as_ref().unwrap().mode_indicator.is_some());
+
+        // 新 id 的提示 ⇒ 截止时间重置
+        snapshot.sequence += 1;
+        snapshot.mode_indicator = Some(weasel_common::message::ModeIndicator {
+            id: 2,
+            ascii_mode: true,
+            reason: weasel_common::message::ModeIndicatorReason::UserSwitch as i32,
+            caps_lock: false,
+        });
         ui.apply(1, Some(snapshot)).unwrap();
+        assert!(ui.indicator_deadline() > Some(deadline));
+
+        // 没有提示的快照 ⇒ 截止时间立即清空
+        let mut plain = RenderSnapshot {
+            sequence: 5,
+            active: true,
+            visible: true,
+            items: vec![Default::default()],
+            anchor: Some(weasel_common::message::RenderRect {
+                valid: true,
+                bottom: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        ui.apply(1, Some(plain)).unwrap();
         assert!(ui.indicator_deadline().is_none());
-        assert!(ui.last.as_ref().unwrap().mode_indicator.is_none());
     }
 
     #[test]

@@ -26,6 +26,10 @@ pub struct KeyEventResponse {
     pub raw_input: Option<String>,
     /// 当前候选页中的候选项。
     pub candidates: Vec<Candidate>,
+    /// 上屏后联想：个人 n-gram 预测的"下一个词"，只在无组字时由引擎给出。
+    ///
+    /// 不跨进程（不算 RPC `InputResult` 字段）：只有 Engine 自己用它做渲染快照。
+    pub predictions: Vec<String>,
     /// 当前页中选中候选项的索引。
     pub selected_candidate: u32,
     /// composition 光标位置，单位为 UTF-16 code unit。

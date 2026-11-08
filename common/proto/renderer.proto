@@ -81,6 +81,8 @@ enum RendererEventAction {
   RENDERER_EVENT_ACTION_NAVIGATE_NEXT = 3;
   RENDERER_EVENT_ACTION_DISMISS = 4;
   RENDERER_EVENT_ACTION_OPEN_EMOJI_PANEL = 5;
+  // 直拟上屏：不经组合直接提交 text（符号面板/剪贴板面板点击上屏）。
+  RENDERER_EVENT_ACTION_COMMIT_TEXT = 6;
 }
 
 // Renderer 返回给 Server 的用户交互
@@ -93,4 +95,6 @@ message RendererEvent {
   ContextToken token = 4;
   // snapshot 对应的输入状态版本
   uint64 revision = 5;
+  // COMMIT_TEXT 携带的待上屏文本；其他动作忽略
+  string text = 6;
 }

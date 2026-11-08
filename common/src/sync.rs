@@ -184,16 +184,78 @@ pub fn record_run(user_root: &Path, result: &SyncResult) {
 
 // ── WebDAV 原语 ────────────────────────────────────────────────────────────
 
-fn dir_url(cfg: &SyncConfig) -> String {
+/// 坚果云 WebDAV 的**可写根**目录名。
+///
+/// 实测（2026-11-07 22:1x）：坚果云 `/dav/` 根下 MKCOL 能建出目录（201），但
+/// `DELETE` 一律返回 **403 删不掉**，而且这些目录不在用户的「我的坚果云」同步目录里。
+/// 用户的文件都在 `/dav/我的坚果云/` 下面，所以对坚果云要把远端路径自动挂到它下面。
+/// 旧行为直接把 `remote_path`（默认 `/Rime/user_dict`）拼在 `/dav/` 后面 ⇒
+/// 目录不存在 ⇒ `PROPFIND` 返回 409 ⇒ 面板「测试连接」报「连接失败（HTTP 409）」。
+const JIANGUOYUN_MOUNT: &str = "我的坚果云";
+
+/// 实际使用的远端目录（无首尾斜杠）。坚果云自动补「我的坚果云」前缀。
+pub fn effective_remote_path(cfg: &SyncConfig) -> String {
+    let raw = cfg.remote_path.trim().trim_matches('/');
+    let path = if raw.is_empty() { "Rime/user_dict" } else { raw };
+    if !cfg.server.contains("jianguoyun.com") {
+        return path.to_string();
+    }
+    let already = path == JIANGUOYUN_MOUNT
+        || path.starts_with(&format!("{JIANGUOYUN_MOUNT}/"));
+    if already {
+        path.to_string()
+    } else {
+        format!("{JIANGUOYUN_MOUNT}/{path}")
+    }
+}
+
+/// 剪贴板在远端的**独立目录**（与用户词库目录并列）。
+///
+/// 2026-11-07 22:5x 用户问「为什么剪贴板不是单独的 rime/clipboard 英文路径」：
+/// 旧实现把 `clipboard.json` 直接丢在用户词库目录里（`Rime/user_dict/clipboard.json`），
+/// 词库文件和剪贴板混在一层。现在剪贴板单独挂到 `remote_path` 的**父级**下：
+/// * 坚果云：`我的坚果云/Rime/clipboard`
+/// * 通用 WebDAV：`<remote_path 的父级>/clipboard`
+pub fn effective_clipboard_dir(cfg: &SyncConfig) -> String {
+    let base = effective_remote_path(cfg);
+    match base.rsplit_once('/') {
+        Some((parent, _)) if !parent.is_empty() => format!("{parent}/clipboard"),
+        _ => "clipboard".to_string(),
+    }
+}
+
+/// 把相对目录串切成逐级绝对路径（`["/我的坚果云", "/我的坚果云/Rime", ...]`），供 MKCOL 用。
+fn dir_chain(dir_rel: &str, extra: &[&str]) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut acc = String::new();
+    for segment in dir_rel.split('/').filter(|s| !s.is_empty()) {
+        acc.push('/');
+        acc.push_str(segment);
+        chain.push(acc.clone());
+    }
+    let mut acc = chain.last().cloned().unwrap_or_default();
+    for segment in extra.iter().filter(|s| !s.is_empty()) {
+        acc.push('/');
+        acc.push_str(segment);
+        chain.push(acc.clone());
+    }
+    chain
+}
+
+fn dir_url_of(cfg: &SyncConfig, dir_rel: &str) -> String {
     format!(
         "{}/{}",
         cfg.server.trim_end_matches('/'),
-        cfg.remote_path.trim_matches('/')
+        dir_rel.trim_matches('/')
     )
 }
 
-fn file_url(cfg: &SyncConfig, remote_name: &str) -> String {
-    format!("{}/{}", dir_url(cfg), remote_name.trim_start_matches('/'))
+fn file_url_in(cfg: &SyncConfig, dir_rel: &str, remote_name: &str) -> String {
+    format!(
+        "{}/{}",
+        dir_url_of(cfg, dir_rel),
+        remote_name.trim_start_matches('/')
+    )
 }
 
 fn auth_header(cfg: &SyncConfig) -> String {
@@ -206,28 +268,91 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-/// MKCOL 建远端目录（不存在时）；已存在 / 不支持都当成功，PUT 会给出真实结果。
-fn mkcol(cfg: &SyncConfig, url: &str) {
-    let _ = agent()
+/// 单级 MKCOL。目录已存在（405）/ 并发创建（409）都算成功；真失败返回原因。
+fn mkcol(cfg: &SyncConfig, url: &str) -> Result<(), String> {
+    match agent()
         .request("MKCOL", url)
         .set("Authorization", &auth_header(cfg))
-        .call();
+        .call()
+    {
+        Ok(_) => Ok(()),
+        // 405 = 目录已存在；409 = 父级/同名冲突（并发创建），都继续往下建。
+        Err(ureq::Error::Status(405 | 409, _)) => Ok(()),
+        Err(ureq::Error::Status(code @ (401 | 403), _)) => {
+            Err(format!("建远端目录 {url}：账号或应用密码无写权限（HTTP {code}）"))
+        }
+        Err(error) => Err(format!("建远端目录 {url}：{error}")),
+    }
 }
 
-/// 测试连接：PROPFIND Depth 0 打远端目录；不支持 PROPFIND 的服务器回落 GET。
+/// 逐级建目录（`dir_rel` 的每一级 + `extra` 子目录）。
+///
+/// 父目录不存在时只建叶子会被服务器判 **409**（2026-11-07 实测：`userdb`
+/// 下的 `<方案>.userdb/` 子目录没建，导致「立即同步」每条用户词库都 409）。
+fn ensure_dirs_of(cfg: &SyncConfig, dir_rel: &str, extra: &[&str]) -> Result<(), String> {
+    for path in dir_chain(dir_rel, extra) {
+        let url = format!("{}{}", cfg.server.trim_end_matches('/'), path);
+        mkcol(cfg, &url)?;
+    }
+    Ok(())
+}
+
+/// 建出某个远端目录本身（含全部父级）。
+fn ensure_dir_of(cfg: &SyncConfig, dir_rel: &str) -> Result<(), String> {
+    ensure_dirs_of(cfg, dir_rel, &[])
+}
+
+/// 远端文件需要的目录链（目录本身 + 文件所在子目录，如 `<方案>.userdb/`）。
+fn remote_parent_chain(dir_rel: &str, remote_name: &str) -> Vec<String> {
+    let segments: Vec<&str> = remote_name.split('/').filter(|s| !s.is_empty()).collect();
+    let parents = &segments[..segments.len().saturating_sub(1)];
+    dir_chain(dir_rel, parents)
+}
+
+/// 为某个远端文件逐级建出父目录（PUT 409 时用）。
+fn ensure_parent_dirs(cfg: &SyncConfig, dir_rel: &str, remote_name: &str) -> Result<(), String> {
+    for path in remote_parent_chain(dir_rel, remote_name) {
+        let url = format!("{}{}", cfg.server.trim_end_matches('/'), path);
+        mkcol(cfg, &url)?;
+    }
+    Ok(())
+}
+
+/// leveldb 的 `LOCK` 是引擎持有的锁文件，既读不出来（os error 33）也没必要同步。
+fn skip_upload(name: &str) -> bool {
+    name.eq_ignore_ascii_case("LOCK")
+}
+
+/// 测试连接：PROPFIND Depth 0 打远端目录；目录不存在（404/409）就逐级建出来再探测。
 /// 401/403 会把「账号或密码不对」直接说清楚，不再笼统报一个网络错。
 pub fn test_connection(cfg: &SyncConfig) -> Result<String, String> {
-    let url = dir_url(cfg);
-    let req = || {
+    let userdb_rel = effective_remote_path(cfg);
+    let url = dir_url_of(cfg, &userdb_rel);
+    let request = || {
         agent()
             .request("PROPFIND", &url)
             .set("Authorization", &auth_header(cfg))
             .set("Depth", "0")
             .call()
     };
-    match req() {
-        Ok(res) => Ok(format!("连接成功（HTTP {}）", res.status())),
+    match request() {
+        Ok(res) => Ok(format!("连接成功（HTTP {}）· {}", res.status(), url)),
         Err(ureq::Error::Status(401 | 403, _)) => Err("账号或应用密码不对（HTTP 401/403）".into()),
+        // 404/409 = 远端目录还不存在（首次同步）。
+        Err(ureq::Error::Status(404 | 409, _)) => {
+            ensure_dir_of(cfg, &userdb_rel)?;
+            match request() {
+                Ok(res) => Ok(format!(
+                    "连接成功（HTTP {}，已创建远端目录）· {}",
+                    res.status(),
+                    url
+                )),
+                Err(ureq::Error::Status(code, _)) => {
+                    Err(format!("已尝试建目录，但探测仍失败（HTTP {code}）· {url}"))
+                }
+                Err(error) => Err(format!("已尝试建目录，但探测仍失败：{error} · {url}")),
+            }
+        }
         Err(ureq::Error::Status(405, _)) => {
             // 极少数网关禁 PROPFIND，用 GET 再确认一次凭证是否可用。
             match agent().get(&url).set("Authorization", &auth_header(cfg)).call() {
@@ -241,9 +366,9 @@ pub fn test_connection(cfg: &SyncConfig) -> Result<String, String> {
     }
 }
 
-fn webdav_put(cfg: &SyncConfig, local_path: &Path, remote_name: &str) -> Result<(), String> {
+fn webdav_put(cfg: &SyncConfig, dir_rel: &str, local_path: &Path, remote_name: &str) -> Result<(), String> {
     let data = std::fs::read(local_path).map_err(|e| format!("读 {}: {e}", local_path.display()))?;
-    let url = file_url(cfg, remote_name);
+    let url = file_url_in(cfg, dir_rel, remote_name);
     let put = || {
         agent()
             .put(&url)
@@ -254,11 +379,8 @@ fn webdav_put(cfg: &SyncConfig, local_path: &Path, remote_name: &str) -> Result<
     match put() {
         Ok(_) => Ok(()),
         Err(ureq::Error::Status(404 | 409, _)) => {
-            // 远端目录链不存在：逐级 MKCOL 后重试一次。
-            mkcol(cfg, &dir_url(cfg));
-            if let Some(parent) = remote_name.rfind('/') {
-                mkcol(cfg, &file_url(cfg, &remote_name[..parent]));
-            }
+            // 远端目录链（含文件所在子目录）不存在：逐级 MKCOL 后重试一次。
+            ensure_parent_dirs(cfg, dir_rel, remote_name)?;
             match put() {
                 Ok(_) => Ok(()),
                 Err(e) => Err(format!("PUT {remote_name}: {e}")),
@@ -269,8 +391,8 @@ fn webdav_put(cfg: &SyncConfig, local_path: &Path, remote_name: &str) -> Result<
 }
 
 /// 下载成字节（leveldb 是二进制，不能用 `into_string`）。
-fn webdav_get(cfg: &SyncConfig, remote_name: &str) -> Result<Vec<u8>, String> {
-    let url = file_url(cfg, remote_name);
+fn webdav_get(cfg: &SyncConfig, dir_rel: &str, remote_name: &str) -> Result<Vec<u8>, String> {
+    let url = file_url_in(cfg, dir_rel, remote_name);
     let res = agent()
         .get(&url)
         .set("Authorization", &auth_header(cfg))
@@ -308,17 +430,20 @@ fn basic_auth(user: &str, pass: &str) -> String {
 /// 执行同步：上传本地、按接收过滤下载并合并。
 pub fn sync(cfg: &SyncConfig, user_root: &Path) -> SyncResult {
     let mut result = SyncResult::default();
+    // 剪贴板单独一个远端目录（`Rime/clipboard`）；用户词库仍在 `remote_path`（`Rime/user_dict`）。
+    let clip_dir = effective_clipboard_dir(cfg);
+    let userdb_rel = effective_remote_path(cfg);
 
     // 1. 剪贴板 JSON：上传 + 合并下载（不再像旧版那样丢进 sync/ 就完事）。
     let clip_path = user_root.join("clipboard.json");
     if clip_path.exists() {
-        match webdav_put(cfg, &clip_path, "clipboard.json") {
+        match webdav_put(cfg, &clip_dir, &clip_path, "clipboard.json") {
             Ok(()) => result.uploaded.push("clipboard.json".into()),
             Err(e) => result.errors.push(e),
         }
     }
     if cfg.accepts("clipboard") {
-        match webdav_get(cfg, "clipboard.json") {
+        match webdav_get(cfg, &clip_dir, "clipboard.json") {
             Ok(bytes) => {
                 #[cfg(windows)]
                 match serde_json::from_slice::<Vec<crate::clipboard::ClipEntry>>(&bytes) {
@@ -357,13 +482,16 @@ pub fn sync(cfg: &SyncConfig, user_root: &Path) -> SyncResult {
                         continue;
                     }
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    if skip_upload(&name) {
+                        continue;
+                    }
                     let remote = format!("{db_name}/{name}");
-                    match webdav_put(cfg, &path, &remote) {
+                    match webdav_put(cfg, &userdb_rel, &path, &remote) {
                         Ok(()) => result.uploaded.push(remote.clone()),
                         Err(e) => result.errors.push(e),
                     }
                     if cfg.accepts("userdb") {
-                        match webdav_get(cfg, &remote) {
+                        match webdav_get(cfg, &userdb_rel, &remote) {
                             Ok(bytes) => {
                                 let staging = user_root.join("sync").join("incoming").join(&db_name);
                                 if std::fs::create_dir_all(&staging).is_ok()
@@ -442,9 +570,155 @@ mod tests {
     #[test]
     fn url_join_has_exactly_one_slash() {
         let cfg = SyncConfig { server: "https://dav.example.com/dav/".into(), remote_path: "/Rime/user_dict/".into(), ..Default::default() };
-        assert_eq!(dir_url(&cfg), "https://dav.example.com/dav/Rime/user_dict");
-        assert_eq!(file_url(&cfg, "clipboard.json"), "https://dav.example.com/dav/Rime/user_dict/clipboard.json");
-        assert_eq!(file_url(&cfg, "luna/LOG"), "https://dav.example.com/dav/Rime/user_dict/luna/LOG");
+        let base = effective_remote_path(&cfg);
+        assert_eq!(dir_url_of(&cfg, &base), "https://dav.example.com/dav/Rime/user_dict");
+        assert_eq!(
+            file_url_in(&cfg, &base, "clipboard.json"),
+            "https://dav.example.com/dav/Rime/user_dict/clipboard.json"
+        );
+        assert_eq!(
+            file_url_in(&cfg, &base, "luna/LOG"),
+            "https://dav.example.com/dav/Rime/user_dict/luna/LOG"
+        );
+        // 剪贴板有自己的目录：`Rime/clipboard`（与 user_dict 并列，2026-11-07 22:5x 用户口径）。
+        assert_eq!(
+            file_url_in(&cfg, &effective_clipboard_dir(&cfg), "clipboard.json"),
+            "https://dav.example.com/dav/Rime/clipboard/clipboard.json"
+        );
+    }
+
+    #[test]
+    fn clipboard_gets_its_own_dir_beside_user_dict() {
+        // 2026-11-07 22:5x 用户问「为什么剪贴板不是单独的 rime/clipboard 英文路径」：
+        // 剪贴板必须和用户词库目录分开，且名字用英文 `clipboard`。
+        let jgy = SyncConfig {
+            server: "https://dav.jianguoyun.com/dav/".into(),
+            remote_path: "/Rime/user_dict".into(),
+            ..Default::default()
+        };
+        assert_eq!(effective_remote_path(&jgy), "我的坚果云/Rime/user_dict");
+        assert_eq!(effective_clipboard_dir(&jgy), "我的坚果云/Rime/clipboard");
+        assert_eq!(
+            dir_url_of(&jgy, &effective_clipboard_dir(&jgy)),
+            "https://dav.jianguoyun.com/dav/我的坚果云/Rime/clipboard"
+        );
+        // MKCOL 链：父级逐级建（「我的坚果云」→ Rime → clipboard）。
+        assert_eq!(
+            dir_chain(&effective_clipboard_dir(&jgy), &[]),
+            vec![
+                "/我的坚果云".to_string(),
+                "/我的坚果云/Rime".to_string(),
+                "/我的坚果云/Rime/clipboard".to_string(),
+            ]
+        );
+        // 通用 WebDAV 同理：`/Rime/user_dict` → `/Rime/clipboard`。
+        let generic = SyncConfig {
+            server: "https://dav.example.com/dav/".into(),
+            remote_path: "/Rime/user_dict/".into(),
+            ..Default::default()
+        };
+        assert_eq!(effective_clipboard_dir(&generic), "Rime/clipboard");
+        // 单段 remote_path（没有父级）⇒ 直接挂服务器根下的 clipboard。
+        let flat = SyncConfig {
+            server: "https://dav.example.com/dav/".into(),
+            remote_path: "/sync".into(),
+            ..Default::default()
+        };
+        assert_eq!(effective_clipboard_dir(&flat), "clipboard");
+        // 坚果云已手写「我的坚果云」前缀时同样只补 clipboard。
+        let manual = SyncConfig { remote_path: "/我的坚果云/Rime/user_dict".into(), ..jgy };
+        assert_eq!(effective_clipboard_dir(&manual), "我的坚果云/Rime/clipboard");
+    }
+
+    #[test]
+    fn jianguoyun_paths_are_mounted_under_my_jianguoyun() {
+        // 2026-11-07 22:1x 实测：`/dav/Rime/user_dict` 在坚果云不存在（PROPFIND 返回 409，
+        // 面板「测试连接」就报「连接失败（HTTP 409）」）；而 `/dav/` 根下 MKCOL 建出来的
+        // 目录 DELETE 一律 403 删不掉 ⇒ 远端路径必须挂到「我的坚果云」下面。
+        let cfg = SyncConfig {
+            server: "https://dav.jianguoyun.com/dav/".into(),
+            remote_path: "/Rime/user_dict".into(),
+            ..Default::default()
+        };
+        let base = effective_remote_path(&cfg);
+        assert_eq!(base, "我的坚果云/Rime/user_dict");
+        assert_eq!(
+            dir_url_of(&cfg, &base),
+            "https://dav.jianguoyun.com/dav/我的坚果云/Rime/user_dict"
+        );
+        assert_eq!(
+            dir_chain(&base, &[]),
+            vec![
+                "/我的坚果云".to_string(),
+                "/我的坚果云/Rime".to_string(),
+                "/我的坚果云/Rime/user_dict".to_string(),
+            ]
+        );
+        // 已经手写成带「我的坚果云」的路径：不要重复加前缀。
+        let cfg = SyncConfig { remote_path: "/我的坚果云/Rime".into(), ..cfg };
+        assert_eq!(effective_remote_path(&cfg), "我的坚果云/Rime");
+        assert_eq!(effective_clipboard_dir(&cfg), "我的坚果云/clipboard");
+    }
+
+    #[test]
+    fn generic_webdav_remote_path_is_kept_as_is() {
+        let cfg = SyncConfig {
+            server: "https://dav.example.com/dav/".into(),
+            remote_path: "/Rime/user_dict/".into(),
+            ..Default::default()
+        };
+        let base = effective_remote_path(&cfg);
+        assert_eq!(base, "Rime/user_dict");
+        assert_eq!(dir_url_of(&cfg, &base), "https://dav.example.com/dav/Rime/user_dict");
+        assert_eq!(
+            dir_chain(&base, &[]),
+            vec!["/Rime".to_string(), "/Rime/user_dict".to_string()]
+        );
+    }
+
+    #[test]
+    fn userdb_subdir_is_in_the_mkcol_chain() {
+        // 2026-11-07 22:29 实测：`<方案>.userdb/` 子目录没建好 ⇒ 每个用户词库文件
+        // PUT 都 409（「立即同步」报「错误 73」）。父目录必须一起逐级建出来。
+        let jgy = SyncConfig {
+            server: "https://dav.jianguoyun.com/dav/".into(),
+            remote_path: "/Rime/user_dict".into(),
+            ..Default::default()
+        };
+        let base = effective_remote_path(&jgy);
+        assert_eq!(
+            remote_parent_chain(&base, "luna_pinyin.userdb/000003.log"),
+            vec![
+                "/我的坚果云".to_string(),
+                "/我的坚果云/Rime".to_string(),
+                "/我的坚果云/Rime/user_dict".to_string(),
+                "/我的坚果云/Rime/user_dict/luna_pinyin.userdb".to_string(),
+            ]
+        );
+        // 落在目录根的文件（clipboard.json 旧位置）不该多建子目录。
+        assert_eq!(remote_parent_chain(&base, "clipboard.json"), dir_chain(&base, &[]));
+        // 通用 WebDAV 同理，且带中文的方案目录不能丢。
+        let generic = SyncConfig {
+            server: "https://dav.example.com/dav/".into(),
+            remote_path: "/Rime/user_dict/".into(),
+            ..Default::default()
+        };
+        let base = effective_remote_path(&generic);
+        assert_eq!(
+            remote_parent_chain(&base, "自学习锁-自学习-tiger_sentence.userdb/LOG").last().unwrap(),
+            "/Rime/user_dict/自学习锁-自学习-tiger_sentence.userdb"
+        );
+    }
+
+    #[test]
+    fn leveldb_lock_file_is_not_uploaded() {
+        assert!(skip_upload("LOCK"));
+        assert!(skip_upload("lock"));
+        assert!(!skip_upload("CURRENT"));
+        assert!(!skip_upload("LOG"));
+        assert!(!skip_upload("000003.log"));
+        assert!(!skip_upload("MANIFEST-000001"));
+        assert!(!skip_upload("clipboard.json"));
     }
 
     #[test]

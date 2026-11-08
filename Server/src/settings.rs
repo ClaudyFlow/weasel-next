@@ -30,7 +30,7 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 pub fn load(paths: &RuntimePaths, mut warn: impl FnMut(String)) -> ConfigSnapshot {
     // Also keep packaged defaults available to standalone cargo builds.
     let mut value: Value =
-        weasel_common::settings::parse_config_text(include_str!("../../Rime-Next/weasel.yaml"))
+        weasel_common::settings::parse_config_text(include_str!("../../Rime-Next/setting.yaml"))
             .expect("packaged settings must be valid YAML");
     // 只有这两份 YAML：程序文件夹一份、用户目录一份。旧 `weasel.toml` / `weasel.json`
     // 不在候选里 —— 读到它们的唯一结果就是"读不到"，然后继续用内嵌默认值。

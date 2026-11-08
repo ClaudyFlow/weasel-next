@@ -1,6 +1,6 @@
 [package]
 name = "weasel-style"
-version = "0.18.5"
+version = "0.18.7"
 edition = "2021"
 description = "官方 weasel.yaml 皮肤文件的解析与 UIStyle（照 fxliang/weasel 的 UIStyle 与 WeaselStyleKeys 对齐）；2026-10-27 起主题文件也是 YAML"
 

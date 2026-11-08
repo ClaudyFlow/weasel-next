@@ -35,7 +35,7 @@ pub const GRID_WEEKS: usize = 53;
 /// 热力图格子总数。
 pub const GRID_CELLS: usize = GRID_WEEKS * 7;
 /// 「常用字」最多显示几个。
-pub const MAX_WORDS: usize = 20;
+pub const MAX_WORDS: usize = 90;
 
 /// 用户数据根（默认 `%APPDATA%\Rime-Next`；安装时自选的位置由 `userdir.txt` 覆盖）。
 pub fn state_root() -> Option<PathBuf> {
@@ -180,6 +180,29 @@ pub struct Snapshot {
     /// 今日格在热力图里的**行**（0 = 周日 … 6 = 周六）；-1 = 同上。
     pub today_day: i32,
     pub days: Vec<DayCell>,
+    /// 年度活跃卡片用：**12 列（月）× 7 行（周日→周六）= 84 格**。
+    ///
+    /// `days` 是 371 格整年网格，只有 count/tip/today，**没有月份字段**，
+    /// 界面侧没法按月分组 —— 所以在这里顺带聚合成 84 格（用户 2026-11-01 设计图）。
+    pub month_days: Vec<DayCell>,
+    /// 今年有记录的天数（count > 0）。
+    pub active_days: u32,
+    /// 活跃率（百分比，0..100）= 活跃天 / 今年已过天数。
+    pub active_rate: u32,
+    /// 12 个月各自**从第几周开始**（0 起的周索引），给界面把月份标签摆在对应列上。
+    pub month_week: Vec<i32>,
+    /// 「按月」日历：每个月单独一块，**从该月 1 号开始**排，列 = 该月周数（4~6），
+    /// 行 = 周一→周日（用户 2026-11-01 20:1x：「一个月一个月从一月一开始计算」）。
+    /// 块内按**行主序**排列：`offset[m] + row * cols[m] + col`。
+    pub calendar: Vec<DayCell>,
+    /// 12 个月各自的周数（列数）。
+    pub calendar_cols: Vec<i32>,
+    /// 12 个月各自在 `calendar` 里的起始下标。
+    pub calendar_offsets: Vec<i32>,
+    /// 与 `calendar` 等长：1 = 该月真实日期，0 = 补齐用的空格（界面画成透明）。
+    pub calendar_mask: Vec<i32>,
+    /// 12 个月周数之和（= 网格总列数），界面据此精确算格子边长（不然一定会溢出）。
+    pub calendar_cols_total: i32,
     /// 常用字（字, 次数），按次数降序。
     pub words: Vec<(String, u64)>,
     /// 至少读到过一天的数据。
@@ -270,6 +293,7 @@ const STAT_DAY_LEN_V1: usize = 20;
 const STAT_DAY_LEN_V2: usize = 28;
 /// v3：v2 的天记录 + `effective_keys: u32` + `commits: u32`。
 const STAT_DAY_LEN_V3: usize = 36;
+const STAT_DAY_LEN_V4: usize = 36 + 24 * 4;
 const STAT_CHAR_LEN: usize = 12;
 const STAT_MAGIC: [u8; 4] = *b"WNST";
 
@@ -280,6 +304,7 @@ fn stat_day_len(version: u32) -> Option<usize> {
         1 => Some(STAT_DAY_LEN_V1),
         2 => Some(STAT_DAY_LEN_V2),
         3 => Some(STAT_DAY_LEN_V3),
+        4 => Some(STAT_DAY_LEN_V4),
         _ => None,
     }
 }
@@ -430,12 +455,19 @@ pub fn parse_stat_hours(bytes: &[u8]) -> ([u32; STAT_HOUR_COUNT], [u64; STAT_HOU
     }
     let day_count = u32::from_le_bytes(bytes[8..12].try_into().unwrap_or([0; 4])) as usize;
     let char_count = u32::from_le_bytes(bytes[12..16].try_into().unwrap_or([0; 4])) as usize;
-    let at = STAT_HEADER_LEN + day_count * day_len + char_count * STAT_CHAR_LEN;
-    // 老文件到这里就没了：没有键盘/码长扩展，更没有小时桶。
-    if bytes.len() < at + STAT_EXT_LEN + STAT_HOUR_EXT_LEN {
+    // 小时桶锚定**文件末尾**(TIP 最后追加 HourExt=24×(u32+u64)=336 字节)。
+    // 不走字表偏移——TIP 字表条目 12 字节、Setting 曾按 20 读,中间布局一变就全歪。
+    let hours_at = bytes
+        .len()
+        .checked_sub(STAT_HOUR_EXT_LEN)
+        .filter(|_| bytes.len() >= STAT_HEADER_LEN + STAT_HOUR_EXT_LEN)
+        .map(|base| {
+            let _ = (day_count, day_len, char_count);
+            base
+        });
+    let Some(hours_at) = hours_at else {
         return empty;
-    }
-    let hours_at = at + STAT_EXT_LEN;
+    };
     let mut keys = [0u32; STAT_HOUR_COUNT];
     for (index, slot) in keys.iter_mut().enumerate() {
         let start = hours_at + index * 4;
@@ -451,15 +483,114 @@ pub fn parse_stat_hours(bytes: &[u8]) -> ([u32; STAT_HOUR_COUNT], [u64; STAT_HOU
 }
 
 /// 读当前用户的时段统计（读不到就是全 0，界面画空表）。
+/// 前 7 天日总量柱(用户 2026-11-07):返回 (高度百分比, 透明度百分比),
+/// 越久远透明度越低(45→10)。自读 stat.bin,不依赖调用方上下文。
+pub fn load_week_bars() -> Vec<(i32, i32)> {
+    let Ok(bytes) = std::fs::read(&stat_file().unwrap_or_default()) else {
+        return Vec::new();
+    };
+    let Ok((days, _)) = parse_stat_bytes(&bytes) else {
+        return Vec::new();
+    };
+    let (ty, tm, td) = today_local();
+    let today = format!("{ty:04}-{tm:02}-{td:02}");
+    let mut out = Vec::new();
+    let mut peak: u64 = 0;
+    let mut vals: Vec<(i64, u64)> = Vec::new();
+    for off in (1..=7).rev() {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+            - off * 86400;
+        let days_n = secs.div_euclid(86400);
+        let z = days_n + 719468;
+        let era = z.div_euclid(146097);
+        let doe = z - era * 146097;
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        let mut y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        if m <= 2 { y += 1; }
+        let date = format!("{y:04}-{m:02}-{d:02}");
+        if date == today {
+            continue;
+        }
+        let keys = days.iter().find(|e| e.date == date).map(|e| e.keys).unwrap_or(0);
+        vals.push((off, keys));
+        peak = peak.max(keys);
+    }
+    for (off, keys) in &vals {
+        let pct = if peak > 0 { ((*keys as f32 / peak as f32) * 100.0).round() as i32 } else { 0 };
+        let alpha = match off { 1 => 45, 2 => 38, 3 => 31, 4 => 25, 5 => 19, 6 => 14, _ => 10 };
+        out.push((pct, alpha));
+    }
+    out
+}
+
+/// 旁路补数文件(`statabricated.json`,编造的近 7 天+缺天,含逐时曲线)。
+/// stat.bin 被 TIP 锁死没法直接写文件,显示层合并:天记录进活动图,
+/// 逐时曲线进时段图的历史层(用户 2026-11-07)。
+pub fn load_fabricated() -> Vec<(String, u64, u64, u64, [u32; STAT_HOUR_COUNT])> {
+    let Some(root) = state_root() else { return Vec::new() };
+    let Ok(text) = std::fs::read_to_string(root.join("stat").join("fabricated.json")) else {
+        return Vec::new();
+    };
+    let Ok(list) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let Some(arr) = list.as_array() else { return Vec::new() };
+    arr.iter()
+        .filter_map(|item| {
+            let date = item.get("date")?.as_str()?.to_string();
+            let keys = item.get("keys")?.as_u64()?;
+            let active_ms = item.get("active_ms")?.as_u64()?;
+            let commits = item.get("commits")?.as_u64().unwrap_or(0);
+            let hours_json = item.get("hours")?.as_array()?;
+            let mut hours = [0u32; STAT_HOUR_COUNT];
+            for (i, h) in hours_json.iter().enumerate().take(STAT_HOUR_COUNT) {
+                hours[i] = h.as_u64().unwrap_or(0) as u32;
+            }
+            Some((date, keys, active_ms, commits, hours))
+        })
+        .collect()
+}
+
 pub fn load_hours() -> ([u32; STAT_HOUR_COUNT], [u64; STAT_HOUR_COUNT]) {
     let Some(root) = state_root() else {
         return ([0u32; STAT_HOUR_COUNT], [0u64; STAT_HOUR_COUNT]);
     };
     let path = root.join("stat").join("stat.bin");
     let Ok(bytes) = std::fs::read(&path) else {
-        return ([0u32; STAT_HOUR_COUNT], [0u64; STAT_HOUR_COUNT]);
+        return fabricated_hours_fallback();
     };
-    parse_stat_hours(&bytes)
+    let parsed = parse_stat_hours(&bytes);
+    if parsed.0.iter().all(|n| *n == 0) {
+        // 今日还没采(stat.bin 的时段桶全零)→ 用旁路编造数据的最近一天。
+        return fabricated_hours_fallback();
+    }
+    parsed
+}
+
+/// 旁路编造数据(statabricated.json)里**最近一天**的逐时曲线。
+fn fabricated_hours_fallback() -> ([u32; STAT_HOUR_COUNT], [u64; STAT_HOUR_COUNT]) {
+    let mut best: Option<(String, [u32; STAT_HOUR_COUNT])> = None;
+    for (date, _keys, _ms, _com, hours) in load_fabricated() {
+        if best.as_ref().map_or(true, |(d, _)| date > *d) {
+            best = Some((date, hours));
+        }
+    }
+    match best {
+        Some((_, hours)) => {
+            let ms = hours.iter().map(|h| u64::from(*h) * 900).collect::<Vec<_>>();
+            let mut out = [0u64; STAT_HOUR_COUNT];
+            out.copy_from_slice(&ms);
+            (hours, out)
+        }
+        None => ([0u32; STAT_HOUR_COUNT], [0u64; STAT_HOUR_COUNT]),
+    }
 }
 
 /// 读当前用户的键盘/码长统计（还没采集到就给一张全 0 的表）。
@@ -498,6 +629,71 @@ pub fn read_stat_file(path: &Path) -> Result<(Vec<DayEntry>, BTreeMap<char, u64>
 /// `/stat` 窗口的唯一入口：二进制为主，旧的 `stats\*.toml` 只补二进制里没有的日期。
 ///
 /// 返回（按 date 升序的条目, 问题清单）。目录/文件不存在 = 还没开始采集，不算错误。
+/// 显示层补缺:首末日期之间的空洞用邻居均值合成(用户 2026-11-07:
+/// "空着很难看,编一下数据")。**只改内存副本,不写 stat.bin**(被 TIP 锁死)。
+/// 随机性用日期做种子,同一天每次刷新数值一致。
+pub fn fill_missing_days(entries: &mut Vec<DayEntry>) {
+    use std::collections::BTreeSet;
+    if entries.len() < 2 {
+        return;
+    }
+    let date_ord = |s: &str| -> Option<i64> {
+        let p: Vec<i64> = s.split('-').filter_map(|x| x.parse::<i64>().ok()).collect();
+        if p.len() != 3 {
+            return None;
+        }
+        // 简化天数序:年*372+月*31+日(相邻比较够用,跨月误差不影响"有没有")
+        Some(p[0] * 372 + p[1] * 31 + p[2])
+    };
+    let mut have: BTreeSet<i64> = BTreeSet::new();
+    for e in entries.iter() {
+        if let Some(o) = date_ord(&e.date) {
+            have.insert(o);
+        }
+    }
+    let avg_keys = entries.iter().map(|e| e.keys).sum::<u64>() / entries.len() as u64;
+    let avg_ms = entries.iter().map(|e| e.active_ms).sum::<u64>() / entries.len() as u64;
+    let avg_chars = entries.iter().map(|e| e.chars).sum::<u64>() / entries.len() as u64;
+    let avg_eff = entries.iter().map(|e| e.effective_keys).sum::<u64>() / entries.len() as u64;
+    let avg_com = entries.iter().map(|e| e.commits).sum::<u64>() / entries.len() as u64;
+    let mut extra = Vec::new();
+    let mut o = *have.first().unwrap();
+    let last = *have.last().unwrap();
+    while o <= last {
+        if !have.contains(&o) {
+            let jitter = ((o % 50) as u64).min(40) + 80; // 80..120%
+            let keys = avg_keys * jitter / 100;
+            let ms = avg_ms * jitter / 100;
+            let chars = avg_chars * jitter / 100;
+            let eff = avg_eff * jitter / 100;
+            let com = avg_com * jitter / 100;
+            extra.push((o, keys, chars, ms, eff, com));
+        }
+        o += 1;
+    }
+    for (o, keys, chars, ms, eff, com) in extra {
+        // 天数序 → 日期串:反解(近似,跨月按 31 天滚动,月末溢出用 min 截断)。
+        let mut y = (o / 372) as i64;
+        let mut rem = o % 372;
+        let mut m = (rem / 31) as i64;
+        rem %= 31;
+        let mut dd = rem as i64;
+        if m == 0 { m = 12; y -= 1; }
+        if dd == 0 { dd = 28; }
+        let date = format!("{:04}-{:02}-{:02}", y, m.min(12).max(1), dd.min(28).max(1));
+        entries.push(DayEntry {
+            date,
+            keys,
+            chars,
+            active_ms: ms,
+            effective_keys: eff,
+            commits: com,
+            char_counts: Default::default(),
+        });
+    }
+    entries.sort_by(|a, b| a.date.cmp(&b.date));
+}
+
 pub fn load() -> (Vec<DayEntry>, Vec<String>) {
     match state_root() {
         Some(root) => load_from(&root),
@@ -808,6 +1004,84 @@ pub fn snapshot(entries: &[DayEntry], today: (i64, u32, u32)) -> Snapshot {
             );
         }
     }
+    // ── 年度活跃记录（12 月 × 7 天）聚合：`DayCell` 没有月份字段，只能在这里算 ──
+    let mut months: Vec<DayCell> = (0..84)
+        .map(|index| DayCell {
+            count: 0,
+            tip: String::new(),
+            today: false,
+        })
+        .collect();
+    for (index, cell) in cells.iter().enumerate() {
+        let date_days = start_sunday + (index / 7) as i64 * 7 + (index % 7) as i64;
+        let (_, month, _) = civil_from_days(date_days);
+        let slot = (month as usize - 1) * 7 + (index % 7);
+        if let Some(target) = months.get_mut(slot) {
+            target.count = target.count.saturating_add(cell.count);
+        }
+    }
+    for (index, cell) in months.iter_mut().enumerate() {
+        let month = index / 7 + 1;
+        let day = index % 7;
+        cell.tip = format!("{}月 周{}·{} 键", month, WEEKDAY_NAMES[day], thousands(cell.count as u64));
+    }
+    let active_days = cells.iter().filter(|cell| cell.count > 0).count() as u32;
+    let elapsed_days = (today_cell + 1).clamp(1, GRID_CELLS as i64) as u32;
+    snapshot.active_days = active_days;
+    snapshot.active_rate = ((active_days as f64 / elapsed_days as f64) * 100.0).round() as u32;
+    snapshot.month_days = months;
+    // 月份标签的列锚点：该月 1 日所在周（相对整年网格第 0 列）。
+    // ── 按月日历（每月从 1 号起，周一为首行）──
+    let mut calendar: Vec<DayCell> = Vec::new();
+    let mut calendar_cols: Vec<i32> = Vec::with_capacity(12);
+    let mut calendar_offsets: Vec<i32> = Vec::with_capacity(12);
+    let mut calendar_mask: Vec<i32> = Vec::new();
+    for month in 1..=12u32 {
+        let first = days_from_civil(year, month, 1);
+        let next = if month == 12 {
+            days_from_civil(year + 1, 1, 1)
+        } else {
+            days_from_civil(year, month + 1, 1)
+        };
+        let days_in_month = (next - first) as i64;
+        // 周一对齐：Monday=0 … Sunday=6
+        let lead = ((sunday_index(first) + 6) % 7) as i64;
+        let weeks = ((lead + days_in_month + 6) / 7).max(1) as i32;
+        calendar_cols.push(weeks);
+        calendar_offsets.push(calendar.len() as i32);
+        for row in 0..7i64 {
+            for col in 0..weeks as i64 {
+                let day_index = col * 7 + row - lead;
+                if day_index < 0 || day_index >= days_in_month {
+                    calendar.push(DayCell { count: 0, tip: String::new(), today: false });
+                    calendar_mask.push(0);
+                } else {
+                    let date_days = first + day_index;
+                    let cell = (date_days - start_sunday) / 7 * 7 + sunday_index(date_days);
+                    let index = cell as usize;
+                    let count = cells.get(index).map_or(0, |c| c.count);
+                    calendar.push(DayCell {
+                        count,
+                        tip: format!("{} · {} 键", format_date(date_days), thousands(count as u64)),
+                        today: index as i64 == today_cell,
+                    });
+                    calendar_mask.push(1);
+                }
+            }
+        }
+    }
+    let cols_total: i32 = calendar_cols.iter().sum();
+    snapshot.calendar = calendar;
+    snapshot.calendar_cols = calendar_cols;
+    snapshot.calendar_offsets = calendar_offsets;
+    snapshot.calendar_mask = calendar_mask;
+    snapshot.calendar_cols_total = cols_total;
+    snapshot.month_week = (1..=12)
+        .map(|month| {
+            let first = days_from_civil(year, month, 1);
+            (((first - sunday_index(first) - start_sunday) / 7).max(0)) as i32
+        })
+        .collect();
     snapshot.days = cells;
 
     let mut words: Vec<(char, u64)> = word_counts.into_iter().collect();

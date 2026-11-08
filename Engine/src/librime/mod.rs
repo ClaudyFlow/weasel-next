@@ -470,6 +470,51 @@ impl RimeSession {
                         clear(self.id);
                         true
                     }),
+                // 直拟上屏（符号面板点击）：文本不经组合直接进提交位；
+                // 成功后 read_response 会经 get_commit 把文本带回宿主。
+                Some(RendererEventAction::CommitText) => {
+                    let commit = (*self.api.api).commit_string;
+                    match commit {
+                        Some(commit) => {
+                            // 组字中：先把「正在打的字」提交掉、取出来，和这次点中的符号
+                            // 拼成**一次**提交。不这么做会丢字：librime 的
+                            // `Session::commit_string` 内部就是「组字中先 commit_composition、
+                            // 再把参数写进提交位」——写入会把刚提交的组合文本覆盖掉。
+                            // 2026-11-07 22:0x 用户实测「点符号/剪贴板后候选窗直接消失、
+                            // 正在打的字被吞」即此。
+                            let mut merged = event.text.clone();
+                            if let Some(prefix) = self.take_composition_commit_text() {
+                                if !prefix.is_empty() {
+                                    merged = prefix + &merged;
+                                }
+                            }
+                            match std::ffi::CString::new(merged.as_str()) {
+                                Ok(ctext) => {
+                                    tracing::info!(
+                                        "COMMIT_TEXT 臂执行: {} 字符（含组字 {} 字符）",
+                                        ctext.to_string_lossy().chars().count(),
+                                        merged.chars().count() - event.text.chars().count()
+                                    );
+                                    let ok = commit(self.id, ctext.as_ptr()) == RIME_TRUE;
+                                    tracing::info!("COMMIT_TEXT commit_string 返回 {ok}");
+                                    Ok(ok)
+                                }
+                                Err(_) => {
+                                    eprintln!(
+                                        "Weasel-Next-Engine: COMMIT_TEXT bad text (含 NUL 字节)"
+                                    );
+                                    Ok(false)
+                                }
+                            }
+                        }
+                        None => {
+                            eprintln!(
+                                "Weasel-Next-Engine: COMMIT_TEXT unavailable (api missing or bad text)"
+                            );
+                            Ok(false)
+                        }
+                    }
+                }
                 Some(RendererEventAction::OpenEmojiPanel) => {
                     let Some(clear) = (*self.api.api).clear_composition else {
                         eprintln!(
@@ -488,6 +533,51 @@ impl RimeSession {
             }
         };
         self.read_response(result.unwrap_or(false), String::new())
+    }
+
+    /// 组字中把「当前组合的提交文本」取出来（并让引擎把这段组合提交掉）。
+    ///
+    /// 供 [`RendererEventAction::CommitText`] 用：librime 的 `commit_string` 在组字中会
+    /// 先 `commit_composition`、再把参数写进提交位，写入会把组合刚提交的那段覆盖掉。
+    /// 宿主侧先取走这段文本、和点中的符号拼成一次提交即可绕开（2026-11-07 22:0x）。
+    /// 不在组字态返回 `None`（不乱动提交位）。
+    fn take_composition_commit_text(&mut self) -> Option<String> {
+        unsafe {
+            let composing = match ((*self.api.api).get_status, (*self.api.api).free_status) {
+                (Some(get_status), Some(free_status)) => {
+                    let mut status: raw::RimeStatus = std::mem::zeroed();
+                    status.data_size = struct_data_size::<raw::RimeStatus>();
+                    if get_status(self.id, &mut status) != RIME_TRUE {
+                        return None;
+                    }
+                    let status = Output { value: status, free: free_status };
+                    status.is_composing != 0
+                }
+                _ => return None,
+            };
+            if !composing {
+                return None;
+            }
+            if let Some(commit_composition) = (*self.api.api).commit_composition {
+                commit_composition(self.id);
+            }
+            let (Some(get_commit), Some(free_commit)) =
+                ((*self.api.api).get_commit, (*self.api.api).free_commit)
+            else {
+                return None;
+            };
+            let mut commit: raw::RimeCommit = std::mem::zeroed();
+            commit.data_size = struct_data_size::<raw::RimeCommit>();
+            if get_commit(self.id, &mut commit) != RIME_TRUE {
+                return None;
+            }
+            let commit = Output { value: commit, free: free_commit };
+            if commit.text.is_null() {
+                return None;
+            }
+            let text = c_string(commit.text);
+            if text.is_empty() { None } else { Some(text) }
+        }
     }
 
     /// 收集提交文本、组合区、候选页、状态及原始输入组成响应。
@@ -565,6 +655,21 @@ impl RimeSession {
                     {
                         response.selected_candidate =
                             context.menu.highlighted_candidate_index as u32;
+                    }
+                    // 上屏后联想（本工程扩展字段，见 `vendor/librime/include/rime_api.h`）：
+                    // 无组字时引擎给出个人 n-gram 预测的"下一个词"。旧 dll 不会写这两个
+                    // 字段（`Output` 已把结构清零），此时指针恒为 null，直接跳过。
+                    // 数组按 `predictions_len` 计数，宿主只读不释放（由 `free_context` 配对释放）。
+                    if !context.predictions.is_null() && context.predictions_len > 0 {
+                        let count = context.predictions_len as usize;
+                        let predictions =
+                            std::slice::from_raw_parts(context.predictions, count);
+                        response.predictions = predictions
+                            .iter()
+                            .filter(|text| !text.is_null())
+                            .map(|text| c_string(*text))
+                            .filter(|text| !text.is_empty())
+                            .collect();
                     }
                 }
             }
@@ -733,6 +838,342 @@ mod live_dll_tests {
                 cands.join("  "),
                 space.commit_text
             );
+        }
+    }
+
+    /// 手动探针：对 **live DLL** 钉住「联想条」的关键字段关系。
+    ///
+    /// 2026-11-08 用户报「联想条关不掉」。host 侧的修法是把联想限制成"只在
+    /// `commit_text` 非空的帧显示"，这个前提必须是真 dll 的证据，不能只靠读代码：
+    ///
+    /// * 提交帧**同时**带 `commit_text` 和 `predictions`（否则联想条根本不会出现）；
+    /// * 提交之后按 Esc 的那一帧**没有** `commit_text`，但 dll 仍回上一批
+    ///   `predictions`（残留——`Context.predictions` 在 librime 里填完没人清），
+    ///   旧 host 就是被它把联想条一直画回来的；
+    /// * 用真响应跑 `render_snapshot`：提交帧可见，Esc 帧必须隐藏。
+    ///
+    /// 用户目录一律用**副本**（`RIME_PROBE_USER`），并且**不走** `Librime::load`
+    /// ——它会 `generate_essay_txt` / `cleanup_flat_sources` / `normalize`，共享数据
+    /// 目录在 Program Files，eassy 归并结果不同就会把 essay.txt 重写、连带把词典
+    /// 判定成"源文件变新"。这里只 setup + initialize，共享数据只读。
+    ///
+    /// 跑法：
+    /// ```text
+    /// RIME_PROBE_USER=C:\Code\_sqtmp\rime_user_predprobe \
+    /// cargo test --release -p Weasel-Next-Engine --offline --bin Weasel-Next-Engine \
+    ///     live_dll_probe_prediction_frames -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "手动探针：需要 live 安装 + 用户目录副本（RIME_PROBE_USER）"]
+    fn live_dll_probe_prediction_frames() {
+        let base = std::env::var_os("RIME_PROBE_BASE")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                let root = std::path::PathBuf::from(r"C:\Program Files\Rime-Next\Weasel-Next");
+                root.join(RIME_DLL_NEXT).is_file().then_some(root)
+            })
+            .or_else(live_dir)
+            .expect("找不到 rime-next.dll：设 RIME_PROBE_BASE");
+        let user = std::env::var_os("RIME_PROBE_USER")
+            .map(std::path::PathBuf::from)
+            .expect("必须设 RIME_PROBE_USER 指向用户目录副本（别指向 %APPDATA%）");
+        let schema = std::env::var("RIME_PROBE_SCHEMA").unwrap_or_else(|_| "pinyin.luna".into());
+        let typed = std::env::var("RIME_PROBE_TYPED").unwrap_or_else(|_| "nihao".into());
+        let librime = load_probe_engine(&base, &user);
+        let mut session = librime.new_session().expect("创建会话");
+        assert!(session.select_schema(&schema), "select_schema({schema}) 失败");
+        for ch in typed.chars() {
+            let _ = session.process_key(&InputKey {
+                keycode: ch as i32,
+                ..Default::default()
+            });
+        }
+        // 打字中的状态（复现用户截图里的编码栏内容用）
+        let composing = session.process_key(&InputKey {
+            keycode: 0x00, // 无效键，只用来读一次当前响应
+            ..Default::default()
+        });
+        println!(
+            "COMPOSE preedit={:?} candidates={} [{:?}] composing={}",
+            composing.composition,
+            composing.candidates.len(),
+            composing
+                .candidates
+                .iter()
+                .take(10)
+                .map(|c| c.text.clone())
+                .collect::<Vec<_>>(),
+            composing.composing
+        );
+        // 提交要用**上屏够多次**的词：personal ngram 的联想看的是"这个词后面常跟什么"，
+        // 默认输入 `nihao` 的首选是「你华奥」（生僻词，没有够格的后续词）⇒ predictions
+        // 必然为空，那是**探针输入**问题，不是链路问题。点名挑 `RIME_PROBE_PICK`
+        // （默认「你好」，副本里 `b 你好 你好 94`）才验得出联想词。
+        let pick_word = std::env::var("RIME_PROBE_PICK").unwrap_or_else(|_| "你好".into());
+        let pick_index = composing
+            .candidates
+            .iter()
+            .position(|candidate| candidate.text == pick_word);
+        let last = if let Some(index) = pick_index {
+            session.process_renderer_event(&weasel_common::message::RendererEvent {
+                action: weasel_common::message::RendererEventAction::ItemInvoked as i32,
+                item_index: index as u32,
+                ..Default::default()
+            })
+        } else {
+            // 候选里没有目标词：退回空格提交首选，主断言会因 predictions 空而报错。
+            session.process_key(&InputKey {
+                keycode: ' ' as i32,
+                ..Default::default()
+            })
+        };
+        println!(
+            "COMMIT commit_text={:?} predictions={:?} candidates={} state_updated={} composing={}",
+            last.commit_text,
+            last.predictions,
+            last.candidates.len(),
+            last.state_updated,
+            last.composing
+        );
+        // 空格**抬起**帧：提交键的 keyup 紧随提交帧到达（TIP 的 OnKeyUp 会真的发 RPC），
+        // 这一帧 `commit_text` 已被冲空、候选为空，dll 仍回残留 predictions。
+        // 用户报「预测词直接闪一下没了」就是它 —— 联想法条必须靠显式状态撑住。
+        let release = session.process_key(&InputKey {
+            keycode: ' ' as i32,
+            modifiers: 1 << 30, // K_RELEASE_MASK，与 Tip/src/keyboard.rs 的编码一致
+            released: true,
+            ..Default::default()
+        });
+        println!(
+            "RELEASE commit_text={:?} predictions={:?} candidates={} state_updated={} composing={}",
+            release.commit_text,
+            release.predictions,
+            release.candidates.len(),
+            release.state_updated,
+            release.composing
+        );
+        // 提交之后再按一次 Esc（无组字）：用户"关不掉"的就是这一帧
+        let after = session.process_key(&InputKey {
+            keycode: 0xff1b,
+            ..Default::default()
+        });
+        println!(
+            "ESC    commit_text={:?} predictions={:?} candidates={} state_updated={} composing={}",
+            after.commit_text,
+            after.predictions,
+            after.candidates.len(),
+            after.state_updated,
+            after.composing
+        );
+        let anchor = weasel_common::message::RenderRect {
+            valid: true,
+            ..Default::default()
+        };
+        let commit_snap =
+            crate::renderer_bridge::render_snapshot(1, 1, &last, &last.predictions, &anchor);
+        // 抬起帧：引擎的 `update_prediction_strip` 在 released 帧**保留** strip，
+        // 所以这里用同一份 strip 重新出快照 —— 它必须仍然可见。
+        let release_snap =
+            crate::renderer_bridge::render_snapshot(1, 3, &release, &last.predictions, &anchor);
+        let esc_snap = crate::renderer_bridge::render_snapshot(1, 2, &after, &[], &anchor);
+        let kinds = |items: &[weasel_common::message::RenderItem]| {
+            items.iter().map(|item| item.kind.clone()).collect::<Vec<_>>()
+        };
+        println!(
+            "SNAP commit:  visible={} items={} kinds={:?}",
+            commit_snap.visible,
+            commit_snap.items.len(),
+            kinds(&commit_snap.items)
+        );
+        println!(
+            "SNAP release: visible={} items={} kinds={:?}",
+            release_snap.visible,
+            release_snap.items.len(),
+            kinds(&release_snap.items)
+        );
+        println!(
+            "SNAP esc:     visible={} items={} kinds={:?}",
+            esc_snap.visible,
+            esc_snap.items.len(),
+            kinds(&esc_snap.items)
+        );
+
+        assert!(
+            !last.commit_text.is_empty(),
+            "提交帧没有 commit_text：这次按键没提交（换一个输入前缀再试）"
+        );
+        assert!(
+            !last.predictions.is_empty(),
+            "提交帧没有 predictions：预测链路没给词（另一案），本探针证据不成立"
+        );
+        assert_eq!(
+            commit_snap.items.len(),
+            last.predictions.len(),
+            "提交帧应把预测词全画成 items"
+        );
+        assert!(commit_snap.items.iter().all(|item| item.kind == "prediction"));
+        assert!(commit_snap.visible, "提交帧联想条必须可见");
+        // 2026-11-08「闪一下没了」的数据面：抬起帧没有 commit_text，但残值还在。
+        assert_eq!(release.commit_text, "", "空格抬起帧不该再提交文本");
+        assert!(
+            !release.predictions.is_empty(),
+            "抬起帧应仍带残留 predictions（librime 填完没人清）"
+        );
+        assert!(
+            release_snap.visible,
+            "抬起帧必须继续保持联想条可见 —— 否则用户看到的就是『闪一下没了』"
+        );
+        assert_eq!(
+            release_snap.items.len(),
+            last.predictions.len(),
+            "抬起帧的联想条内容应与提交帧一致"
+        );
+        assert_eq!(after.commit_text, "", "Esc 帧不该有提交文本");
+        assert!(
+            !after.predictions.is_empty(),
+            "Esc 帧应仍带残留 predictions——这正是用户报『关不掉』的数据面"
+        );
+        assert!(!esc_snap.visible, "Esc 帧必须给隐藏帧");
+        assert!(esc_snap.items.is_empty(), "Esc 帧不得再把联想画成 items");
+        println!("PROBE OK：提交帧可见、Esc 帧隐藏");
+        // live dll 自带后台线程（神经重排/学习落盘），测试进程按正常路径退出时
+        // 它们在 finalize 之后仍可能踩内存（实测 exit 0xc0000005）。断言已经全部
+        // 跑完，这里直接干净退出，免得把"探针退出崩"误读成"行为不对"。
+        std::process::exit(0);
+    }
+
+    /// 手动探针：无头复现 Ctrl+`（方案選單），打印引擎实际给出的菜单内容。
+    ///
+    /// 2026-11-08 用户问「我的 ctrl` 换方案的界面呢」。这条不依赖 TIP/渲染，
+    /// 只看引擎侧：按下 `Control+grave` 之后 `process_key` 的响应里有没有組字/候选、
+    /// 首条候选文本是什么 —— 用来分清「引擎没出菜单」还是「出了但没画出来」。
+    ///
+    /// 跑法：
+    /// ```text
+    /// RIME_PROBE_USER=C:\Code\_sqtmp\rime_user_predprobe \
+    /// cargo test --release -p Weasel-Next-Engine --offline --bin Weasel-Next-Engine \
+    ///     live_dll_probe_switcher -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "手动探针：需要 live 安装 + 用户目录副本（RIME_PROBE_USER）"]
+    fn live_dll_probe_switcher() {
+        let base = std::env::var_os("RIME_PROBE_BASE")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                let root = std::path::PathBuf::from(r"C:\Program Files\Rime-Next\Weasel-Next");
+                root.join(RIME_DLL_NEXT).is_file().then_some(root)
+            })
+            .or_else(live_dir)
+            .expect("找不到 rime-next.dll：设 RIME_PROBE_BASE");
+        let user = std::env::var_os("RIME_PROBE_USER")
+            .map(std::path::PathBuf::from)
+            .expect("必须设 RIME_PROBE_USER 指向用户目录副本（别指向 %APPDATA%）");
+        let schema =
+            std::env::var("RIME_PROBE_SCHEMA").unwrap_or_else(|_| "double_pinyin.ziranma".into());
+        let librime = load_probe_engine(&base, &user);
+        let mut session = librime.new_session().expect("创建会话");
+        let selected = session.select_schema(&schema);
+        println!("select_schema({schema}) = {selected}");
+
+        let dump = |tag: &str, response: &KeyEventResponse| {
+            let cands: Vec<String> = response
+                .candidates
+                .iter()
+                .take(12)
+                .map(|c| format!("{}[{}]", c.text, c.comment))
+                .collect();
+            println!(
+                "{tag}: composing={} preedit={:?} candidates={} [{:?}] eaten={} state_updated={} ascii={:?}",
+                response.composing,
+                response.composition,
+                response.candidates.len(),
+                cands,
+                response.eaten,
+                response.state_updated,
+                response.ascii_mode,
+            );
+        };
+
+        // ① 先打一个字并 Esc 清掉，确认会话是活的
+        let typed = session.process_key(&InputKey {
+            keycode: 'n' as i32,
+            ..Default::default()
+        });
+        dump("TYPE-n", &typed);
+        let escaped = session.process_key(&InputKey {
+            keycode: 0xff1b,
+            ..Default::default()
+        });
+        dump("ESC", &escaped);
+
+        // ② F4 = 打开方案選單（`switcher/hotkeys`）——查菜单到底有没有内容
+        let f4 = session.process_key(&InputKey {
+            keycode: 0xffc1,
+            ..Default::default()
+        });
+        dump("F4", &f4);
+        println!("  schema after F4 = {:?}", session.current_schema());
+
+        // ③ Control+grave（kControlMask = 1 << 2）：当前 `build/default.yaml` 把它
+        //    放在 `switcher/hotkeys`，所以弹的是标准方案選單（不是直切）。
+        let ctrl_grave = InputKey {
+            keycode: 0x60,
+            modifiers: 1 << 2,
+            ..Default::default()
+        };
+        let direct = session.process_key(&ctrl_grave);
+        dump("CTRL-GRAVE", &direct);
+        println!("  schema after Ctrl+grave = {:?}", session.current_schema());
+
+        // ④ 2026-11-08 用户报障「選單里按空格要按两下、按完还上屏空格」。
+        //    期望：SPACE#1 一次收菜单；SPACE#2（宿主重复投递）仍被吞；
+        //    SPACE#3 才是用户主动按的下一键，正常交给宿主。
+        let space = InputKey {
+            keycode: 0x20,
+            ..Default::default()
+        };
+        for i in 1..=3 {
+            let r = session.process_key(&space);
+            dump(&format!("SPACE#{i}"), &r);
+            println!("  schema after SPACE#{i} = {:?}", session.current_schema());
+        }
+        println!("PROBE SWITCHER DONE");
+        std::process::exit(0);
+    }
+
+    /// 只做 setup + initialize 的引擎加载（不重写用户/共享数据）。
+    ///
+    /// 详见 [`live_dll_probe_prediction_frames`]：不能复用 [`Librime::load`]。
+    fn load_probe_engine(base: &std::path::Path, user: &std::path::Path) -> Librime {
+        let library = RimeLibrary::load(&engine_dll_path(base)).expect("加载 rime-next.dll");
+        let api = unsafe { RimeLibraryApi::load(library.api().as_ptr(), false) }.expect("读 API 表");
+        let app_name = CString::new("rime.weasel-next").expect("app name");
+        let shared_data_dir = CString::new(
+            weasel_common::rime_layout::data_dir(base)
+                .to_string_lossy()
+                .as_bytes(),
+        )
+        .expect("shared data dir");
+        let user_data_dir = path_string(user).expect("user data dir");
+        let mut traits: raw::RimeTraits = unsafe { std::mem::zeroed() };
+        traits.data_size = struct_data_size::<raw::RimeTraits>();
+        traits.shared_data_dir = shared_data_dir.as_ptr().cast();
+        traits.user_data_dir = user_data_dir.as_ptr().cast();
+        traits.app_name = app_name.as_ptr().cast();
+        unsafe {
+            api.required("setup", (*api.api).setup)
+                .expect("setup 入口缺失")(&mut traits);
+            api.required("initialize", (*api.api).initialize)
+                .expect("initialize 入口缺失")(&mut traits);
+        }
+        Librime {
+            inner: Rc::new(Engine {
+                api,
+                _library: Some(library),
+                app_name,
+                shared_data_dir,
+                user_data_dir,
+            }),
         }
     }
 }
@@ -1135,13 +1576,20 @@ fn rewrite_double_pinyin_preedit(response: &mut KeyEventResponse, schema_id: &st
             Err(_) => return,
         }
     }
+    // 部分确认的已确认汉字前缀(「效果guo」的「效果」):改写只认 raw_input,
+    // 会把汉字洗掉——先截取,改写后补回(用户 2026-11-07 长编码需求 A)。
+    let hanzi_prefix: String = response
+        .composition
+        .chars()
+        .take_while(|c| !c.is_ascii())
+        .collect();
     let text = match guard.as_ref() {
         Some((_, _, scheme)) => scheme.full_pinyin(&raw),
         None => return,
     };
     drop(guard);
     if !text.is_empty() && text != response.composition {
-        response.composition = text;
+        response.composition = format!("{}{}", hanzi_prefix, text);
         response.composition_cursor = response.composition.encode_utf16().count() as u32;
     }
 }

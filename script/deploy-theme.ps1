@@ -9,7 +9,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$InstallDir = 'C:\Program Files\Rime-Next\Weasel-Next-0.18.6',
+    [string]$InstallDir = 'C:\Program Files\Weasel-Next',
     [string]$TargetDir  = 'C:\Code\Weasel-Next\target\release',
     # 编译产物名 → 安装目录里的名字。安装布局在 2026-11 改过：渲染器按
     # `weasel-next-theme.dll` 加载（LoadLibrary），而 cargo 产物是
@@ -43,11 +43,15 @@ function Assert-Admin {
 }
 
 function Stop-WeaselProcesses {
-    $names = @('Weasel-Next-Engine', 'Weasel-Next-Renderer', 'Weasel-Next-Server', 'WeaselServer', 'Weasel-Next-Setting')
+    # broker 必须**排第一个**：它是父进程，一秒钟内就能把 Engine/Renderer 重新拉起来，
+    # 先杀子进程再去杀父进程的话，中间那几秒正好又被重生一轮，DLL 照样被占用。
+    $names = @('weasel-broker', 'Weasel-Next-Server', 'Weasel-Next-Engine', 'Weasel-Next-Renderer', 'WeaselServer', 'Weasel-Next-Setting')
     foreach ($n in $names) {
         Get-Process -Name $n -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Host "停止进程 $($_.Name) (pid=$($_.Id))"
-            $_.Kill() | Out-Null
+            # 进程可能刚好自己退了（父进程一死子进程就跟着走），Kill 会报 Access denied；
+            # 这不是错误，别让 $ErrorActionPreference='Stop' 把整个部署打断。
+            try { $_.Kill() } catch { Write-Host "  （已自行退出：$($_.Exception.Message)）" }
         }
     }
     Start-Sleep -Seconds 2
@@ -114,8 +118,11 @@ function Register-PendingRename {
     $pair = @("\??\$Staged", "\??\$Dest")
     $subKey = 'SYSTEM\CurrentControlSet\Control\Session Manager'
     try {
-        $baseKey = [Microsoft.Win32.Registry]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, 'ReadWriteSubTree')
+        # Windows PowerShell 5.1 的 [Microsoft.Win32.Registry] 没有 OpenBaseKey（那是 .NET Core 才补的），
+        # 只能用 Registry.LocalMachine（返回的是 RegistryKey，同样可 OpenSubKey 可写）。
+        $baseKey = [Microsoft.Win32.Registry]::LocalMachine
         $sk = $baseKey.OpenSubKey($subKey, $true)
+        if (-not $sk) { throw "打不开注册表键 $subKey" }
         $existing = @($sk.GetValue('PendingFileRenameOperations'))
         $merged = ($existing + $pair) | Where-Object { $_ -ne $null -and $_ -ne '' }
         $lines = $merged -join "`0"
@@ -215,7 +222,23 @@ if ($WithRenderer) {
 # 全都弄没了，用户当场"怎么界面又没了"（打字没候选窗）。
 # 交给已存在的 explorer 拉起，进程挂在用户会话下，才活得下去。
 $server = Join-Path $InstallDir 'Weasel-Next-Server.exe'
-if (Test-Path -LiteralPath $server) {
+# 现行宿主是 weasel-broker.exe，由登录计划任务 WeaselNextBoot 常驻拉起；
+# 老部署形态（Weasel-Next-Server.exe 直接跑）才走 explorer 那条路。
+$bootTask = Get-ScheduledTask -TaskName 'WeaselNextBoot' -ErrorAction SilentlyContinue
+if ($bootTask) {
+    Write-Host "重启输入法服务（计划任务 WeaselNextBoot）..."
+    # 任务若是「已在运行则不重开」的策略，必须先显式停一次，否则 Start 是空操作。
+    Stop-ScheduledTask -TaskName 'WeaselNextBoot' -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+    Start-ScheduledTask -TaskName 'WeaselNextBoot' -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+    $alive = Get-Process -Name 'weasel-broker','Weasel-Next-Engine','Weasel-Next-Renderer' -ErrorAction SilentlyContinue
+    if ($alive) {
+        $alive | ForEach-Object { Write-Host "  已启动: $($_.Name) (pid=$($_.Id))" }
+    } else {
+        Write-Warning "计划任务未拉起进程，请重新切换输入法或手动运行 weasel-broker.exe"
+    }
+} elseif (Test-Path -LiteralPath $server) {
     Write-Host "重启输入法服务..."
     Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$server`"" | Out-Null
     Start-Sleep -Seconds 3

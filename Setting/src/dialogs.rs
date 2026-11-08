@@ -126,7 +126,13 @@ pub(crate) fn theme_color_scheme(user: &std::path::Path) -> Option<String> {
 /// 见 `doc/renderer-official.md` 第五节「已知偏差」第 1、2 条。
 ///
 /// 界面上把没实现的标出来，否则用户（和发出去测试的人）会以为"选了没反应是 bug"。
-const IMPLEMENTED_LAYOUTS: &[&str] = &["vertical", "horizontal"];
+const IMPLEMENTED_LAYOUTS: &[&str] = &[
+    "vertical", "horizontal",
+    // 挤压三模式：`theme/src/layout.rs` 的布局层已接（per-candidate padding），
+    // `theme/src/paint.rs` 的挤压绘制还没接。选项本身必须能选、能写配置，
+    // 所以不标「暂未支持」，免得用户以为界面里没有这个选项。
+    "horizontal_squeeze", "vertical_squeeze", "cells",
+];
 
 /// 下拉里显示的文字：未实现的布局类型加后缀标注。
 fn choice_label(key: &crate::style_keys::StyleKey, choice: &crate::style_keys::StyleChoice) -> String {
@@ -147,7 +153,8 @@ fn layout_type_name(style: &weasel_style::UIStyle) -> String {
     match style.layout.layout_type.trim() {
         "" => {}
         named @ ("vertical" | "horizontal" | "vertical_text" | "vertical+fullscreen"
-        | "horizontal+fullscreen" | "vertical_text+fullscreen") => return named.to_owned(),
+        | "horizontal+fullscreen" | "vertical_text+fullscreen"
+        | "horizontal_squeeze" | "vertical_squeeze" | "cells") => return named.to_owned(),
         _ => {}
     }
     let vertical_text =
@@ -238,14 +245,14 @@ fn theme_style_value_from(config: &weasel_style::WeaselConfig, key: &str) -> Opt
 ///
 /// `value_text` 由调用方按类型给好（布尔给 `true`/`false`，数字给裸值，字符串给带引号的值）。
 fn write_theme_style(path: &std::path::Path, key_path: &str, value_text: &str) -> std::io::Result<()> {
-    // ⚠️⚠️ `style/layout/type` **不能**写成文件里的 `layout_type = "vertical"`。
-    //
-    // 渲染器读的是 `horizontal` / `vertical_text` / `fullscreen` 三个布尔
-    // （`theme/src/config.rs` 的 `layout_type()` 从这里推导），
-    // 它**从不读** `layout_type` 这个键。原来照路径直写 `layout_type`，
-    // 于是"选竖直"看起来写成功了、右侧值也变了，但**候选窗方向一点没变**
-    // —— 用户实测就是这个现象。
-    // 正确做法：把枚举值展开成那三个布尔。
+    // ⚠️⚠️ 2026-11-05 根治两处致命 bug：
+    //   ① 这里原本写经典 weasel 的 INI 语法（`[style]` + `key = value`），而 theme.yaml
+    //      是 YAML（`style:` / `  layout:` 嵌套）。极简 YAML 解析器要求每行含 `:`，
+    //      于是"改一次布局"就往文件尾部追加一段非法 INI ⇒ 整份解析失败 ⇒
+    //      渲染器静默回退 UIStyle::default()（竖直 + 默认配色）——这正是用户报的
+    //      「为什么竖直界面不能识别 theme」。
+    //   ② `style/layout/type` 分支原来又用**同一个 key_path** 递归调用自己（栈溢出）。
+    //      现在展开成三个布尔 + 直接写 `layout:` 子块的 `type` 键。
     if key_path == "style/layout/type" {
         let choice = value_text.trim_matches('"');
         let (horizontal, vertical_text, fullscreen) = match choice {
@@ -255,59 +262,191 @@ fn write_theme_style(path: &std::path::Path, key_path: &str, value_text: &str) -
             "vertical+fullscreen" => ("false", "false", "true"),
             "horizontal+fullscreen" => ("true", "false", "true"),
             "vertical_text+fullscreen" => ("false", "true", "true"),
+            // Rime-Next 挤压三模式：布尔只是兜底，真正区分靠 layout/type 字符串。
+            "horizontal_squeeze" => ("true", "false", "false"),
+            "vertical_squeeze" | "cells" => ("false", "false", "false"),
             _ => ("true", "false", "false"),
         };
-        // 这三个键属于 [style] 段（theme.rs::StyleSection），不是 [style.layout]。
-        // 带 layout/ 前缀会被写进 [style.layout]，变成"看起来写了、渲染器读不到"的废键。
-        write_theme_style(path, "style/horizontal", horizontal)?;
-        write_theme_style(path, "style/vertical_text", vertical_text)?;
-        write_theme_style(path, "style/fullscreen", fullscreen)?;
+        write_yaml_style(path, false, "horizontal", horizontal)?;
+        write_yaml_style(path, false, "vertical_text", vertical_text)?;
+        write_yaml_style(path, false, "fullscreen", fullscreen)?;
+        // config::layout_type() 里字符串优先于布尔：官方六种也要写，否则旧值
+        // （比如上次选的 horizontal_squeeze）会一直覆盖布尔，导致"选了竖直没反应"。
+        // YAML 键名是 `type`（`theme.rs` 里字段 layout_type 带 serde rename），不是 layout_type。
+        write_yaml_style(path, true, "type", &format!("\"{choice}\""))?;
         return Ok(());
     }
-    let (section, key) = match key_path.strip_prefix("style/layout/") {
-        Some(rest) => ("style.layout", rest),
-        None => ("style", key_path.strip_prefix("style/").unwrap_or(key_path)),
+    let (nested, key) = match key_path.strip_prefix("style/layout/") {
+        Some(rest) => (true, rest),
+        None => (false, key_path.strip_prefix("style/").unwrap_or(key_path)),
     };
-    // ⚠️ 官方路径键与 TOML 字段名有一处不同名：
-    //   `style/layout/type`（官方 UIStyleSettings 的键）在文件里叫 `layout_type`
-    //   （`style/src/theme.rs` 的 LayoutSection 字段名）。
-    //   照路径直写成 `type = ...` 的话，`theme.rs` 读不到 ⇒ 改了等于没改。
-    let key = if key == "type" { "layout_type" } else { key };
-    let header = format!("[{section}]");
-    let mut lines: Vec<String> = std::fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_string)
-        .collect();
-    let start = lines.iter().position(|line| line.trim() == header);
-    match start {
-        Some(start) => {
-            // 段范围 = [start+1, 下一个段头之前)
-            let end = lines
-                .iter()
-                .skip(start + 1)
-                .position(|line| line.trim_start().starts_with('['))
-                .map_or(lines.len(), |offset| start + 1 + offset);
-            let found = (start + 1..end).find(|&i| {
-                lines[i]
-                    .split_once('=')
-                    .is_some_and(|(name, _)| name.trim() == key)
-            });
-            match found {
-                Some(i) => lines[i] = format!("{key} = {value_text}"),
-                None => lines.insert(end, format!("{key} = {value_text}")),
+    write_yaml_style(path, nested, key, value_text)
+}
+
+/// 「界面风格」页三个布局按钮写入的值（顺序与 `ui/main.slint` 的 `opt.idx` 严格一致）。
+/// 用户 2026-11-05 拍板：只要挤压三模式，官方水平/竖直不再出现在这一行。
+pub(crate) const LAYOUT_VALUES: &[&str] = &[
+    "horizontal_squeeze",
+    "vertical_squeeze",
+    "cells",
+];
+
+/// 把 theme.yaml 里的布局名换算成按钮下标。
+/// 返回 -1 = 当前还是官方 `horizontal` / `vertical`，三个按钮都不高亮；
+/// 点任意一个才写进挤压三模式（不擅自替用户改布局）。
+pub(crate) fn layout_index(value: &str) -> i32 {
+    LAYOUT_VALUES
+        .iter()
+        .position(|v| *v == value)
+        .map(|i| i as i32)
+        .unwrap_or(-1)
+}
+
+/// 读当前布局：只认 `  layout:` 子块里缩进 4 格的 `type:`，不惊动整份 YAML 解析。
+/// theme.yaml 里的 INI 残留会让极简解析器整份失效，这里用行扫描更稳。
+pub(crate) fn current_layout_value(user: &Path) -> String {
+    let path = user.join("theme").join("theme.yaml");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return "horizontal".to_owned();
+    };
+    let mut in_layout = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed == "layout:" {
+            in_layout = true;
+            continue;
+        }
+        if in_layout {
+            let indent = line.len() - line.trim_start().len();
+            if !trimmed.is_empty() && indent < 4 {
+                break;
+            }
+            if let Some((key, value)) = trimmed.split_once(':') {
+                if key.trim() == "type" {
+                    let value = value.trim().trim_matches('"').trim_matches('\'').trim();
+                    if !value.is_empty() {
+                        return value.to_owned();
+                    }
+                }
             }
         }
-        None => {
-            lines.push(String::new());
-            lines.push(header);
-            lines.push(format!("{key} = {value_text}"));
+    }
+    // 没写字符串时，`horizontal: true` 为水平，否则按默认竖直。
+    let horizontal = text.lines().any(|line| {
+        let trimmed = line.trim();
+        match trimmed.split_once(':') {
+            Some((key, value)) => key.trim() == "horizontal" && value.trim() == "true",
+            None => false,
         }
+    });
+    if horizontal { "horizontal".to_owned() } else { "vertical".to_owned() }
+}
+
+/// 选中布局按钮 → 写 `theme.yaml`（三个布尔 + `layout/type` 字符串一起写，缺一不可）。
+pub(crate) fn write_layout_value(user: &Path, value: &str) -> std::io::Result<()> {
+    let path = user.join("theme").join("theme.yaml");
+    write_theme_style(&path, "style/layout/type", &format!("\"{value}\""))
+}
+
+/// 丢掉经典 weasel 遗留的 INI 段（`[style]` / `[style.layout]` 及其 `key = value` 行）。
+///
+/// 这些行在 YAML 里非法（无 `:`），会让整份 theme.yaml 解析失败。行编辑前先自清，
+/// 这样哪怕用户手里是旧文件，改一次设置也顺带把它修好。
+fn strip_ini_residue(lines: &mut Vec<String>) {
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut in_ini = false;
+    for line in lines.iter() {
+        let t = line.trim();
+        if t.starts_with('[') && t.ends_with(']') {
+            in_ini = true;
+            continue;
+        }
+        if in_ini {
+            if t.is_empty() {
+                in_ini = false;
+                out.push(line.clone());
+                continue;
+            }
+            if let Some((name, _)) = t.split_once('=') {
+                if !name.trim().is_empty() && !name.contains(':') {
+                    continue;
+                }
+            }
+            in_ini = false;
+        }
+        out.push(line.clone());
     }
+    *lines = out;
+}
+
+/// 把一条样式键写进 theme.yaml 的 YAML 嵌套块（行编辑，保留注释与键顺序）。
+///
+/// `nested = false` → 顶层 `style:` 块（键缩进 2）；`true` → 其中的 `  layout:` 子块（键缩进 4）。
+fn write_yaml_style(
+    path: &std::path::Path,
+    nested: bool,
+    key: &str,
+    value: &str,
+) -> std::io::Result<()> {
+    let raw = std::fs::read_to_string(path).unwrap_or_default();
+    let mut lines: Vec<String> = raw.lines().map(str::to_string).collect();
+    strip_ini_residue(&mut lines);
+
+    let (header, indent) = if nested {
+        ("layout:", 2usize)
+    } else {
+        ("style:", 0usize)
+    };
+    let child_indent = indent + 2;
+    let prefix = format!("{key}:");
+    let line_text = format!("{}{}: {}", " ".repeat(child_indent), key, value);
+    let indent_of = |line: &str| line.len() - line.trim_start().len();
+
+    let start = lines.iter().position(|line| {
+        line.trim() == header && indent_of(line) == indent
+    });
+    let Some(start) = start else {
+        // 块不存在：补齐最小结构（正常 theme.yaml 两块都在，这里只是兜底）。
+        if nested && !lines.iter().any(|l| l.trim() == "style:" && indent_of(l) == 0) {
+            lines.push("style:".to_string());
+        }
+        if nested {
+            lines.push("  layout:".to_string());
+        } else {
+            lines.push("style:".to_string());
+        }
+        lines.push(line_text);
+        return write_theme_lines(path, &lines);
+    };
+
+    // 块范围 [start+1, end)：缩进 <= 块头、或遇到下一层块头就结束
+    // （顶层 style: 块要在 `  layout:` 之前收尾，插入的键才不落到子块后面）。
+    let end = (start + 1..lines.len())
+        .find(|&i| {
+            let line = &lines[i];
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                return false;
+            }
+            let ind = indent_of(line);
+            ind <= indent
+                || (indent == 0 && ind == 2 && (t == "layout:" || t.ends_with("_scheme:")))
+        })
+        .unwrap_or(lines.len());
+
+    let found = (start + 1..end).find(|&i| {
+        indent_of(&lines[i]) == child_indent && lines[i].trim_start().starts_with(&prefix)
+    });
+    match found {
+        Some(i) => lines[i] = line_text,
+        None => lines.insert(end, line_text),
+    }
+    write_theme_lines(path, &lines)
+}
+
+fn write_theme_lines(path: &std::path::Path, lines: &[String]) -> std::io::Result<()> {
     let mut text = lines.join("\n");
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
+    text.push('\n');
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -1110,6 +1249,120 @@ fn show_placeholder(dialog: u16) -> Result<(), String> {
         Err(format!("对话框 {dialog} 创建失败"))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod theme_writer_tests {
+    use super::*;
+
+    fn temp_yaml(name: &str, body: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("rime-theme-writer-{name}-{}.yaml", std::process::id()));
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    /// 模拟用户当前 theme.yaml：合法 YAML 块 + 尾部一段经典 weasel 的 INI 残留。
+    const BROKEN: &str = "\
+config_version: \"0.23\"
+color_scheme: \"steam\"
+style:
+  font_point: 15
+  horizontal: false
+  fullscreen: false
+  vertical_text: false
+  layout:
+    margin_x: 12
+    type: \"horizontal\"
+
+[style]
+horizontal = true
+vertical_text = false
+fullscreen = false
+";
+
+    /// 选一次「横流」：① 不再递归（栈溢出会直接崩）② 写出合法 YAML
+    /// ③ 清掉 INI 尾巴 ④ 三个布尔 + layout/type 字符串都落地。
+    #[test]
+    fn layout_choice_writes_yaml_and_cleans_ini_residue() {
+        let path = temp_yaml("squeeze", BROKEN);
+        write_theme_style(&path, "style/layout/type", "\"horizontal_squeeze\"").unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+
+        assert!(!out.contains("[style]"), "INI 段头必须清掉：\n{out}");
+        assert!(!out.contains(" = "), "INI 赋值行必须清掉：\n{out}");
+        assert!(out.contains("  horizontal: true"), "横流布尔应为 true：\n{out}");
+        assert!(out.contains("  vertical_text: false"), "竖排布尔：\n{out}");
+        assert!(out.contains("  fullscreen: false"), "全屏布尔：\n{out}");
+        assert!(out.contains("    type: \"horizontal_squeeze\""), "layout/type 字符串：\n{out}");
+        assert!(out.contains("style:\n"), "style 块仍在：\n{out}");
+        assert!(out.contains("  layout:\n"), "layout 子块仍在：\n{out}");
+        // 每一行非空、非注释都必须含 ':'（极简 YAML 解析器的硬要求）
+        for (i, line) in out.lines().enumerate() {
+            let t = line.trim();
+            if !t.is_empty() && !t.starts_with('#') {
+                assert!(t.contains(':'), "第 {} 行缺 ':'：{t}", i + 1);
+            }
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 切回官方布局也要写 type 字符串，否则上次残留的 squeeze 值会一直覆盖布尔。
+    #[test]
+    fn switching_back_to_official_layout_overwrites_type() {
+        let path = temp_yaml("back", BROKEN);
+        write_theme_style(&path, "style/layout/type", "\"horizontal_squeeze\"").unwrap();
+        write_theme_style(&path, "style/layout/type", "\"vertical\"").unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("    type: \"vertical\""), "应被官方值覆盖：\n{out}");
+        assert!(!out.contains("horizontal_squeeze"), "旧值不得残留：\n{out}");
+        assert!(out.contains("  horizontal: false"), "竖直布尔：\n{out}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 界面只保留三模式：官方 horizontal 不选中任何按钮（-1）；
+    /// 竹简→cells/2、飞瀑→vertical_squeeze/1、横流→horizontal_squeeze/0。
+    #[test]
+    fn layout_buttons_read_write_round_trip() {
+        let user = std::env::temp_dir().join(format!(
+            "rime-layout-buttons-{}-{}", "case", std::process::id()
+        ));
+        let theme = user.join("theme");
+        std::fs::create_dir_all(&theme).unwrap();
+        let path = theme.join("theme.yaml");
+        std::fs::write(&path, BROKEN).unwrap();
+
+        assert_eq!(LAYOUT_VALUES.len(), 3, "界面只应有三个布局按钮");
+        // 输入 theme.yaml: `    type: "horizontal"` → 官方值，三个按钮都不选中
+        assert_eq!(current_layout_value(&user), "horizontal");
+        assert_eq!(layout_index(&current_layout_value(&user)), -1);
+
+        write_layout_value(&user, "cells").unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("    type: \"cells\""));
+        assert_eq!(current_layout_value(&user), "cells");
+        assert_eq!(layout_index(&current_layout_value(&user)), 2);
+
+        write_layout_value(&user, "vertical_squeeze").unwrap();
+        assert_eq!(current_layout_value(&user), "vertical_squeeze");
+        assert_eq!(layout_index(&current_layout_value(&user)), 1);
+
+        write_layout_value(&user, "horizontal_squeeze").unwrap();
+        assert_eq!(current_layout_value(&user), "horizontal_squeeze");
+        assert_eq!(layout_index(&current_layout_value(&user)), 0);
+        std::fs::remove_dir_all(&user).ok();
+    }
+
+    /// 普通 layout 键写进 `layout:` 子块（缩进 4），不新建 INI 段、不落到 style 层。
+    #[test]
+    fn plain_layout_key_goes_into_nested_block() {
+        let path = temp_yaml("plain", BROKEN);
+        write_theme_style(&path, "style/layout/margin_x", "24").unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("    margin_x: 24"), "应替换子块里的键：\n{out}");
+        assert!(!out.contains("margin_x: 12"), "旧值应被替换：\n{out}");
+        assert_eq!(out.matches("margin_x:").count(), 1, "不能出现重复键：\n{out}");
+        assert!(!out.contains("[style" ), "不得产生 INI 段：\n{out}");
+        std::fs::remove_file(&path).ok();
     }
 }
 

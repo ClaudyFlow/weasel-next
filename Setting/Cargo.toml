@@ -1,6 +1,6 @@
 [package]
 name = "Weasel-Next-Setting"
-version = "0.18.5"
+version = "0.18.7"
 edition = "2024"
 # 原创源码继续采用 BSD；链接 Slint 后的组合产物遵循 GPLv3，见 README。
 license.workspace = true
@@ -44,6 +44,8 @@ serde_json = "1"
 tempfile = "3"
 regex = "1"
 libloading = "0.8"
+# 词云要读 userdb（LevelDB）；版本与 librime-next 一致，直接复用同一份编译产物
+rusty-leveldb = "4.0.2"
 weasel-common = { path = "../common", features = ["wasm-metadata"] }
 weasel-style = { path = "../style" }
 slint = { version = "=1.17.1", optional = true, default-features = false, features = ["std", "backend-winit", "unstable-winit-030", "compat-1-2", "accessibility"] }

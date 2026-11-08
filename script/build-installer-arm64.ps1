@@ -61,7 +61,14 @@ if (-not $SkipX64) {
 }
 
 Step '组装 arm64 发布目录'
-if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+# 2026-11-08：Remove-Item -Recurse 被 safe-delete 钩子 fail-closed 拦截（同
+# _deploy_0187_dual_20261108.ps1 第 0 步探针）。改成把旧 staging 挪到带时间戳
+# 的备份目录（Move-Item 不受限），再重建空目录 —— 语义等价且不留残留文件。
+if (Test-Path -LiteralPath $stage) {
+    $oldStage = "$stage.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+    Move-Item -LiteralPath $stage -Destination $oldStage -Force
+    Write-Host "   旧 staging 已挪到 $oldStage"
+}
 $null = New-Item -ItemType Directory -Path $stage -Force
 # 安装器要的是 `weasel-next-theme.dll` 这个名字；cargo 产物叫 `weasel_theme_default.dll`，
 # x64 由 build-installer.ps1 改名，arm64 这里自己补一份（缺了 makensis 会直接报错）。

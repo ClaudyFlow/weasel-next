@@ -735,7 +735,7 @@ pub fn parse_files(
 mod patch_tests {
     use super::*;
 
-    const OFFICIAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/weasel.official.yaml");
+    const OFFICIAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/weasel.official.yaml");
     const BASE: &str = "style:\n  color_scheme: aqua\n  font_point: 14\n  layout:\n    corner_radius: 4\npreset_color_schemes:\n  aqua:\n    back_color: 0xeeeeee\n  luna:\n    back_color: 0x111111\n";
 
     #[test]
@@ -772,7 +772,7 @@ mod patch_tests {
 
     #[test]
     fn real_official_pair() {
-        let base = std::fs::read_to_string(OFFICIAL).expect("读官方 weasel.toml");
+        let base = std::fs::read_to_string(OFFICIAL).expect("读官方皮肤夹具");
         let custom = "patch:\n  style/color_scheme: luna\n  style/font_point: 18\n  style/hover_type: hilite\n  style/layout/shadow_radius: 6\n  preset_color_schemes/luna/back_color: 0x202020\n";
         let config = parse_with_patch(&base, Some(custom)).expect("解析");
         assert_eq!(config.style.color_scheme, "luna");
@@ -792,13 +792,15 @@ mod patch_tests {
 mod tests {
     use super::*;
 
-    /// 官方原版皮肤文件（仓库出厂数据，与 fxliang/weasel 的 `output/data/weasel.yaml` 逐字节同一份）。
+    /// 官方原版皮肤（fxliang/weasel 的 `output/data/weasel.yaml`）——**2026-11-08 起不再随包
+    /// 分发**：皮肤数据归 `Rime-Next/theme/`（出厂主题 `default.theme.yaml`），这份原文件
+    /// 移入 `style/tests/data/` 只作为 `style` 解析器的测试夹具（与 HEAD blob 逐字节同一份）。
     ///
     /// ⚠️ 文件名是 **`.yaml`**：这份是 rime 侧的**数据文件**，不是我们的配置，
     /// 必须保持 YAML（见 `checkpoint-1483898f.md` 的坑 ①：禁止批量把 rime 数据改名成
     /// `.toml`）。这里曾经写成 `weasel.toml`，文件根本不存在 ⇒ 本模块 8 个测试全红。
     /// 解析走的是 `parse_file` → `parse_yaml`（`style` 里那条 YAML 链），所以 `.yaml` 才对得上。
-    const OFFICIAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../Rime-Next/weasel.official.yaml");
+    const OFFICIAL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/weasel.official.yaml");
 
     fn official() -> WeaselConfig {
         parse_file(OFFICIAL).expect("官方 weasel.toml 必须能解析")

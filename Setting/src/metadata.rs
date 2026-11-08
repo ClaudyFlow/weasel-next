@@ -769,7 +769,7 @@ mod tests {
         for (name, defaults, richschema) in [
             (
                 "main",
-                include_str!("../../Rime-Next/weasel.yaml"),
+                include_str!("../../Rime-Next/setting.yaml"),
                 include_str!("../../weasel.richschema.json"),
             ),
             (

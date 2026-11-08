@@ -160,6 +160,13 @@ typedef struct RIME_FLAVORED(rime_context_t) {
   // v0.9.2
   char* commit_text_preview;
   char** select_labels;
+  // 本工程扩展（非上游 librime）：上屏后联想候选。
+  // null 结尾的 UTF-8 字符串数组，数量 = predictions_len；只在无组字时才有内容。
+  // 宿主必须与 dll **同批**声明这两个字段：dll 按调用方声明的 data_size 守卫
+  // （口径同 RIME_STRUCT_INIT：sizeof(Type) - sizeof(data_size)），
+  // 结构不够大时一个字节都不写。
+  char** predictions;
+  int predictions_len;
 } RIME_FLAVORED(RimeContext);
 
 /*!
@@ -315,6 +322,8 @@ typedef struct RIME_FLAVORED(rime_api_t) {
   Bool (*process_key)(RimeSessionId session_id, int keycode, int mask);
   // return True if there is unread commit text
   Bool (*commit_composition)(RimeSessionId session_id);
+  // 直拟上屏（符号面板等）：不经组合直接提交 UTF-8 文本（Weasel-Next 扩展）。
+  Bool (*commit_string)(RimeSessionId session_id, const char* text);
   void (*clear_composition)(RimeSessionId session_id);
 
   // output

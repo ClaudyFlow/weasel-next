@@ -29,11 +29,12 @@ try {
     Copy-Item 'target\release\weasel_tip.dll' 'target\release\Weasel-Next.dll' -Force
 
     $requiredFiles = @(
-        # 宿主配置的**唯一格式是 YAML**（`weasel.yaml`）：`style::parse_file` 只认 YAML，
+        # 宿主配置的**唯一格式是 YAML**：`style::parse_file` 只认 YAML，
         # 配置树与序列化也统一成 YAML。TOML **既不读也不写、也不打进包**。
         # 2026-10-27：源文件从仓库根搬进 `Rime-Next\`（与 rime 数据同处一棵树），
         # 仓库根那份已删（连对照的 `weasel.toml` 也一并清了）。
-        'Rime-Next\weasel.yaml',
+        # 2026-11-08：源文件改名 `weasel.yaml` → `setting.yaml`（安装时仍落地为 `weasel.yaml`）。
+        'Rime-Next\setting.yaml',
         'target\release\Weasel-Next-Server.exe',
         'target\release\Weasel-Next-Engine.exe',
         'target\release\Weasel-Next-Renderer.exe',
@@ -106,7 +107,7 @@ try {
     $payloadRemovalPaths = [Collections.Generic.List[string]]::new()
     $payloadDestinations = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($payload in @(
-        # 整个 Rime-Next（含 theme\ 皮肤、eassy、schema、weasel.yaml 等）
+        # 整个 Rime-Next（含 theme\ 皮肤、eassy、schema、setting.yaml 等）
         # ⚠️ 目标目录必须是 `data`：`rime_layout::data_dir()` 在安装根下**优先**用 `data\`
         # （2026-10-28 改名），只有没有 `data\` 时才回退旧的 `Rime-Next\`。
         # 2026-10-31 实测：装到 `Rime-Next\` 会让引擎继续读那份没人更新的 `data\`
@@ -123,15 +124,15 @@ try {
                 throw "Payload contains a reparse point: $sourceDirectory"
             }
             $files = @(Get-ChildItem -LiteralPath $sourceDirectory -Recurse -File | Sort-Object FullName)
-            # 2026-11-02 用户要求：**软件进 setup.exe、模型单独做压缩包，且不删模型**。
-            # `Rime-Next\neural\`（神经重排 .safetensors）与 `Rime-Next\model\`/`models\`
-            # （octagram .gram、tiger .bin）一律不进安装包；源文件留在仓库里不动，
-            # 由 `install\Weasel-Next-<版本>-models.7z` 单独分发（解压到数据根即可命中，
-            # 见 `c_api.rs::data_roots()`：用户目录优先、共享目录其次）。
-            $files = @($files | Where-Object {
-                $candidate = $_.FullName.Substring($sourceDirectory.Length + 1)
-                $candidate -notmatch '^(neural|models?)[\\/]'
-            })
+            # 2026-11-08 用户要求：**模型内置进安装包，不再单独发 `-models.7z`**
+            # （2026-11-02 的「模型单独做压缩包」作废：那时 `model\` 装着 910 MB 的
+            # gram/tiger bin；现在整目录只剩神经网络权重，29.97 MB）。
+            # **两个模型都内置**（2026-11-08 用户口径「desktop用上」）：
+            #   model\sentence-model.safetensors         = key（小号，6 层，4.49 MB）
+            #   model\sentence-model-desktop.safetensors = desk（大号，8 层，25.48 MB）
+            # 引擎 `librime-next/src/engine/gear/rescore.rs::init_from_data_roots`
+            # 同时加载两者（key 优先、desk 可选），不再有「只内置 keyboard」的旧规则。
+            # 旧代码里 `^(neural|models?)[\\/]` 的排除规则与 desktop 排除段都已删除。
             foreach ($file in $files) {
                 if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Payload contains a reparse point: $($file.FullName)" }
                 $relative = $file.FullName.Substring($sourceDirectory.Length + 1)

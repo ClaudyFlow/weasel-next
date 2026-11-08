@@ -401,6 +401,20 @@ local function path_boundaries(item, raw)
     return map, ends
 end
 
+-- One confirmation, three ranking levels; only complete real path spans.
+function M.first_choice_events(raw, selected, floor, mode)
+    if not mode or mode == "" or #mode > 512 or M.is_legacy_mode(mode) or
+        floor < 0 or floor >= #raw or #raw - floor > 128 then return {} end
+    local boundaries = path_boundaries(selected, raw)
+    local start = boundaries and boundaries[floor]
+    if not start then return {} end
+    local text = selected.text:sub(start + 1)
+    if not static(text) then return {} end
+    return {{time=os.time(), mode=mode, code=raw:sub(floor + 1):lower(), text=text,
+        context=context(selected.text:sub(1, start)), raw_start=floor, raw_end=#raw,
+        text_start=start, text_end=#selected.text, levels=3}}
+end
+
 function M.diff(raw, before, selected, floor, mode)
     if not before or not selected or before.text == selected.text then return {} end
     local a, ends = path_boundaries(before, raw)

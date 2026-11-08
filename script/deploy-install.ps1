@@ -249,11 +249,12 @@ $elevated = @(
     ('copy /y "{0}\artifact\smoke\rime.dll" "{1}\rime.dll"' -f $root, $InstallDir),
     # punctuation.yaml 已并入 symbols.yaml：把安装目录里那份也清掉
     ('del /f /q "{1}\Rime-Next\punctuation.yaml" 2>nul' -f $root, $InstallDir),
-    # 宿主配置：**唯一格式是 YAML**（weasel.yaml）—— style::parse_file 只认 YAML，
-    # 配置树与序列化也统一成 YAML。TOML/JSON 既不读也不写，安装目录里的旧文件一并清掉。
+    # 宿主配置：**唯一格式是 YAML**—— style::parse_file 只认 YAML，配置树与序列化也统一成 YAML。
+    # TOML/JSON 既不读也不写，安装目录里的旧文件一并清掉。
+    # 2026-11-08：源文件改名 `setting.yaml`；安装目录里仍叫 `weasel.yaml`（运行时文件名不变）。
     # 删 TOML 前先确认 yaml 已就位（fail-closed：copy 万一失败时宁可留着旧文件）。
     # 注意新版本**没有迁移层**：没有 weasel.yaml 时程序直接用内嵌出厂默认值。
-    ('copy /y "{0}\Rime-Next\weasel.yaml" "{1}\weasel.yaml"' -f $root, $InstallDir),
+    ('copy /y "{0}\Rime-Next\setting.yaml" "{1}\weasel.yaml"' -f $root, $InstallDir),
     ('del /f /q "{1}\weasel.json" 2>nul' -f $root, $InstallDir),
     ('if exist "{1}\weasel.yaml" del /f /q "{1}\weasel.toml" 2>nul' -f $root, $InstallDir),
     # 清掉 TOML 时代留下的同名换后缀文件（现在的正式格式是 .yaml）。

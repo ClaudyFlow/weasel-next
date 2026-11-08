@@ -22,10 +22,27 @@ use weasel_common::message::{
 };
 use weasel_common::{
     message::{
-        Envelope, KeyEventResponse, RenderRect, RenderSnapshot, RendererEvent, envelope::Payload,
+        Envelope, InputKey, KeyEventResponse, RenderRect, RenderSnapshot, RendererEvent,
+        envelope::Payload,
     },
     process::RuntimePaths,
 };
+
+/// 临时诊断探针（2026-11-02 02:xx，定位"中英提示不出"用；定位完要删）。
+///
+/// 追加写到 `C:\Code\_ind_probe.txt`：引擎这边的链路是
+/// 「读到新 ascii_mode → request_mode_indicator → 发布带 mode_indicator 的快照」，
+/// 任何一环没走到都在这里看得见。
+fn probe(line: &str) {
+    use std::io::Write as _;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(r"C:\Code\_ind_probe.txt")
+    {
+        let _ = writeln!(file, "{line}");
+    }
+}
 
 /// 引擎工作队列的有界容量，用于限制待处理事件占用的内存。
 pub(crate) const QUEUE_CAPACITY: usize = 128;
@@ -111,6 +128,8 @@ struct PendingModeIndicator {
     ascii_mode: bool,
     /// 触发来源，决定主题可采用的外观。
     reason: ModeIndicatorReason,
+    /// 这次切换是不是 CapsLock 造成的；主题据此画「A」而不是中/英图标。
+    caps_lock: bool,
     /// 服务端接受布局结果的最后时刻。
     expires_at: Instant,
 }
@@ -168,6 +187,15 @@ struct ClientSession {
     pending_mode_indicator: Option<PendingModeIndicator>,
     /// 用于增量更新及连接能力切换的最近一次输入状态响应。
     last_response: KeyEventResponse,
+    /// 联想法条的**显式状态**：当前要显示哪几个"下一个词"。
+    ///
+    /// 它不是 `last_response.predictions` 的投影，而是跨帧保持的独立状态：
+    /// - 只在**提交帧**（`commit_text` 非空且无候选）填充；
+    /// - 任何**按下**的键（除数字选词那一键）、失焦/取消、点走联想词都会清空；
+    /// - **按键抬起帧（keyup）不得清空** —— 2026-11-08 用户报「预测词直接闪一下
+    ///   没了，我怎么选」：提交键（空格）的抬起紧紧跟在提交帧后面，那一帧
+    ///   `commit_text` 已被冲成空，若拿它当"提交结束"就会立刻把联想法条收掉。
+    prediction_strip: Vec<String>,
 }
 
 impl ClientSession {
@@ -237,6 +265,7 @@ fn allocate_mode_indicator_id(next: &mut u64) -> u64 {
 }
 
 /// 为需要定位的提示建立单槽请求，并把请求标识写入 TIP 响应。
+#[allow(clippy::too_many_arguments)]
 fn request_mode_indicator(
     client: &mut ClientSession,
     response: &mut KeyEventResponse,
@@ -244,18 +273,24 @@ fn request_mode_indicator(
     policy: InputModeIndicatorPolicy,
     reason: ModeIndicatorReason,
     ascii_mode: bool,
+    caps_lock: bool,
 ) {
     // 2026-11-01 18:2x：**组字中切中英也要弹提示**。原来这里有一条
     // `|| response.composing`，把最常用的时机（打一半拼音按 Shift 换英文）的提示
     // 整条丢掉 —— 用户报的就是这个：切了中英什么都没有。
     if !policy.allows(reason) {
+        probe(&format!("REQ 被策略挡掉 reason={reason:?} policy={policy:?}"));
         return;
     }
     let id = allocate_mode_indicator_id(next_id);
+    probe(&format!(
+        "REQ 建立 id={id} ascii={ascii_mode} reason={reason:?} caps={caps_lock}"
+    ));
     client.pending_mode_indicator = Some(PendingModeIndicator {
         id,
         ascii_mode,
         reason,
+        caps_lock,
         expires_at: Instant::now() + MODE_INDICATOR_LAYOUT_TIMEOUT,
     });
     response.mode_indicator_request_id = Some(id);
@@ -269,6 +304,389 @@ fn host_response(mut response: KeyEventResponse) -> KeyEventResponse {
         response.composition_cursor = 0;
     }
     response
+}
+
+/// 联想条点击 → 直拟上屏：无组字时主题发回的是 `ItemInvoked(索引)`，
+/// 这里把它翻成 `CommitText(预测词)`，复用面板已有的直拟上屏通道。
+///
+/// 为什么不走 `select_candidate_on_current_page`：联想候选不在 librime 的菜单里
+/// （无组字），选择接口会静默失败。`CommitText` 臂只调 `commit_string`，恰好是
+/// "这个词直接上屏"的语义，返回的 `commit_text` 会被 TIP 带回宿主应用。
+///
+/// 取词用引擎的显式状态 `strip`（不是 `last_response.predictions` 脏值），
+/// 与数字键选词共用同一份数据。
+fn prediction_commit_event(
+    last_response: &KeyEventResponse,
+    strip: &[String],
+    event: &RendererEvent,
+) -> Option<RendererEvent> {
+    // 有候选时 `ItemInvoked` 是正常选候选，绝不改写。
+    if !last_response.candidates.is_empty() {
+        return None;
+    }
+    if event.action != weasel_common::message::RendererEventAction::ItemInvoked as i32 {
+        return None;
+    }
+    let text = strip.get(event.item_index as usize)?.clone();
+    let mut converted = event.clone();
+    converted.action = weasel_common::message::RendererEventAction::CommitText as i32;
+    converted.item_index = 0;
+    converted.text = text;
+    Some(converted)
+}
+
+/// 联想条显式状态的一次更新（按键路径与界面事件路径共用）。
+///
+/// 五条规则，顺序刻意如此：
+/// 1. `released`（按键抬起帧）→ **原样保留**。提交键的抬起紧跟提交帧，它把
+///    `last_response.commit_text` 冲成空；在这里清空就是用户看到的"闪一下没了"。
+/// 2. `picked_from_strip`（数字键选中了联想词）→ 清空（词已上屏）。
+/// 3. 提交帧（`commit_text` 非空且无候选）**且这一键之前确实在组字** → 换成这一帧的
+///    预测词。`composing_before` 这个条件不能省：逗号/句号的**标点提交**也是一次
+///    提交（`commit_text="，"`、无候选），而 dll 给的 `predictions` 还是上一次提交
+///    留下的脏值；不判组字就会把联想条按旧词**重建**回来 —— 2026-11-08 用户报
+///    「打逗号句号还是不能消失」就是这个。
+/// 4. 其它真实按下（普通字符、标点、Esc、方向键…）→ 清空并保持清空。用户对该行为
+///    的原话（2026-11-08）：「不是 123 序号就直接消失」。
+/// 5. 界面事件（点候选）也走这里：`composing_before` 为真且真的提交了词 ⇒ 填联想条，
+///    与键盘上屏一致。
+fn update_prediction_strip(
+    strip: &mut Vec<String>,
+    released: bool,
+    picked_from_strip: bool,
+    composing_before: bool,
+    response: &KeyEventResponse,
+) {
+    if released {
+        return;
+    }
+    if picked_from_strip {
+        strip.clear();
+        return;
+    }
+    strip.clear();
+    if composing_before && !response.commit_text.is_empty() && response.candidates.is_empty() {
+        strip.extend(response.predictions.iter().cloned());
+    }
+}
+
+/// 数字键选联想词：返回要上屏的联想词下标。
+///
+/// 只在「无组字、无候选、联想条非空」时接管 `1`/`2`/`3`/`4` 四个键，且只认不带
+/// 修饰键的**按下**：`Shift+1` 经 `ToUnicodeEx` 之后 keycode 已经是 `!`（0x21），
+/// 不会落进这个区间；`Ctrl/Alt+1` 之类留给系统快捷键。基准键位来自
+/// `Tip/src/keyboard.rs::special_key`——数字不在特殊键表里，走字符翻译，得到
+/// 的就是 ASCII `'1'`。
+fn prediction_key_pick(
+    key: &InputKey,
+    last_response: &KeyEventResponse,
+    strip: &[String],
+) -> Option<usize> {
+    // librime 的修饰键掩码：bit0 Shift、bit1 Lock、bit2 Control、bit3 Alt、bit30 Release。
+    const K_SHIFT_MASK: i32 = 1 << 0;
+    const K_CONTROL_MASK: i32 = 1 << 2;
+    const K_ALT_MASK: i32 = 1 << 3;
+    const K_RELEASE_MASK: i32 = 1 << 30;
+    const FIRST_DIGIT: i32 = b'1' as i32;
+    // 2026-11-08：联想条从 3 条加到 4 条（librime 神经预测 4 条），数字键跟着
+    // 扩到 `1`/`2`/`3`/`4`。越界仍由下面的 `index < strip.len()` 兜住：
+    // 联想条只有 3 条时按 `4` 不接管。
+    const LAST_DIGIT: i32 = b'4' as i32;
+
+    if key.released || strip.is_empty() {
+        return None;
+    }
+    if key.modifiers & (K_SHIFT_MASK | K_CONTROL_MASK | K_ALT_MASK | K_RELEASE_MASK) != 0 {
+        return None;
+    }
+    if last_response.composing || !last_response.candidates.is_empty() {
+        return None;
+    }
+    if !(FIRST_DIGIT..=LAST_DIGIT).contains(&key.keycode) {
+        return None;
+    }
+    let index = (key.keycode - FIRST_DIGIT) as usize;
+    (index < strip.len()).then_some(index)
+}
+
+#[cfg(test)]
+mod prediction_click_tests {
+    use super::*;
+
+    fn response(candidates: &[&str], predictions: &[&str]) -> KeyEventResponse {
+        KeyEventResponse {
+            candidates: candidates
+                .iter()
+                .map(|text| weasel_common::message::Candidate {
+                    text: (*text).to_owned(),
+                    comment: String::new(),
+                })
+                .collect(),
+            predictions: predictions.iter().map(|text| (*text).to_owned()).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn event(action: weasel_common::message::RendererEventAction, index: u32) -> RendererEvent {
+        RendererEvent {
+            action: action as i32,
+            item_index: index,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn prediction_item_click_becomes_commit_text() {
+        let last = response(&[], &["现在", "这个"]);
+        let strip = ["现在".to_owned(), "这个".to_owned()];
+        let converted = prediction_commit_event(
+            &last,
+            &strip,
+            &event(weasel_common::message::RendererEventAction::ItemInvoked, 1),
+        )
+        .expect("联想条点击应改写");
+        assert_eq!(
+            converted.action,
+            weasel_common::message::RendererEventAction::CommitText as i32
+        );
+        assert_eq!(converted.text, "这个");
+        assert_eq!(converted.item_index, 0);
+    }
+
+    #[test]
+    fn candidate_click_and_out_of_range_are_untouched() {
+        // 正对照：有候选时选候选不能被改写成直拟上屏。
+        let last = response(&["界面"], &[]);
+        let strip = ["现在".to_owned(), "这个".to_owned()];
+        assert!(
+            prediction_commit_event(
+                &last,
+                &strip,
+                &event(weasel_common::message::RendererEventAction::ItemInvoked, 0)
+            )
+            .is_none()
+        );
+        // 无候选但索引越界：不改写（宁可什么都不做，也不能上屏错的字）。
+        let last = response(&[], &["现在"]);
+        assert!(
+            prediction_commit_event(
+                &last,
+                &strip,
+                &event(weasel_common::message::RendererEventAction::ItemInvoked, 9)
+            )
+            .is_none()
+        );
+        // 非 ItemInvoked 事件不受影响。
+        assert!(
+            prediction_commit_event(
+                &last,
+                &strip,
+                &event(weasel_common::message::RendererEventAction::NavigateNext, 0)
+            )
+            .is_none()
+        );
+        // strip 才是取词来源：last_response.predictions 里的脏词不能被点到。
+        let stale_only = response(&[], &["脏值"]);
+        assert!(
+            prediction_commit_event(
+                &stale_only,
+                &[],
+                &event(weasel_common::message::RendererEventAction::ItemInvoked, 0)
+            )
+            .is_none(),
+            "联想条为空时不得把 predictions 脏值点上屏"
+        );
+    }
+
+    /// 数字键选联想词：正/负用例（2026-11-08 联想条 4 条 ⇒ 数字键 `1`/`2`/`3`/`4`）。
+    #[test]
+    fn digit_keys_pick_predictions_only_when_strip_is_visible() {
+        let strip = [
+            "现在".to_owned(),
+            "这个".to_owned(),
+            "界面".to_owned(),
+            "然后".to_owned(),
+        ];
+        let no_candidates = KeyEventResponse::default();
+        let key = |keycode: i32, released: bool, modifiers: i32| InputKey {
+            keycode,
+            released,
+            modifiers,
+            ..Default::default()
+        };
+
+        // 正：1/2/3/4 分别对应第 0/1/2/3 个联想词。
+        for (code, expected) in [
+            (b'1' as i32, 0),
+            (b'2' as i32, 1),
+            (b'3' as i32, 2),
+            (b'4' as i32, 3),
+        ] {
+            assert_eq!(
+                prediction_key_pick(&key(code, false, 0), &no_candidates, &strip),
+                Some(expected),
+                "数字键 {} 应选第 {expected} 个联想词",
+                code as u8 as char
+            );
+        }
+        // 负：联想条为空时数字键照旧走候选/透传。
+        assert_eq!(
+            prediction_key_pick(&key(b'2' as i32, false, 0), &no_candidates, &[]),
+            None
+        );
+        // 负：有组字/有候选时数字键是正常选候选，绝不抢。
+        let composing = KeyEventResponse {
+            composing: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            prediction_key_pick(&key(b'1' as i32, false, 0), &composing, &strip),
+            None
+        );
+        let with_candidates = response(&["界面"], &[]);
+        assert_eq!(
+            prediction_key_pick(&key(b'1' as i32, false, 0), &with_candidates, &strip),
+            None
+        );
+        // 负：抬起帧不选词（否则一次按键会提交两次）。
+        assert_eq!(
+            prediction_key_pick(&key(b'1' as i32, true, 0), &no_candidates, &strip),
+            None
+        );
+        // 负：带修饰键不算（Ctrl+1 留给系统）；Shift+1 的 keycode 本来就是 '!'。
+        assert_eq!(
+            prediction_key_pick(&key(b'1' as i32, false, 1 << 2), &no_candidates, &strip),
+            None
+        );
+        // 负：越界 —— 联想条只有 1 条时按 3/4 都不接管。
+        assert_eq!(
+            prediction_key_pick(
+                &key(b'3' as i32, false, 0),
+                &no_candidates,
+                &["只有一条".to_owned()]
+            ),
+            None
+        );
+        assert_eq!(
+            prediction_key_pick(
+                &key(b'4' as i32, false, 0),
+                &no_candidates,
+                &["只有一条".to_owned()]
+            ),
+            None
+        );
+        // 负：联想条只有 3 条（甲路模型缺一路时的退化）按 4 也不能接管。
+        assert_eq!(
+            prediction_key_pick(
+                &key(b'4' as i32, false, 0),
+                &no_candidates,
+                &["现在".to_owned(), "这个".to_owned(), "界面".to_owned()]
+            ),
+            None,
+            "联想条 3 条时按 4 越界，不接管"
+        );
+        // 负：非 1–4 的数字/字符不接管。
+        assert_eq!(
+            prediction_key_pick(&key(b'5' as i32, false, 0), &no_candidates, &strip),
+            None
+        );
+        assert_eq!(
+            prediction_key_pick(&key(b'0' as i32, false, 0), &no_candidates, &strip),
+            None
+        );
+    }
+
+    /// 联想条状态的跨帧保持：抬起帧不清空（「闪一下没了」的回归）。
+    #[test]
+    fn strip_survives_key_release_but_clears_on_real_keydown() {
+        let mut strip: Vec<String> = Vec::new();
+        let commit = KeyEventResponse {
+            commit_text: "你好".into(),
+            predictions: vec!["现在".into(), "这个".into()],
+            ..Default::default()
+        };
+
+        // 组字后的提交帧填充（composing_before = true）。
+        update_prediction_strip(&mut strip, false, false, true, &commit);
+        assert_eq!(strip, ["现在", "这个"]);
+
+        // 提交键的抬起帧：commit_text 已被冲空、候选为空、predictions 是脏值。
+        let release = KeyEventResponse {
+            predictions: vec!["现在".into(), "这个".into()],
+            ..Default::default()
+        };
+        update_prediction_strip(&mut strip, true, false, false, &release);
+        assert_eq!(strip, ["现在", "这个"], "抬起帧不得清空联想条");
+
+        // 真的按了下一个键：清空。
+        update_prediction_strip(&mut strip, false, false, false, &KeyEventResponse::default());
+        assert!(strip.is_empty(), "真实按下后联想条应退出");
+
+        // 数字键选词那一键：即使响应里还带着脏预测，也要清空。
+        update_prediction_strip(&mut strip, false, false, true, &commit);
+        assert_eq!(strip.len(), 2);
+        update_prediction_strip(&mut strip, false, true, false, &release);
+        assert!(strip.is_empty(), "联想词上屏后联想条不能还留着");
+
+        // 有候选时 predictions 一律不进入联想条（不能顶掉候选）。
+        let with_candidates = KeyEventResponse {
+            commit_text: "前文".into(),
+            candidates: vec![weasel_common::message::Candidate {
+                text: "界面".into(),
+                comment: String::new(),
+            }],
+            predictions: vec!["现在".into()],
+            ..Default::default()
+        };
+        update_prediction_strip(&mut strip, false, false, true, &with_candidates);
+        assert!(strip.is_empty());
+    }
+
+    /// 2026-11-08 用户报「打逗号句号还是不能消失」的回归。
+    ///
+    /// 逗号/句号在无组字时是**标点提交**：`commit_text="，"`、候选为空，
+    /// 但 `predictions` 还是上一次词提交留下的脏值。只判 `commit_text` 非空就会
+    /// 拿旧预测把联想条**重建**回来 —— 用户看到的"按了逗号它还在"。
+    #[test]
+    fn punctuation_commit_does_not_rebuild_the_strip() {
+        let mut strip = vec!["你好".to_owned()];
+        let punctuation = KeyEventResponse {
+            commit_text: "，".into(),
+            predictions: vec!["你好".to_owned()],
+            ..Default::default()
+        };
+        // 没有组字 ⇒ 清空且保持清空（用户口径「不是 123 序号就直接消失」）。
+        update_prediction_strip(&mut strip, false, false, false, &punctuation);
+        assert!(
+            strip.is_empty(),
+            "标点提交不能拿旧预测把联想条建回来（用户 2026-11-08）"
+        );
+        // 正对照：同一份响应若发生在"组字 → 上屏"之后，就该填。
+        update_prediction_strip(&mut strip, false, false, true, &punctuation);
+        assert_eq!(strip, ["你好"], "组字后的提交才允许填联想条");
+    }
+
+    /// 点候选上屏（界面事件路径）应与键盘上屏一致地填联想条；点走联想词则清空。
+    #[test]
+    fn clicking_a_candidate_fills_the_strip_like_typing_does() {
+        let mut strip: Vec<String> = Vec::new();
+        let picked_candidate = KeyEventResponse {
+            commit_text: "你好".into(),
+            predictions: vec!["现在".to_owned(), "这个".to_owned()],
+            ..Default::default()
+        };
+        update_prediction_strip(&mut strip, false, false, true, &picked_candidate);
+        assert_eq!(strip, ["现在", "这个"]);
+
+        // 点联想词（已改写成 CommitText 直拟上屏）：没有组字 ⇒ 清空、不重建。
+        let strip_click = KeyEventResponse {
+            commit_text: "这个".into(),
+            predictions: vec!["现在".to_owned()],
+            ..Default::default()
+        };
+        update_prediction_strip(&mut strip, false, false, false, &strip_click);
+        assert!(strip.is_empty());
+    }
 }
 
 /// 新组合开始且 Rime 状态确实改变时，使旧光标锚点失效。
@@ -325,9 +743,9 @@ mod preedit_tests {
         };
         assert!(!reset_anchor_for_new_composition(&old, &next, &mut anchor));
         assert!(anchor.valid, "保留上次锚点，避免首键在 (0,0) 闪现");
-        assert!(render_snapshot(1, 1, &next, &anchor).visible);
+        assert!(render_snapshot(1, 1, &next, &[], &anchor).visible);
         // 尚无有效锚点时（首键前的极早期），可见性仅由候选/组字状态决定。
-        assert!(render_snapshot(1, 1, &next, &RenderRect::default()).visible);
+        assert!(render_snapshot(1, 1, &next, &[], &RenderRect::default()).visible);
     }
 
     #[test]
@@ -357,7 +775,7 @@ mod preedit_tests {
             bottom: 40,
             valid: true,
         };
-        let snapshot = render_snapshot(1, 2, &response, &anchor);
+        let snapshot = render_snapshot(1, 2, &response, &[], &anchor);
         assert!(snapshot.visible); // Input field remains visible without candidates.
         assert_eq!(snapshot.preedit.unwrap().text, "nihao");
         let host = host_response(response.clone());
@@ -370,7 +788,7 @@ mod preedit_tests {
             ..response
         };
         assert_eq!(host_response(inline.clone()), inline);
-        assert!(render_snapshot(1, 3, &inline, &anchor).preedit.is_none());
+        assert!(render_snapshot(1, 3, &inline, &[], &anchor).preedit.is_none());
     }
 }
 
@@ -2340,6 +2758,7 @@ impl Engine {
             if now.duration_since(client.last_typing) >= SESSION_IDLE_RECLAIM {
                 client.session = None;
                 client.last_response = Default::default();
+                client.prediction_strip.clear();
                 reclaimed += 1;
             }
         }
@@ -2616,6 +3035,7 @@ impl Engine {
                         latest_layout_revision: None,
                         pending_mode_indicator: None,
                         last_response: Default::default(),
+                        prediction_strip: Vec::new(),
                     },
                 );
             }
@@ -2715,10 +3135,49 @@ impl Engine {
                                 "诊断: 收到按键"
                             );
                         }
+                        // 联想条数字选词（用户 2026-11-08：「我就不能按键来选择吗」）：
+                        // 无组字、无候选、联想条正在显示时，`1`/`2`/`3`/`4` = 直拟上屏
+                        // 对应联想词（联想条 2026-11-08 起为 4 条）。走与鼠标点击
+                        // **同一条** `CommitText` 通道，语义一致。
+                        let prediction_pick = prediction_key_pick(
+                            &key_event,
+                            &client.last_response,
+                            &client.prediction_strip,
+                        );
+                        // 这一键**之前**是否真的在组字：只有"组字 → 上屏"才给联想条补词；
+                        // 标点（逗号/句号）那种"无组字直接提交"不得按旧预测重建联想条。
+                        let composing_before = client.last_response.composing;
                         // 乙-1 插桩：`process_key` 的耗时就是宿主侧等待的绝大部分。
                         // 采样开关与 Tip 侧同一个文件，攒够一批才落一次盘。
                         let key_start = std::time::Instant::now();
-                        let mut response = client.session.as_mut().expect("session ensured").process_key(&key_event);
+                        let mut response = if let Some(index) = prediction_pick {
+                            let text = client.prediction_strip[index].clone();
+                            let event = RendererEvent {
+                                action: weasel_common::message::RendererEventAction::CommitText as i32,
+                                item_index: 0,
+                                text,
+                                ..Default::default()
+                            };
+                            let mut response = client
+                                .session
+                                .as_mut()
+                                .expect("session ensured")
+                                .process_renderer_event(&event);
+                            // 这一键被联想条吃掉：不能再当数字打进宿主应用。
+                            response.eaten = true;
+                            response
+                        } else {
+                            client.session.as_mut().expect("session ensured").process_key(&key_event)
+                        };
+                        // 联想条显式状态：抬起帧保持；数字选词/标点/其它按下清空；
+                        // 真正"组字→上屏"才填词。
+                        update_prediction_strip(
+                            &mut client.prediction_strip,
+                            key_event.released,
+                            prediction_pick.is_some(),
+                            composing_before,
+                            &response,
+                        );
                         weasel_common::key_timing::record(
                             key_start.elapsed(),
                             response.eaten,
@@ -2758,6 +3217,7 @@ impl Engine {
                             && !client.inline_preedit;
                         let previous_visible = client.anchor.valid
                             && (!client.last_response.candidates.is_empty()
+                                || !client.prediction_strip.is_empty()
                                 || (client.last_response.external_preedit
                                     && client.last_response.composing));
                         let previous_ascii = client.last_response.ascii_mode;
@@ -2792,14 +3252,21 @@ impl Engine {
                             client.last_response.ascii_mode = response.ascii_mode;
                         }
                         client.last_response.token = client.route.token.clone();
-                        if response.composing {
-                            client.pending_mode_indicator = None;
-                        }
+                        // 2026-11-02 02:4x：这里原来有一条 `if response.composing { pending = None }`，
+                        // 于是**组字中按 Shift 的提示请求刚建好就被自己抹掉**，主题那边永远
+                        // 收不到"组字中徽标"。现在只在提示真的过期（`expires_at`）时才丢弃。
                         if previous_ascii
                             .zip(response.ascii_mode)
                             .is_some_and(|(previous, next)| previous != next)
                         {
+                            probe(&format!(
+                                "KEY 中英变了 prev={:?} new={:?} composing={} state_updated={}",
+                                previous_ascii, response.ascii_mode, response.composing,
+                                response.state_updated
+                            ));
                             let ascii_mode = response.ascii_mode.expect("checked above");
+                            // 是不是 CapsLock 造成的切换（大写锁定）：主题据此画「A」。
+                            let caps_lock = matches!(key_event.keycode, 0xffe5 | 0x14);
                             request_mode_indicator(
                                 client,
                                 &mut response,
@@ -2807,7 +3274,19 @@ impl Engine {
                                 self.input_mode_indicator,
                                 ModeIndicatorReason::UserSwitch,
                                 ascii_mode,
+                                caps_lock,
                             );
+                        } else {
+                            // 每个引擎进程只记**第一条**按键：用来区分"我们的 IME 根本没收到键"
+                            // 和"收到了但中英没变"。不逐键写盘（打字不能带磁盘 I/O）。
+                            static FIRST_KEY: std::sync::atomic::AtomicBool =
+                                std::sync::atomic::AtomicBool::new(true);
+                            if FIRST_KEY.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                                probe(&format!(
+                                    "KEY 本进程首个按键 ascii={:?} composing={} state_updated={}",
+                                    response.ascii_mode, response.composing, response.state_updated
+                                ));
+                            }
                         }
                         let snapshot = if client.waiting_for_layout.is_some() {
                             // The host edit has not supplied geometry for this
@@ -2830,6 +3309,7 @@ impl Engine {
                                     client_id,
                                     client.revision,
                                     &client.last_response,
+                                    &client.prediction_strip,
                                     &client.anchor,
                                 )
                             })
@@ -2896,6 +3376,7 @@ impl Engine {
                             client.waiting_for_layout = None;
                             client.latest_layout_revision = None;
                             client.pending_mode_indicator = None;
+                            client.prediction_strip.clear();
                         }
                         let was_active = self.active_client == Some(client_id);
                         match action {
@@ -2966,6 +3447,17 @@ impl Engine {
                         {
                             client.pending_mode_indicator = None;
                         }
+                        // 失焦/取消/提交/宿主关闭：联想条一并收掉 —— 光标已经离开
+                        // 或这段输入结束了，再把"下一个词"画在那儿是错的。
+                        if matches!(
+                            action,
+                            ContextAction::Blur
+                                | ContextAction::Cancel
+                                | ContextAction::Submit
+                                | ContextAction::HostTerminated
+                        ) {
+                            client.prediction_strip.clear();
+                        }
                         if response.state_updated {
                             client.last_response = response.clone();
                             client.last_response.mode_indicator_request_id = None;
@@ -2986,6 +3478,7 @@ impl Engine {
                             _ => None,
                         };
                         if let Some((reason, ascii_mode)) = indicator {
+                            // 这条路径是上下文动作（语言栏按钮 / 焦点），不是 CapsLock。
                             request_mode_indicator(
                                 client,
                                 &mut response,
@@ -2993,6 +3486,7 @@ impl Engine {
                                 self.input_mode_indicator,
                                 reason,
                                 ascii_mode,
+                                false,
                             );
                         }
                         let snapshot = if self.active_client == Some(client_id) {
@@ -3000,6 +3494,7 @@ impl Engine {
                                 client_id,
                                 client.revision,
                                 &client.last_response,
+                                &client.prediction_strip,
                                 &client.anchor,
                             ))
                         } else if was_active {
@@ -3040,12 +3535,22 @@ impl Engine {
             );
             return;
         };
-        if self.active_client != Some(event.session_id)
-            || !client.alive.load(Ordering::Acquire)
-            || !client.route.accepts_ui(&event, client.revision)
-        {
+        if self.active_client != Some(event.session_id) {
             return;
         }
+        if !client.alive.load(Ordering::Acquire) {
+            return;
+        }
+        if !client.route.accepts_ui(&event, client.revision) {
+            return;
+        }
+        // 联想条点击（无组字）：把 ItemInvoked 翻成 CommitText，再交给会话。
+        // 必须在 `session.as_mut()` 之前做——改写要看 `last_response`，后做会和借用打架。
+        // 取词来源是显式状态 `prediction_strip`（不是 predictions 脏值）。
+        let composing_before = client.last_response.composing;
+        let event =
+            prediction_commit_event(&client.last_response, &client.prediction_strip, &event)
+                .unwrap_or(event);
         let Some(session) = client.session.as_mut() else {
             tracing::debug!(
                 session_id = event.session_id,
@@ -3063,8 +3568,22 @@ impl Engine {
             client.waiting_for_layout = None;
         }
         client.last_response = response.clone();
-        let snapshot =
-            render_snapshot(event.session_id, client.revision, &response, &client.anchor);
+        // 与键盘路径同一套规则：点候选上屏（之前确实在组字）⇒ 填联想条；
+        // 点走联想词 / 收起 / 翻页 ⇒ 清空。
+        update_prediction_strip(
+            &mut client.prediction_strip,
+            false,
+            false,
+            composing_before,
+            &response,
+        );
+        let snapshot = render_snapshot(
+            event.session_id,
+            client.revision,
+            &response,
+            &client.prediction_strip,
+            &client.anchor,
+        );
         let connection = Arc::clone(&client.connection);
         reply(&connection, 0, response, self.allow_rime_in_secure_fields);
         self.renderer.publish(snapshot);
@@ -3122,6 +3641,7 @@ impl Processor<Work> for Engine {
                             *id,
                             client.revision,
                             &client.last_response,
+                            &client.prediction_strip,
                             &client.anchor,
                         ));
                     }
@@ -3130,78 +3650,131 @@ impl Processor<Work> for Engine {
         }
         // Poll the active connection's latest geometry, never the input FIFO.
         // Layout arrival explicitly wakes the engine, including the final drag position.
-        if let Some(client_id) = self.active_client
-            && let Some(client) = self.clients.get_mut(&client_id)
-            && client.alive.load(Ordering::Acquire)
-            && let Some(update) = client
-                .connection
-                .take_layout_for(client.route.token.as_ref())
-        {
-            if let Some(request_id) = update.mode_indicator_request_id {
-                if let Some(pending) = client
-                    .pending_mode_indicator
-                    .filter(|pending| pending.id == request_id)
-                {
-                    client.pending_mode_indicator = None;
-                    let now = Instant::now();
-                    let anchor = update.anchor.unwrap_or_default();
-                    // 2026-11-01 18:4x：这里原来还有一条 `!client.last_response.composing`，
-                    // 于是就算请求发出来了，**发布快照这一步又把提示挡回去** ——
-                    // 组字中切中英永远不出提示（`theme.log` 里 `组字中徽标` 0 次就是这么来的）。
-                    if now < pending.expires_at && anchor.valid {
-                        let mut snapshot = render_snapshot(
-                            client_id,
-                            client.revision,
-                            &client.last_response,
-                            &anchor,
-                        );
-                        snapshot.mode_indicator = Some(ModeIndicator {
-                            id: pending.id,
-                            ascii_mode: pending.ascii_mode,
-                            reason: pending.reason as i32,
-                        });
-                        self.renderer.publish(snapshot);
-                    }
-                }
-            } else {
-                let matching = layout_matches_pending(
-                    update.revision,
-                    client.waiting_for_layout,
-                    client.latest_layout_revision,
-                );
-                // 临时诊断（2026-10-18 候选窗不显示）：布局更新到底来没来、为什么被判不合格。
-                if verbose_diagnostics() {
-                    tracing::info!(
-                        session_id = client_id,
-                        revision = ?update.revision,
-                        waiting = ?client.waiting_for_layout,
-                        accepted = ?client.latest_layout_revision,
-                        matching,
-                        anchor_valid = ?update.anchor.as_ref().map(|anchor| anchor.valid),
-                        "诊断: 布局更新"
-                    );
-                }
-                if matching {
-                    if let Some(revision) = update.revision {
-                        client.latest_layout_revision = Some(revision);
-                    }
-                    let anchor = update.anchor.unwrap_or_default();
-                    let became_ready = client.waiting_for_layout.is_some() && anchor.valid;
-                    if became_ready {
-                        client.waiting_for_layout = None;
-                    }
-                    if client.anchor != anchor || became_ready {
-                        client.anchor = anchor;
-                        if client.waiting_for_layout.is_none()
-                            && (!client.last_response.candidates.is_empty()
-                                || client.last_response.external_preedit)
-                        {
-                            self.renderer.publish(render_snapshot(
-                                client_id,
-                                client.revision,
-                                &client.last_response,
-                                &client.anchor,
-                            ));
+        if let Some(client_id) = self.active_client {
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                if client.alive.load(Ordering::Acquire) {
+                    if let Some(update) = client
+                        .connection
+                        .take_layout_for(client.route.token.as_ref())
+                    {
+                        if let Some(request_id) = update.mode_indicator_request_id {
+                            if let Some(pending) = client
+                                .pending_mode_indicator
+                                .filter(|pending| pending.id == request_id)
+                            {
+                                client.pending_mode_indicator = None;
+                                let now = Instant::now();
+                                let anchor = update.anchor.unwrap_or_default();
+                                // 2026-11-01 18:4x：这里原来还有一条 `!client.last_response.composing`，
+                                // 于是就算请求发出来了，**发布快照这一步又把提示挡回去** ——
+                                // 组字中切中英永远不出提示（`theme.log` 里 `组字中徽标` 0 次就是这么来的）。
+                                if now < pending.expires_at && anchor.valid {
+                                    let mut snapshot = render_snapshot(
+                                        client_id,
+                                        client.revision,
+                                        &client.last_response,
+                                        &client.prediction_strip,
+                                        &anchor,
+                                    );
+                                    snapshot.mode_indicator = Some(ModeIndicator {
+                                        id: pending.id,
+                                        ascii_mode: pending.ascii_mode,
+                                        reason: pending.reason as i32,
+                                        caps_lock: pending.caps_lock,
+                                    });
+                                    // 2026-11-02 02:xx：主题画提示时读的是 `snapshot.ascii_mode`
+                                    // （`theme/src/mod.rs` 里 `let ascii = snapshot.ascii_mode`），
+                                    // 不是 `mode_indicator.ascii_mode`。只填 mode_indicator 的话，
+                                    // 图标永远画上一次的状态（`theme.log` 里 32 条全是 `zh` 就是这么来的）。
+                                    snapshot.ascii_mode = Some(pending.ascii_mode);
+                                    probe(&format!(
+                                        "PUBLISH 布局分支 id={} ascii={} visible={} items={}",
+                                        pending.id, pending.ascii_mode, snapshot.visible,
+                                        snapshot.items.len()
+                                    ));
+                                    self.renderer.publish(snapshot);
+                                }
+                            }
+                        } else {
+                            let matching = layout_matches_pending(
+                                update.revision,
+                                client.waiting_for_layout,
+                                client.latest_layout_revision,
+                            );
+                            // 临时诊断（2026-10-18 候选窗不显示）：布局更新到底来没来、为什么被判不合格。
+                            if verbose_diagnostics() {
+                                tracing::info!(
+                                    session_id = client_id,
+                                    revision = ?update.revision,
+                                    waiting = ?client.waiting_for_layout,
+                                    accepted = ?client.latest_layout_revision,
+                                    matching,
+                                    anchor_valid = ?update.anchor.as_ref().map(|anchor| anchor.valid),
+                                    "诊断: 布局更新"
+                                );
+                            }
+                            if matching {
+                                if let Some(revision) = update.revision {
+                                    client.latest_layout_revision = Some(revision);
+                                }
+                                let anchor = update.anchor.unwrap_or_default();
+                                let became_ready =
+                                    client.waiting_for_layout.is_some() && anchor.valid;
+                                if became_ready {
+                                    client.waiting_for_layout = None;
+                                }
+                                if client.anchor != anchor || became_ready {
+                                    client.anchor = anchor;
+                                    // 联想条也要跟着新锚点重发（上屏后光标往后挪，
+                                    // 否则"下一个词"会停在旧插入点——视觉上像错位）。
+                                    if client.waiting_for_layout.is_none()
+                                        && (!client.last_response.candidates.is_empty()
+                                            || client.last_response.external_preedit
+                                            || !client.prediction_strip.is_empty())
+                                    {
+                                        self.renderer.publish(render_snapshot(
+                                            client_id,
+                                            client.revision,
+                                            &client.last_response,
+                                            &client.prediction_strip,
+                                            &client.anchor,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    } else if client.pending_mode_indicator.is_some() {
+                        // 2026-11-02：Shift 在 keyup 切中英时通常没有布局更新，
+                        // `take_layout_for` 返回 None，原逻辑整段跳过 → 提示请求发了、
+                        // 快照却永远不发布（用户报"切中英什么都没有"）。
+                        // 补齐：没有布局更新但仍有未过期待发提示时，
+                        // 用最近一次有效锚点 `client.anchor` 直接 publish 带 mode_indicator 的快照。
+                        if let Some(pending) = client.pending_mode_indicator.as_ref() {
+                            let now = Instant::now();
+                            if now < pending.expires_at && client.anchor.valid {
+                                let pending = client.pending_mode_indicator.take().unwrap();
+                                let mut snapshot = render_snapshot(
+                                    client_id,
+                                    client.revision,
+                                    &client.last_response,
+                                    &client.prediction_strip,
+                                    &client.anchor,
+                                );
+                                snapshot.mode_indicator = Some(ModeIndicator {
+                                    id: pending.id,
+                                    ascii_mode: pending.ascii_mode,
+                                    reason: pending.reason as i32,
+                                    caps_lock: pending.caps_lock,
+                                });
+                                // 同上：主题只看 `snapshot.ascii_mode`。
+                                snapshot.ascii_mode = Some(pending.ascii_mode);
+                                probe(&format!(
+                                    "PUBLISH idle-else 分支 id={} ascii={} visible={} items={}",
+                                    pending.id, pending.ascii_mode, snapshot.visible,
+                                    snapshot.items.len()
+                                ));
+                                self.renderer.publish(snapshot);
+                            }
                         }
                     }
                 }
