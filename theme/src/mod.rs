@@ -22,9 +22,12 @@ use crate::d2d_bindings::*;
 use crate::theme::paint::{d2d_color, Formats, Painter};
 use crate::theme_api::{CandidateView, EventSink, ThemeBackend, UiAction, UiMode};
 use config::Metrics;
-use layout::{Hit, Layout, Measured, PREDICTION_KIND, Parts, Rect, Size};
+use layout::{
+    prediction_tag_visible, Hit, Layout, Measured, PREDICTION_KIND, Parts, Rect, Size,
+};
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
 };
@@ -55,9 +58,72 @@ unsafe extern "system" {
     fn SetWindowDisplayAffinity(hwnd: HWND, affinity: u32) -> windows_core::BOOL;
 }
 
+/// `DWM_TIMING_INFO` 里的分数（`dwmapi.h` 的 `DWM_FRAME_RATE`）。
+/// `#[repr(C, packed(1))]` 与 windows-rs 0.62 的元数据一致——这个结构体在 SDK
+/// 头里被 `pshpack1` 包裹，字段之间没有填充。
+#[repr(C, packed(1))]
+#[derive(Clone, Copy, Default)]
+struct UnsignedRatio {
+    ui_numerator: u32,
+    ui_denominator: u32,
+}
+
+/// `DWM_TIMING_INFO`：完整字段照 windows-rs 0.62 `Windows.Win32.Graphics.Dwm`
+/// 移植。`DwmGetCompositionTimingInfo` 会校验 `cbSize == sizeof(DWM_TIMING_INFO)`，
+/// 少一个字段 / 错一个类型都会让调用失败（E_INVALIDARG），所以这里不偷懒只声明
+/// 需要的 `rateRefresh`，而是整份照抄，让 `size_of` 自动算出准确的字节数。
+#[repr(C, packed(1))]
+#[derive(Clone, Copy, Default)]
+#[allow(dead_code)]
+struct DwmTimingInfo {
+    cb_size: u32,
+    rate_refresh: UnsignedRatio,
+    qpc_refresh_period: u64,
+    rate_compose: UnsignedRatio,
+    qpc_v_blank: u64,
+    c_refresh: u64,
+    c_dx_refresh: u32,
+    qpc_compose: u64,
+    c_frame: u64,
+    c_dx_present: u32,
+    c_refresh_frame: u64,
+    c_frame_submitted: u64,
+    c_dx_present_submitted: u32,
+    c_frame_confirmed: u64,
+    c_dx_present_confirmed: u32,
+    c_refresh_confirmed: u64,
+    c_dx_refresh_confirmed: u32,
+    c_frames_late: u64,
+    c_frames_outstanding: u32,
+    c_frame_displayed: u64,
+    qpc_frame_displayed: u64,
+    c_refresh_frame_displayed: u64,
+    c_frame_complete: u64,
+    qpc_frame_complete: u64,
+    c_frame_pending: u64,
+    qpc_frame_pending: u64,
+    c_frames_displayed: u64,
+    c_frames_complete: u64,
+    c_frames_pending: u64,
+    c_frames_available: u64,
+    c_frames_dropped: u64,
+    c_frames_missed: u64,
+    c_refresh_next_displayed: u64,
+    c_refresh_next_presented: u64,
+    c_refreshes_displayed: u64,
+    c_refreshes_presented: u64,
+    c_refresh_started: u64,
+    c_pixels_received: u64,
+    c_pixels_drawn: u64,
+    c_buffers_empty: u64,
+}
+
 #[link(name = "dwmapi")]
 unsafe extern "system" {
     fn DwmFlush() -> i32;
+    /// 拿 DWM 的合成刷新率（不是 `GetDeviceCaps` 的显示模式刷新率）。
+    /// 返回 HRESULT：0 = S_OK，负数为失败（远程桌面 / 无合成器时会失败，调用方回退 60Hz）。
+    fn DwmGetCompositionTimingInfo(hwnd: HWND, info: *mut DwmTimingInfo) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -101,6 +167,31 @@ const CARET_GAP: i32 = 6;
 /// 官方 `WeaselPanel::AUTOREV_TIMER` / `AUTOHIDE_TIMER` 的作用：自动恢复与自动隐藏。
 const AUTOREV_TIMER: usize = 2;
 const AUTOHIDE_TIMER: usize = 3;
+/// **延迟隐藏**（2026-11-08 修「虎整句打字一直闪烁」）：引擎在整句 Lua 重算期间
+/// 会夹带「无候选、无预编辑」的中间快照，主题收到就立刻 `ShowWindow(SW_HIDE)`
+/// + 清屏 + `DwmFlush` + Cloak，下一帧有内容又重开亚克力、重抓高斯模糊 ——
+/// 每键一次 hide→show 风暴，肉眼就是持续闪烁。
+///
+/// 改成：收到隐藏请求只挂一个短计时器，期间只要来了可见快照就撤销；
+/// 队列空闲（用户真的停手）`HIDE_DEBOUNCE_MS` 后才真正隐藏。
+/// WM_TIMER 只在消息队列空时生成，恰好与「打字期间别隐藏」的语义吻合。
+///
+/// 2026-11-08 17:5x 实测：原值 120ms 仍会闪 —— 上屏/确认后到下一键的间隔
+/// 常大于 120ms（用户报「一直很闪，不是布局的问题」），于是每次提交都
+/// hide→show 一次。改成 450ms：正常连续打字（键间隔 <450ms）全程不隐藏；
+/// 真停手 450ms 后收窗，只收一次，不再反复闪。
+const HIDE_DEBOUNCE_TIMER: usize = 4;
+// 2026-11-08 18:3x 用户报「打字后界面按逗号句号消失太慢、上屏后消失也慢」：
+// 450ms 是早先治 hide/show 风暴的保守值，实测太"粘手"；配合新 TIP/引擎后
+// 回落到 200ms（保留去抖作用，肉眼几乎跟手）。
+//
+// 2026-11-08 20:5x 用户报「虎码 lua 一直闪烁」：live `theme.log` 最后 3000 行里
+// 有 300 次「[不可见帧] → 将隐藏」、263 次 `src=debounced_hide` 实际收窗；
+// 同期按键间隔 P75=238ms、>200ms 占 29%，200ms 去抖在「上屏/确认→下一键」的
+// 常见间隔里必然触发，hide→show 风暴复发。450ms 时只有约 10% 的间隔会被打穿，
+// 是记录里验证过能压住虎整句闪烁的值。用户确认接受「收窗稍慢」换「不闪」，
+// 故回到 450ms，不要再往小调。
+const HIDE_DEBOUNCE_MS: u32 = 450;
 
 // ---------------------------------------------------------------- 图形资源
 
@@ -109,6 +200,57 @@ const AUTOHIDE_TIMER: usize = 3;
 /// 注意：**Direct2D 工厂不在这里** —— 路径几何、画刷必须与呈现层出自同一个工厂
 /// （否则 `EndDraw` 报 `D2DERR_WRONG_FACTORY`），所以几何用
 /// [`crate::presenter::Presenter::d2d_factory`]。
+/// DirectWrite 文本测量结果缓存的容量上限。
+///
+/// 候选窗文本种类有限但用户词无限，不能让它跟着进程无限长；满了整份丢掉即可
+/// （下一帧重新量一遍，命中率会短暂回落，但不会错）。
+const MEASURE_CACHE_MAX: usize = 2048;
+
+/// 区分四套文本格式 + 预测标签小号格式。字号/字体/DPI 变化由 [`Graphics::refresh_formats`]
+/// 统一清空缓存兜底，所以 key 不必把整个 `Metrics` 塞进来。
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum MeasureFormat {
+    Label,
+    Text,
+    Comment,
+    PredictionTag,
+    Preedit,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct MeasureKey {
+    format: MeasureFormat,
+    text: String,
+    /// `max_width` 的位模式：竖排文本为 0，横排为 `m.max_width`。
+    max_width_bits: u32,
+}
+
+#[derive(Default)]
+struct MeasureCache(RefCell<HashMap<MeasureKey, Size>>);
+
+impl MeasureCache {
+    fn get(&self, key: &MeasureKey) -> Option<Size> {
+        self.0.borrow().get(key).copied()
+    }
+
+    fn put(&self, key: MeasureKey, size: Size) {
+        let mut map = self.0.borrow_mut();
+        if map.len() >= MEASURE_CACHE_MAX && !map.contains_key(&key) {
+            map.clear();
+        }
+        map.insert(key, size);
+    }
+
+    fn clear(&self) {
+        self.0.borrow_mut().clear();
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0.borrow().len()
+    }
+}
+
 struct Graphics {
     /// 供文本测量和布局使用的共享 DirectWrite 工厂。
     write: IDWriteFactory,
@@ -118,6 +260,10 @@ struct Graphics {
     indicator: IDWriteTextFormat,
     /// 与此 HWND 关联的呈现层：D3D11 + DXGI 组合交换链 + DirectComposition + D2D 设备上下文。
     target: Option<crate::presenter::Presenter>,
+    /// 2026-11-10：每次 `measure()` 原本要做 **两次** `CreateTextLayout` +
+    /// `GetMetrics` + `GetOverhangMetrics`，`measure_all` 一屏 5 候选就是 15 次调用 /
+    /// 30 次建布局，且零缓存。序号、编码、常用注释每帧重复，命中率很高。
+    measure_cache: MeasureCache,
 }
 
 /// 预测标签（预测项的 `secondary_text`）字号 = 候选字号的 1/2。
@@ -125,6 +271,9 @@ struct Graphics {
 /// 2026-11-08 用户口径：「我说的是预测这个标签做成小一号，预测的候选字号不变」
 /// —— 小一号的是「预测」这两个字的标签，**不是**预测候选的正文文字（正文仍用
 /// `formats.text`，字号跟普通候选一致）。「小一号」= `font_point * 0.5`，此前已确认。
+///
+/// 2026-11-08 稍后用户「不要显示预测这个标签了」⇒ 见
+/// [`layout::prediction_tag_visible`]，标签恒不绘制；本函数与半字号格式保留备用。
 ///
 /// 抽成独立函数是为了让单测能钉住 1/2 这个口径（真实 DirectWrite 格式无法在
 /// 单测里建）；`Graphics::make_formats` 用它建 `Formats::prediction_tag`。
@@ -149,6 +298,7 @@ impl Graphics {
             formats,
             indicator,
             target: None,
+            measure_cache: MeasureCache::default(),
         })
     }
 
@@ -255,25 +405,42 @@ impl Graphics {
             DWRITE_WORD_WRAPPING_NO_WRAP,
             m,
         )?;
+        // 字体/DPI 换了，之前量出来的尺寸一律作废。
+        self.measure_cache.clear();
         Ok(())
     }
 
     /// 官方 `D2D::GetTextSize`：量宽度含尾随空白、向上取整，并把 overhang 的正向溢出补进尺寸。
-    fn measure(&self, text: &str, format: &IDWriteTextFormat, m: &Metrics) -> Size {
+    ///
+    /// 2026-11-10 加测量结果 memo：`format` 用 [`MeasureFormat`] 标身份（COM 对象地址
+    /// 没法当稳定 key），`max_width` 按位模式入 key；字体/DPI 变化由 `refresh_formats`
+    /// 清空。测量失败不缓存，免得把临时的 DWrite 故障固化成永久零尺寸。
+    fn measure(
+        &self,
+        text: &str,
+        tag: MeasureFormat,
+        format: &IDWriteTextFormat,
+        m: &Metrics,
+    ) -> Size {
         if text.is_empty() {
             return Size::ZERO;
         }
+        let max_width = if m.layout_type.is_vertical_text() {
+            0.0
+        } else {
+            m.max_width
+        };
+        let key = MeasureKey {
+            format: tag,
+            text: text.to_owned(),
+            max_width_bits: max_width.to_bits(),
+        };
+        if let Some(size) = self.measure_cache.get(&key) {
+            return size;
+        }
         unsafe {
             let wide: Vec<u16> = text.encode_utf16().collect();
-            let max_width = if m.layout_type.is_vertical_text() {
-                0.0
-            } else {
-                m.max_width
-            };
-            let Ok(layout) = self
-                .write
-                .CreateTextLayout(&wide, format, max_width, 0.0)
-            else {
+            let Ok(layout) = self.write.CreateTextLayout(&wide, format, max_width, 0.0) else {
                 return Size::ZERO;
             };
             let mut metrics = DWRITE_TEXT_METRICS::default();
@@ -306,6 +473,7 @@ impl Graphics {
                     }
                 }
             }
+            self.measure_cache.put(key, size);
             size
         }
     }
@@ -324,33 +492,48 @@ impl Graphics {
             // 序号：官方来自 rime 的 labels（"1" "2" …续页继续累加），再套 style/label_format
             let label = m.format_label(&(i as u32 + 1).to_string());
             measured.label.push(if m.label_font_valid {
-                self.measure(&label, &self.formats.label, m)
+                self.measure(&label, MeasureFormat::Label, &self.formats.label, m)
             } else {
                 Size::ZERO
             });
             measured.text.push(if m.text_font_valid {
-                self.measure(&item.primary_text, &self.formats.text, m)
+                self.measure(
+                    &item.primary_text,
+                    MeasureFormat::Text,
+                    &self.formats.text,
+                    m,
+                )
             } else {
                 Size::ZERO
             });
-            measured.comment.push(if m.comment_font_valid {
-                // 2026-11-08 用户口径：「预测」这个标签做成小一号，预测的候选字号不变。
-                // kind == prediction 的 secondary_text 就是「预测」标签（引擎按
-                // comment == "预测" 标 kind，见 `renderer_bridge::render_snapshot`），
-                // 用 font_point/2 的小号格式量；普通候选的注释仍用 `comment`。
-                let format = if item.kind == PREDICTION_KIND {
-                    &self.formats.prediction_tag
+            measured.comment.push(
+                if item.kind == PREDICTION_KIND && !prediction_tag_visible() {
+                    // 2026-11-08「不要显示预测这个标签了」：不量宽 ⇒ layout 不给注释
+                    // 留位置、paint 两侧同口径跳过落笔，候选框不会留空注释占位。
+                    // 引擎侧 `renderer_bridge` 也已不再下发该注释（两道独立防线）。
+                    Size::ZERO
+                } else if m.comment_font_valid {
+                    // 标签若将来重新打开：kind == prediction 的 secondary_text 用
+                    // font_point/2 的小号格式量；普通候选的注释仍用 `comment`。
+                    let (format, tag) = if item.kind == PREDICTION_KIND {
+                        (&self.formats.prediction_tag, MeasureFormat::PredictionTag)
+                    } else {
+                        (&self.formats.comment, MeasureFormat::Comment)
+                    };
+                    self.measure(&item.secondary_text, tag, format, m)
                 } else {
-                    &self.formats.comment
-                };
-                self.measure(&item.secondary_text, format, m)
-            } else {
-                Size::ZERO
-            });
+                    Size::ZERO
+                },
+            );
         }
         // 预编辑：我们的快照只给"整段组字中"，所以整段都是高亮段（官方 composition 的常态）
         if let Some(preedit) = &view.preedit {
-            let size = self.measure(&preedit.text, &self.formats.preedit, m);
+            let size = self.measure(
+                &preedit.text,
+                MeasureFormat::Preedit,
+                &self.formats.preedit,
+                m,
+            );
             measured.preedit = Parts {
                 before: Size::ZERO,
                 hilite: size,
@@ -359,13 +542,23 @@ impl Graphics {
             };
         }
         // 翻页字形（官方用 `<` / `>`，字体同预编辑）
-        measured.page_prev = self.measure(layout::PAGE_PREV, &self.formats.preedit, m);
-        measured.page_next = self.measure(layout::PAGE_NEXT, &self.formats.preedit, m);
+        measured.page_prev = self.measure(
+            layout::PAGE_PREV,
+            MeasureFormat::Preedit,
+            &self.formats.preedit,
+            m,
+        );
+        measured.page_next = self.measure(
+            layout::PAGE_NEXT,
+            MeasureFormat::Preedit,
+            &self.formats.preedit,
+            m,
+        );
         // 标记：官方在没有 mark_text 时用 "|" 的尺寸做基准
         measured.mark = if m.mark_text.is_empty() {
-            self.measure("|", &self.formats.text, m)
+            self.measure("|", MeasureFormat::Text, &self.formats.text, m)
         } else {
-            self.measure(&m.mark_text, &self.formats.text, m)
+            self.measure(&m.mark_text, MeasureFormat::Text, &self.formats.text, m)
         };
         measured
     }
@@ -410,12 +603,26 @@ impl Graphics {
 
 // ---------------------------------------------------------------- 状态
 
+/// 决定 `measured` / `layout` 能不能跨帧复用的两件事：配置（含字体/DPI）代数，
+/// 以及 `bar_position: auto` 每帧按光标方位算出来的编码栏上下位置。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LayoutKey {
+    generation: u64,
+    bar_at_bottom: bool,
+}
+
+/// 内容没变且布局参数没变时，整份测量结果和布局都能直接复用。
+fn reusable_layout(same_content: bool, old: LayoutKey, new: LayoutKey) -> bool {
+    same_content && old == new
+}
+
 /// 一次呈现所需的不可变快照、事件发送端、实测尺寸与布局。
 struct Content {
     snapshot: CandidateView,
     events: EventSink,
     measured: Measured,
     layout: Layout,
+    layout_key: LayoutKey,
 }
 
 /// 窗口 UI 状态；由 [`Window::app`] 的动态借用保护，避免回调重入时别名可变访问。
@@ -438,6 +645,8 @@ struct App {
     /// 当前生效的 style（含 DPI 缩放）与配色。
     metrics: Metrics,
     scheme: ColorScheme,
+    /// 每次 `reload` / `set_dpi` 换字体时 +1，用来让缓存的测量结果失效。
+    generation: u64,
     /// 当前悬停与按下（官方 `m_hoverIndex` / 点击计时）。
     hovered: Option<Hit>,
     pressed: Option<Hit>,
@@ -464,11 +673,54 @@ const ANIM_DURATION: f32 = 0.10;
 /// 帧消息是普通投递消息，一定会被取走派发，不再看计时器的脸色。
 const ANIM_MSG: i32 = WM_APP + 0x2a;
 
-/// 一帧的目标间隔（毫秒）：100ms ≈ 12 帧，是 60Hz 下 CSS 过渡（6 帧）的两倍。
-const ANIM_FRAME_MS: u32 = 8;
+/// 动画帧间隔（毫秒）的**兜底值** ≈ 60Hz。实际帧间隔在动画启动时按 DWM 合成
+/// 刷新率算：60Hz → 17ms、120Hz → 8ms、144Hz → 7ms（被下限钳到 8ms）。
+///
+/// 2026-11-10 抄 msime `Window.cpp` 的 `GetNextAnimationDeadline()`：原来固定
+/// `ANIM_FRAME_MS = 8`（≈125FPS），在 60Hz 屏上 DWM 只按 60Hz 合成，一帧动画
+/// 12 次 paint 里有约一半是无效帧。改成按刷新节拍走后 60Hz 只需 6 帧，绘制开销
+/// 直接减半；高刷屏仍保持 8ms 不退化。
+const ANIM_FRAME_FALLBACK_MS: u32 = 16;
+/// 帧间隔下限（≈120Hz，避免异常高的刷新率又把动画变回过采样）。
+const ANIM_FRAME_MIN_MS: u32 = 8;
+/// 帧间隔上限（≈50Hz，防止远程桌面 / 低刷新率把 100ms 动画拉成两三帧幻灯片）。
+const ANIM_FRAME_MAX_MS: u32 = 20;
 
-/// 系统计时器精度（`winmm`）。只在动画期间抬到 1ms，结束立刻还回去 —— 否则 `Sleep(8)`
-/// 会被系统四舍五入到 15.6ms，一帧的间隔就不匀了。
+/// 显示刷新率（Hz）→ 一帧的目标间隔（毫秒）。纯函数，便于单测。
+fn frame_interval_ms(hz: f32) -> u32 {
+    if !hz.is_finite() || hz <= 0.0 {
+        return ANIM_FRAME_FALLBACK_MS;
+    }
+    ((1000.0 / hz).round() as u32).clamp(ANIM_FRAME_MIN_MS, ANIM_FRAME_MAX_MS)
+}
+
+/// 从 DWM 拿当前合成刷新率（Hz）。远程桌面 / 无合成器等场合会失败，返回 `None`
+/// 让调用方回退到 60Hz——**失败是安全的**，不会让动画停摆。
+unsafe fn composition_refresh_hz(hwnd: HWND) -> Option<f32> {
+    let mut info: DwmTimingInfo = std::mem::zeroed();
+    info.cb_size = std::mem::size_of::<DwmTimingInfo>() as u32;
+    if unsafe { DwmGetCompositionTimingInfo(hwnd, &mut info) } < 0 {
+        return None;
+    }
+    // packed(1) 结构体：按值 Copy 出字段，不取引用（避免 unaligned reference）。
+    let num = info.rate_refresh.ui_numerator;
+    let den = info.rate_refresh.ui_denominator;
+    if num == 0 || den == 0 {
+        return None;
+    }
+    Some(num as f32 / den as f32)
+}
+
+/// 系统计时器精度（`winmm`）。只在动画期间抬到 1ms，结束立刻还回去 —— 否则
+/// `Sleep(interval_ms)` 会被系统按 15.6ms 粒度四舍五入，帧间隔就抖成
+/// 15.6~31.2ms，连按 ↓ 时肉眼可见一顿。
+///
+/// 2026-11-10 调研时考虑过彻底去掉这个全局精度抬升（msime 靠 DWM 合成节拍
+/// 不需要它），但 Weasel 的帧间等待仍走 `Sleep`：去掉会让 60Hz 帧抖动、
+/// 高刷屏退化到 60FPS。要安全去掉得引入 high-resolution waitable timer +
+/// `MsgWaitForMultipleObjects` 重排消息循环——那会碰 2026-11-01 出过
+/// 「WM_TIMER 一帧都没到」事故的核心循环，超出本轮改动范围。保留：它只在
+/// 100ms 的动画窗口内生效，是微软认可的「短时必要」用法。
 #[link(name = "winmm")]
 unsafe extern "system" {
     fn timeBeginPeriod(period: u32) -> u32;
@@ -557,6 +809,8 @@ struct Anim {
     last: std::time::Instant,
     /// 已经画了几帧（结束后记进日志，便于确认动画真的在跑）。
     frames: u32,
+    /// 这一段的帧间间隔（毫秒）：启动时按 DWM 合成刷新率定，不再固定 8ms。
+    interval_ms: u32,
 }
 
 struct Window {
@@ -585,6 +839,9 @@ struct Window {
     visual_hilite: std::cell::Cell<Option<Rect>>,
     /// 上一帧的选中下标（用来判断"刚换了候选"）。
     last_selected: Cell<usize>,
+    /// 是否已挂起「延迟隐藏」（`HIDE_DEBOUNCE_TIMER` 在跑）。
+    /// 打字期间的空快照只置位，不真的 `SW_HIDE`；收到可见快照立即撤销。
+    hide_pending: Cell<bool>,
 }
 
 /// Direct2D 设备丢失后的有限重试状态。
@@ -733,6 +990,7 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
         anim: std::cell::RefCell::new(None),
         visual_hilite: std::cell::Cell::new(None),
         last_selected: Cell::new(usize::MAX),
+        hide_pending: Cell::new(false),
         app: RefCell::new(App::new(loaded, 96.0, glass)?),
         error: RefCell::new(None),
         recovery: RefCell::new(Recovery::default()),
@@ -920,6 +1178,7 @@ impl App {
             raw_style: loaded.style,
             metrics,
             scheme: loaded.scheme,
+            generation: 0,
             hovered: None,
             pressed: None,
             sticky: false,
@@ -933,6 +1192,7 @@ impl App {
         self.metrics = config::metrics(&self.raw_style, dpi.max(1) as f32, paint::tier().flat())
             .with_colors(&self.scheme);
         let _ = self.graphics.refresh_formats(&self.metrics);
+        self.generation = self.generation.wrapping_add(1);
         if let Some(content) = &mut self.content {
             content.measured = self.graphics.measure_all(&self.metrics, &content.snapshot);
             content.layout = Layout::build(&self.metrics, &content.snapshot, &content.measured);
@@ -969,6 +1229,7 @@ impl App {
             config::metrics(&self.raw_style, dpi.max(1) as f32, paint::tier().flat())
                 .with_colors(&self.scheme);
         let _ = self.graphics.refresh_formats(&self.metrics);
+        self.generation = self.generation.wrapping_add(1);
         if let Some(presenter) = self.graphics.target.as_ref() {
             apply_antialias(presenter, self.metrics.antialias);
         }
@@ -1296,6 +1557,27 @@ impl Window {
 
     /// 应用候选快照：内容没变就只重新定位，变了就重新测量 + 布局 + 绘制。
     fn render(&self, snapshot: &CandidateView, events: &EventSink) -> Result<(), String> {
+        // 2026-11-08 防闪烁：只要又收到一帧快照，就撤销挂起的延迟隐藏。
+        // 打字时「空快照 → 有内容」交替，挂起永远到不了期；真停手 120ms 后
+        // WM_TIMER 才会落地隐藏。不可见分支会在下面立刻重新挂起，不冲突。
+        if self.hide_pending.get() {
+            // 2026-11-08 诊断（排查虎整句闪烁）：记录「挂起隐藏又被谁撤销」。
+            crate::diagnostics::record(format_args!(
+                "[取消挂起隐藏] 新快照 visible={} items={} preedit={} content_id={}",
+                snapshot.visible,
+                snapshot.items.len(),
+                snapshot.preedit.is_some(),
+                snapshot.content_id
+            ));
+        }
+        self.cancel_pending_hide();
+        // 2026-11-08 `bar_position: auto`：本帧的编码栏位置按候选窗相对光标的
+        // 方位决定，做成一份局部 metrics，不污染 `App::metrics` 里的全局配置。
+        let layout_metrics = self.layout_metrics(snapshot);
+        let layout_key = LayoutKey {
+            generation: self.app.borrow().generation,
+            bar_at_bottom: layout_metrics.bar_at_bottom,
+        };
         // 面板常驻（2026-11-07 用户要求）：**每次**渲染都留下最新的 EventSink。
         // 候选窗收起后 `content` 会被清空，面板点按（`WM_APP_COMMIT_TEXT`）靠它把
         // 文本送进引擎；配合 `Factory::capabilities` 的 `resident=true`，渲染器在
@@ -1303,23 +1585,22 @@ impl Window {
         self.app.borrow_mut().last_events = Some(events.clone());
         let same = {
             let mut app = self.app.borrow_mut();
-            let App {
-                graphics,
-                content,
-                metrics,
-                ..
-            } = &mut *app;
+            let App { content, .. } = &mut *app;
             match content.as_mut() {
                 Some(content)
                     if crate::presentation::is_visible(snapshot)
                         || crate::presentation::is_mode_indicator_visible(snapshot) =>
                 {
-                    if crate::theme_api::same_content(&content.snapshot, snapshot) {
+                    if reusable_layout(
+                        crate::theme_api::same_content(&content.snapshot, snapshot),
+                        content.layout_key,
+                        layout_key,
+                    ) {
+                        // 2026-11-10：注释早写着「内容没变就只重新定位」，旧实现却每帧
+                        // 重跑 measure_all（15 次 DirectWrite 测量）+ Layout::build。
+                        // 现在只换快照与事件，测量和布局整份复用，下面 `position()` 照旧。
                         content.snapshot = snapshot.clone();
                         content.events = events.clone();
-                        content.measured = graphics.measure_all(metrics, &content.snapshot);
-                        content.layout =
-                            Layout::build(metrics, &content.snapshot, &content.measured);
                         true
                     } else {
                         false
@@ -1351,6 +1632,19 @@ impl Window {
         if !(crate::presentation::is_visible(snapshot)
             || crate::presentation::is_mode_indicator_visible(snapshot))
         {
+            // 2026-11-08 诊断（排查虎整句「一直很闪」）：只在**窗口正显示着**时记录，
+            // 因为「已隐藏时的空帧」不会造成闪烁，记了只会把 theme.log 写爆。
+            if self.shown.get() {
+                crate::diagnostics::record(format_args!(
+                    "[不可见帧] 窗口正显示 → 将隐藏：items={} preedit={} active={} visible={} content_id={} pending={}",
+                    snapshot.items.len(),
+                    snapshot.preedit.is_some(),
+                    snapshot.active,
+                    snapshot.visible,
+                    snapshot.content_id,
+                    self.hide_pending.get()
+                ));
+            }
             self.hide("render_invisible");
             return Ok(());
         }
@@ -1369,11 +1663,11 @@ impl Window {
         let was_hidden = self.app.borrow().content.is_none();
         {
             let mut app = self.app.borrow_mut();
-            let measured = app.graphics.measure_all(&app.metrics, snapshot);
+            let measured = app.graphics.measure_all(&layout_metrics, snapshot);
             let layout = if snapshot.mode_indicator.is_some() && snapshot.items.is_empty() {
-                Layout::mode_indicator(&app.metrics)
+                Layout::mode_indicator(&layout_metrics)
             } else {
-                Layout::build(&app.metrics, snapshot, &measured)
+                Layout::build(&layout_metrics, snapshot, &measured)
             };
             crate::diagnostics::record_verbose(format_args!(
                 "布局: 面板 {:.1}x{:.1} DIP · 内容 {:.1},{:.1}-{:.1},{:.1} · 候选 {} 行 · 预编辑 {} · 翻页 {}",
@@ -1401,6 +1695,7 @@ impl Window {
                 events: events.clone(),
                 measured,
                 layout,
+                layout_key,
             });
         }
         self.position().map_err(|e| e.to_string())?;
@@ -1434,12 +1729,81 @@ impl Window {
         self.health()
     }
 
-    /// 隐藏窗口并释放交互状态。
+    /// 生成本帧布局用的 metrics：`bar_position: auto` 时按候选窗相对光标的方位
+    /// 覆盖编码栏位置，做成本帧局部变量，不污染 `App::metrics` 的全局配置。
+    fn layout_metrics(&self, snapshot: &CandidateView) -> Metrics {
+        let mut m = self.app.borrow().metrics.clone();
+        if m.bar_position_auto {
+            m.bar_at_bottom = self.desired_bar_at_bottom(snapshot, &m);
+        }
+        m
+    }
+
+    /// `auto` 的判据：**编码栏永远贴着光标那一侧**。
+    ///
+    /// 光标下方放不下整窗时 `reposition` 会把窗口翻到光标上方（`y = anchor.top - h`），
+    /// 此时编码栏放窗口**底部**才紧挨光标；窗口在下方时则放**顶部**。
+    /// 用上一帧窗口高度估算，第一帧没有高度就先按配置落点。
+    fn desired_bar_at_bottom(&self, snapshot: &CandidateView, m: &Metrics) -> bool {
+        let Some(anchor) = snapshot.anchor.as_ref().filter(|a| a.valid) else {
+            return m.bar_at_bottom;
+        };
+        let Some(work) = crate::presentation::work_area(anchor) else {
+            return m.bar_at_bottom;
+        };
+        let est_h = self
+            .app
+            .borrow()
+            .content
+            .as_ref()
+            .map(|c| pixels(c.layout.content_size.cy, self.dpi.get()))
+            .unwrap_or(0);
+        anchor.bottom.saturating_add(est_h) > work.bottom
+    }
+
+    /// 撤销挂起的延迟隐藏（`render()` 收到新快照时调）。
+    fn cancel_pending_hide(&self) {
+        if self.hide_pending.replace(false) {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd.get()), HIDE_DEBOUNCE_TIMER);
+            }
+        }
+    }
+
+    /// **请求**隐藏：不立即 `SW_HIDE`，只挂一个短计时器（防打字闪烁）。
     ///
     /// `why` 是来源标记（诊断，2026-11-07）：
     /// `render_invisible` = `render()` 收到不可见快照；`backend_hide` = 渲染器
     /// `Presentation::apply/hide` 直接调后端；`autohide_timer` = 模式提示到期。
     fn hide(&self, why: &'static str) {
+        let _ = why;
+        // 根本没上屏：没有「闪」可防，直接收尾（清 content、停动画等）。
+        if !self.shown.get() {
+            self.hide_now("debounced_hide");
+            return;
+        }
+        // 已挂起就不重复设计计时器；计时器从**第一次**隐藏请求起算，
+        // 期间任何可见快照都会把它撤销（见 `render` 开头）。
+        if self.hide_pending.get() {
+            return;
+        }
+        self.hide_pending.set(true);
+        unsafe {
+            let _ = SetTimer(
+                Some(self.hwnd.get()),
+                HIDE_DEBOUNCE_TIMER,
+                HIDE_DEBOUNCE_MS,
+                None,
+            );
+        }
+    }
+
+    /// 真正隐藏窗口并释放交互状态（由 `HIDE_DEBOUNCE_TIMER` 落地）。
+    fn hide_now(&self, why: &'static str) {
+        self.hide_pending.set(false);
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd.get()), HIDE_DEBOUNCE_TIMER);
+        }
         // 2026-11-07 用户口径「面板常驻」：候选窗收起（组字结束/上屏/失焦）**不再**
         // 关闭三辅助面板 —— 面板要能继续点、继续拖，输入结束也不消失。
         // 只有面板自己的关闭钮或主题后端销毁（服务退出）才关，见 `panels::close_all_panels`。
@@ -1576,10 +1940,20 @@ impl Window {
                         // CSS 过渡的语义：**改向时从当前算出来的位置接着滑**，而不是从
                         // 旧候选的矩形重新起步 —— 连按 ↓ 才不会一格一格地顿。
                         let from = self.visual_hilite.get().unwrap_or(to);
-                        crate::diagnostics::record(format_args!(
+                        // 2026-11-10：逐帧/高频明细一律走 record_verbose（默认零写盘），
+                        // 排查动画时 WEASEL_THEME_LOG=1 全量恢复。
+                        crate::diagnostics::record_verbose(format_args!(
                             "高亮动画: {} → {}（{}ms 缓出）",
                             self.last_selected.get(), selected_now, (ANIM_DURATION * 1000.0) as u32
                         ));
+                        // 帧间隔按 DWM 合成刷新率定一次；失败（远程桌面等）回退 60Hz。
+                        // 不盲抄 msime 的 DwmFlush 驱动：WS_EX_NOREDIRECTIONBITMAP
+                        // 窗口的 D2D Present 与 DwmFlush 不同步（hide 残留过透明面板）。
+                        let interval_ms = unsafe {
+                            composition_refresh_hz(self.hwnd.get())
+                                .map(frame_interval_ms)
+                                .unwrap_or(ANIM_FRAME_FALLBACK_MS)
+                        };
                         *anim = Some(Anim {
                             from,
                             to,
@@ -1587,14 +1961,16 @@ impl Window {
                             start: std::time::Instant::now(),
                             last: std::time::Instant::now(),
                             frames: 0,
+                            interval_ms,
                         });
                         timeBeginPeriod(1);
                         // 自排程：画完这一帧再投下一帧，不依赖 WM_TIMER 是否被派发。
                         post_anim_frame(self.hwnd.get());
-                        crate::diagnostics::record(format_args!(
-                            "高亮动画启动 hwnd={:?}（{:.0}ms / {ANIM_FRAME_MS}ms 一帧）",
+                        crate::diagnostics::record_verbose(format_args!(
+                            "高亮动画启动 hwnd={:?}（{:.0}ms / {}ms 一帧，DWM 节拍）",
                             self.hwnd.get().0,
-                            ANIM_DURATION * 1000.0
+                            ANIM_DURATION * 1000.0,
+                            interval_ms
                         ));
                     }
                 }
@@ -1881,10 +2257,11 @@ impl Window {
 /// 1. 锚点用插入点，并把下边界下移 6 像素（官方 `MoveTo` 里 `m_inputPos.bottom += 6`）；
 /// 2. 开了阴影时按 `offset` 回退，避免阴影把面板整体推离插入点；
 /// 3. 左右夹进工作区；
-/// 4. 下方放不下（或已经 sticky）就翻到插入点上方 6 像素，并记住 sticky；
+/// 4. 仅当「光标下方容不下整窗」时才翻到插入点上方 6 像素；只要下方放得下就落回下方，
+///    不再让 sticky 永久锁死在上方（否则移到顶部输入框时窗口会卡在屏幕顶、盖住输入框）；
 /// 5. 最后再夹一次上边界。
 ///
-/// 返回的 `sticky` 要写回窗口状态：官方 `m_sticky` 一旦置上，插入点没大幅移动前一直生效。
+/// 返回的 `sticky` 只反映本帧是否真的翻到了上方，写回窗口状态供下一帧参考。
 struct Position {
     x: i32,
     y: i32,
@@ -1914,9 +2291,11 @@ fn reposition(
     if x < work_left {
         x = work_left;
     }
-    let mut sticky = sticky;
-    if y + height > work_bottom || sticky {
-        sticky = true;
+    // 只在「光标下方放不下整窗」时翻到上方；否则一律落回光标下方，
+    // 不让 sticky 永久锁死在上方（否则移到顶部输入框时窗口会卡在屏幕顶、盖住输入框）。
+    let flip = y + height > work_bottom;
+    let mut sticky = flip;
+    if flip {
         y = anchor.top - CARET_GAP - height;
         if m.shadow_radius != 0.0 && m.shadow_offset_y > 0.0 {
             y -= pixels(m.shadow_offset_y, dpi);
@@ -2338,10 +2717,10 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                                     (false, 0u32)
                                 } else {
                                     let next = a.last
-                                        + std::time::Duration::from_millis(ANIM_FRAME_MS as u64);
+                                        + std::time::Duration::from_millis(a.interval_ms as u64);
                                     let now = std::time::Instant::now();
                                     let wait = if next > now {
-                                        ((next - now).as_millis() as u32).min(ANIM_FRAME_MS)
+                                        ((next - now).as_millis() as u32).min(a.interval_ms)
                                     } else {
                                         0
                                     };
@@ -2360,7 +2739,7 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                         (a.start.elapsed().as_secs_f32() / ANIM_DURATION).clamp(0.0, 1.0)
                     });
                     if let Some(t) = t_now {
-                        crate::diagnostics::record(format_args!(
+                        crate::diagnostics::record_verbose(format_args!(
                             "动画帧 t={t:.2}（第 {} 帧）",
                             window.anim.borrow().as_ref().map(|a| a.frames).unwrap_or(0)
                         ));
@@ -2372,7 +2751,7 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                     let cost = started.elapsed().as_secs_f32() * 1000.0;
                     if cost > 8.0 {
                         crate::diagnostics::record(format_args!(
-                            "动画帧耗时 {cost:.1}ms（超过 8ms，滑动会顿）"
+                            "动画帧绘制 {cost:.1}ms（>8ms 预警；帧预算按 DWM 节拍）"
                         ));
                     }
                     if running {
@@ -2387,7 +2766,7 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                                     window.anim.borrow().as_ref().map(|a| a.frames).unwrap_or(0);
                                 *window.anim.borrow_mut() = None;
                                 timeEndPeriod(1);
-                                crate::diagnostics::record(format_args!(
+                                crate::diagnostics::record_verbose(format_args!(
                                     "动画结束：共 {frames} 帧"
                                 ));
                             }
@@ -2410,6 +2789,12 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                 0x0113 if wp.0 == AUTOREV_TIMER => {
                     let _ = KillTimer(Some(hwnd), AUTOREV_TIMER);
                     window.invalidate();
+                    return LRESULT(0);
+                }
+                0x0113 if wp.0 == HIDE_DEBOUNCE_TIMER => {
+                    // 延迟隐藏到期：期间没有新的可见快照来撤销，才真的收窗口。
+                    let _ = KillTimer(Some(hwnd), HIDE_DEBOUNCE_TIMER);
+                    window.hide_now("debounced_hide");
                     return LRESULT(0);
                 }
                 0x0113 if wp.0 == AUTOHIDE_TIMER => {
@@ -2504,7 +2889,7 @@ unsafe fn dispatch(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                         None
                     };
                     if changed {
-                        crate::diagnostics::record(format_args!(
+                        crate::diagnostics::record_verbose(format_args!(
                             "悬停: {:?} → {:?}（hover_type={:?}）",
                             changed, app.hovered, app.metrics.hover
                         ));
@@ -2713,10 +3098,151 @@ mod tests {
     use crate::theme_api::Anchor;
     use weasel_style::UIStyle;
 
+    // 2026-11-10 第二条：帧间隔按 DWM 合成刷新率算，替掉固定 8ms 帧循环。
+    #[test]
+    fn anim_interval_60hz_is_one_refresh_tick() {
+        // 60Hz → 1000/60 = 16.67 → 17ms；100ms 动画从 12 帧降到 6 帧。
+        assert_eq!(frame_interval_ms(60.0), 17);
+    }
+
+    #[test]
+    fn anim_interval_120hz_keeps_high_refresh() {
+        // 120Hz → 8ms，和高刷屏原来的固定 8ms 一致，不退化。
+        assert_eq!(frame_interval_ms(120.0), 8);
+    }
+
+    #[test]
+    fn anim_interval_144hz_clamps_to_floor() {
+        // 144Hz → 6.94 → 7ms，被下限钳到 8ms（不追求 144FPS 过采样）。
+        assert_eq!(frame_interval_ms(144.0), 8);
+    }
+
+    #[test]
+    fn anim_interval_30hz_clamps_to_ceiling() {
+        // 30Hz → 33ms，被上限钳到 20ms（避免 100ms 动画只剩 3 帧变幻灯片）。
+        assert_eq!(frame_interval_ms(30.0), 20);
+    }
+
+    #[test]
+    fn anim_interval_75hz_rounds_to_nearest_tick() {
+        assert_eq!(frame_interval_ms(75.0), 13);
+    }
+
+    #[test]
+    fn anim_interval_invalid_hz_falls_back_to_60hz() {
+        // 远程桌面 / 无 DWM 时 DwmGetCompositionTimingInfo 失败 → 回退 16ms。
+        assert_eq!(frame_interval_ms(0.0), 16);
+        assert_eq!(frame_interval_ms(-60.0), 16);
+        assert_eq!(frame_interval_ms(f32::NAN), 16);
+        assert_eq!(frame_interval_ms(f32::INFINITY), 16);
+        assert_eq!(frame_interval_ms(f32::NEG_INFINITY), 16);
+    }
+
     fn metrics(shadow_radius: i32) -> Metrics {
         let mut style = UIStyle::default();
         style.layout.shadow_radius = shadow_radius;
         Metrics::new(&style, 96.0)
+    }
+
+    fn measure_key(format: MeasureFormat, text: &str, max_width: f32) -> MeasureKey {
+        MeasureKey {
+            format,
+            text: text.to_owned(),
+            max_width_bits: max_width.to_bits(),
+        }
+    }
+
+    #[test]
+    fn measure_cache_hits_same_text_and_keeps_formats_apart() {
+        let cache = MeasureCache::default();
+        let key = measure_key(MeasureFormat::Text, "中国", 400.0);
+        assert_eq!(cache.get(&key), None, "冷缓存必须 miss");
+        cache.put(key.clone(), Size::new(32.0, 20.0));
+        assert_eq!(cache.get(&key), Some(Size::new(32.0, 20.0)), "同文本同格式命中");
+        assert_eq!(cache.len(), 1);
+
+        // 同一个字串用序号格式量，或横排/竖排 max_width 不同，都不能串味。
+        assert_eq!(
+            cache.get(&measure_key(MeasureFormat::Label, "中国", 400.0)),
+            None
+        );
+        assert_eq!(
+            cache.get(&measure_key(MeasureFormat::Text, "中国", 0.0)),
+            None
+        );
+        assert_eq!(
+            cache.get(&measure_key(MeasureFormat::Text, "中", 400.0)),
+            None
+        );
+        cache.clear();
+        assert_eq!(cache.get(&key), None, "换字体/DPI 后必须全部失效");
+    }
+
+    #[test]
+    fn measure_cache_caps_growth_without_losing_existing_keys() {
+        let cache = MeasureCache::default();
+        for i in 0..MEASURE_CACHE_MAX {
+            cache.put(
+                measure_key(MeasureFormat::Text, &format!("词{i}"), 400.0),
+                Size::new(i as f32, 1.0),
+            );
+        }
+        assert_eq!(cache.len(), MEASURE_CACHE_MAX);
+        // 重复 put 已有键不该触发清空。
+        cache.put(
+            measure_key(MeasureFormat::Text, "词0", 400.0),
+            Size::new(99.0, 1.0),
+        );
+        assert_eq!(cache.len(), MEASURE_CACHE_MAX);
+        assert_eq!(
+            cache.get(&measure_key(MeasureFormat::Text, "词0", 400.0)),
+            Some(Size::new(99.0, 1.0))
+        );
+        // 第 2049 个新键触发整份丢弃，缓存重新从 1 开始长。
+        cache.put(
+            measure_key(MeasureFormat::Text, "新词", 400.0),
+            Size::new(7.0, 1.0),
+        );
+        assert_eq!(cache.len(), 1);
+        assert_eq!(
+            cache.get(&measure_key(MeasureFormat::Text, "词5", 400.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn layout_reuse_requires_both_same_content_and_same_key() {
+        let old = LayoutKey {
+            generation: 3,
+            bar_at_bottom: true,
+        };
+        assert!(reusable_layout(true, old, old), "内容没变、参数没变 → 复用");
+        assert!(
+            !reusable_layout(false, old, old),
+            "候选内容变了必须重新测量"
+        );
+        assert!(
+            !reusable_layout(
+                true,
+                old,
+                LayoutKey {
+                    generation: 4,
+                    bar_at_bottom: true
+                }
+            ),
+            "reload 换字体后必须重新测量"
+        );
+        assert!(
+            !reusable_layout(
+                true,
+                old,
+                LayoutKey {
+                    generation: 3,
+                    bar_at_bottom: false
+                }
+            ),
+            "bar_position:auto 翻到光标上方后必须重建布局"
+        );
     }
 
     fn anchor(left: i32, top: i32, right: i32, bottom: i32) -> Anchor {
@@ -2746,12 +3272,12 @@ mod tests {
         // 插入点底部离工作区底部只剩 100px，面板高 200 → 翻到上方：top - 6 - 200
         let placed = reposition(&anchor(100, 900, 104, 1000), work, &m, 300, 200, 96, false);
         assert_eq!(placed.y, 900 - 6 - 200);
-        assert!(placed.sticky, "翻上去之后要保持 sticky");
-        // sticky 会一直生效，即使插入点又回到了下方有空间的位置；
-        // 翻上去后越出工作区顶时，官方最后还会再夹一次（所以这里是 0 而不是 -6）
+        assert!(placed.sticky, "下方放不下时要翻到上方并标 sticky");
+        // 插入点回到下方有空间的位置 → 不再被旧的 sticky 锁死在上方，
+        // 而是落回光标下方（top + 6），这样顶部输入框就不会被盖住。
         let again = reposition(&anchor(100, 200, 104, 220), work, &m, 300, 200, 96, true);
-        assert_eq!(again.y, 0, "翻到上方越界后被夹到工作区顶");
-        assert!(again.sticky);
+        assert_eq!(again.y, 220 + 6, "有空间就落回光标下方，不再卡在屏幕顶");
+        assert!(!again.sticky);
     }
 
     #[test]

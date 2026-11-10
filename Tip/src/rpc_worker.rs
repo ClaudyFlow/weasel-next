@@ -10,7 +10,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        mpsc::{self, Sender},
+        mpsc::{self, RecvTimeoutError, Sender},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -28,45 +28,74 @@ use weasel_common::rpc::{
 /// 全局连接 epoch 分配器；0 保留为无效标记，分配回绕到 0 时拒绝该连接。
 static NEXT_CONNECTION_EPOCH: AtomicU64 = AtomicU64::new(1);
 /// 单条 RPC 命令（包括连接握手）的最大处理预算。
-const COMMAND_TIMEOUT: Duration = Duration::from_millis(80);
-/// 冷启动 / 刚切到某程序时的**首个按键**要顺带完成"连接 + 握手 + open_input"，
-/// 80ms 的常规预算几乎必然超时 → 该键按英文回退直接交给应用，用户看到的就是
-/// "前几个字没进入输入法"。首键给更宽的预算：它已被输入法吞下，不会漏给应用，
-/// 只是可能晚几十毫秒出现在输入框里。
 ///
-/// 2026-10-29 实测：引擎空闲自退后，broker 被唤醒到 `librime initialized` 要
-/// **1010 ms**（`broker.log` 12:03:59.516 → server.log 12:04:00.529），原来 500ms
-/// 的预算必然先超时 ⇒ 停一会儿再打字时第一个字母丢失/变英文。这里放宽到 1200ms，
-/// 正好盖住冷启动；配合空闲自退从 5 分钟放宽到 30 分钟，这种停顿会很少遇到。
-const CONNECT_KEY_TIMEOUT: Duration = Duration::from_millis(1200);
-/// 唤醒后端后等待它就绪的重试参数（总预算 ≈ 次数 × 间隔 ≈ 960 ms）。
+/// ⚠️ 2026-11-08 17:5x：从 80ms 放宽到 180ms。原因有实测数据：
+/// 0.18.7 起 `apply_commit` 在**提交路径同步跑双神经预测**（key+desk），
+/// 引擎侧实测一次提交键 **70–108ms**（探针 `probe_commit_latency`，12 轮）。
+/// 80ms 的预算下，worker 在 `dispatch` 返回后一律判过期：
+/// `if Instant::now() >= deadline { drop(response) }` —— 迟到的响应被**直接丢掉**，
+/// 宿主拿不到 `commit_text`，这一键按「没吃下」退回应用。
+/// 用户看到的正是「打字按数字选候选时有概率上数字而不是候选」：
+/// 引擎其实已经选好候选并提交，但响应被 80ms 判死，数字就透传给了应用。
 ///
-/// broker 被唤醒到引擎 `librime initialized` 实测要 ~1010 ms（见
-/// [`CONNECT_KEY_TIMEOUT`] 的实测记录）。旧实现唤醒后**一次都不等**就宣告连接
-/// 失败，于是空闲自退之后的头好几键全部落到"英文直通"，用户看到的就是
-/// "打不出字 / 切方案后卡很久"。这里改成：先唤醒，再等后端起来重试，
-/// 全都连不上才宣告失败。
-const WAKE_RETRY_INTERVAL: Duration = Duration::from_millis(120);
-/// 唤醒后的重试次数；与 `WAKE_RETRY_INTERVAL` 相乘即等待总预算。
-const WAKE_RETRIES: usize = 8;
+/// 180ms 能盖住 108ms 实测峰值 + RPC 往返；宿主侧总等待 = 180 + 240 = 420ms
+/// （2026-11-08 19:xx 把余量 60→240，见 [`HOST_WAIT_MARGIN`]），
+/// 只有真慢的键会等满，普通按键仍然 5–20ms 返回。
+const COMMAND_TIMEOUT: Duration = Duration::from_millis(180);
+/// 冷启动 / 刚切到某程序时的**首个按键**要顺带完成"连接 + 握手 + open_input"。
+///
+/// 这里刻意**不**用 1200ms 去盖住引擎冷启动（实测 broker 唤醒到 `librime
+/// initialized` 要 ~1010ms）：单键堵满一秒会让用户每个键都感觉「卡住」，而
+/// 冷启动期间的后端本来也回不来。现在把唤醒放后台，单键最多等 500ms；
+/// 期间处于组字态时这一键由 TIP 吞掉（见 `key_event::timeout_fallback`），
+/// 不再把编码透传给宿主，下一键重建连接后由引擎返回完整组合串重新同步。
+const CONNECT_KEY_TIMEOUT: Duration = Duration::from_millis(500);
 /// 两次唤醒之间的冷却；后端确实起不来时不至于每个按键都去戳一次 broker。
 const WAKE_COOLDOWN: Duration = Duration::from_millis(1500);
+/// 工作线程重建冷却：线程反复死亡时避免每个按键都重建一次。
+const WORKER_RESTART_COOLDOWN: Duration = Duration::from_millis(3000);
 /// 后端**可能正在忙**时的按键预算（引擎刚重启、刚切上下文/页面、刚切中英）。
 ///
 /// 这些时刻 RPC 连接还在，走不到上面的 `CONNECT_KEY_TIMEOUT` 分支；但后端要重建会话
 /// 或等一次布局往返，80ms 常常不够 → 前几个字母被英文直通给应用。按键已经被输入法
 /// 吞下，多等一会儿只是晚几十毫秒出现，不会漏给应用，所以这里统一放宽。
 const BUSY_KEY_TIMEOUT: Duration = Duration::from_millis(1000);
-/// 一条命令**轮到被派发时**至少还要有的预算。
-///
-/// 用得着它的场景是"排队被拖过期"：首键在跑连接握手（最长 1200ms），后面几个键
-/// 的 deadline 是入队时按 80ms 定的，轮到它们时早已过期。那些键已经被输入法吞下，
-/// 直接丢会让开头几个字母凭空消失；给一个下限让它们仍然被送出去。
-const MIN_DISPATCH_BUDGET: Duration = Duration::from_millis(300);
 /// 宿主线程等待按键结果时比预算多留的余量，避免在边界上误判超时。
-const HOST_WAIT_MARGIN: Duration = Duration::from_millis(60);
+///
+/// ⚠️ 2026-11-08 19:xx 60→240ms。实测证据（`key-latency.csv`，budget=180 段）：
+/// 切方案那一键（`Ctrl+`` 展开菜单 + 数字确认）冷缓存时引擎侧可达 **273–328ms**
+/// （`Weasel-Next-Engine-key-latency.csv` 19:04:42–43 三连尖峰）。宿主 180+60=240ms
+/// 就先放弃，于是它返回 BOOL(0)，用户看到的正是「卡一下 → 数字/空格上屏 →
+/// 才切换方案」。
+///
+/// 240ms 余量 ⇒ 普通键宿主最多等 `180+240=420ms`（只有真慢的键会等满；正常 1–5ms
+/// 返回），足以盖住「上一键引擎里还有 ≤330ms 残活 + 本键处理」的最坏情况。
+/// 代价是引擎真挂住时单键最多堵 420ms —— 但比把数字漏进应用可接受。
+///
+/// ⚠️ 这个余量同时是 **worker 派发截止时间的唯一口径**（见 [`RpcCommand::host_deadline`]）：
+/// 旧实现给排队键追加 `MIN_DISPATCH_BUDGET`(300ms) 的宽限，比宿主 420ms 先放弃，
+/// 结果 `dispatch()` 末尾照样丢响应 —— 两边必须对齐。
+const HOST_WAIT_MARGIN: Duration = Duration::from_millis(240);
 /// 停止工作线程时等待原生线程退出的最长毫秒数。
 const STOP_TIMEOUT_MS: u32 = 100;
+
+/// 抄自 msime `DeferredKeyFailurePolicy::IsCandidateNavigationOnlyKey` 的 Win32 VK 判据。
+/// 这些键的回复**只是 ack**（翻页或移动高亮），永远不会提交文本：
+/// 所以它们的超时是 soft miss，不该像传输失败那样拆连接、清待处理队列。
+/// Left/Right 刻意不在清单里（与 msime 一致）：它们会在编码内移动光标，依赖会话状态。
+const VK_TAB: u32 = 0x09;
+const VK_PRIOR: u32 = 0x21; // PageUp
+const VK_NEXT: u32 = 0x22; // PageDown
+const VK_UP: u32 = 0x26;
+const VK_DOWN: u32 = 0x28;
+
+/// 是否是被吃键后只回 ack 的候选导航键。
+pub(crate) fn is_candidate_navigation_only_key(virtual_key: u32) -> bool {
+    matches!(
+        virtual_key,
+        VK_TAB | VK_PRIOR | VK_NEXT | VK_UP | VK_DOWN
+    )
+}
 
 #[derive(Debug, PartialEq, Eq)]
 /// 向工作线程提交命令失败的原因。
@@ -79,6 +108,16 @@ pub(crate) enum CommandError {
     Full,
 }
 
+/// 按键结果的两类归宿。分开表示才能把「导航键 soft miss」和「引擎没应答」
+/// 区分开：前者保留连接与待处理队列，后者由 worker 自行隔离故障。
+enum KeyOutcome {
+    /// 正常往返；`None` 表示引擎侧没有产出应答（worker 已自行隔离故障）。
+    Reply(Option<KeyEventResponse>),
+    /// 导航键超时（Tab/PageUp/PageDown/Up/Down）：只翻页/移高亮，不提交文本。
+    /// 保留连接，这一键丢掉即止，绝不重发。
+    SoftMiss,
+}
+
 /// 私有 Tokio 运行时串行处理的工作项。
 enum RpcCommand {
     /// 尽力发送诊断日志，不等待服务器确认。
@@ -86,7 +125,7 @@ enum RpcCommand {
     /// 处理需在宿主线程等待的按键，并携带不可续期的截止时间。
     KeyEvent {
         event: InputKey,
-        response: Sender<Option<KeyEventResponse>>,
+        response: Sender<KeyOutcome>,
         deadline: Instant,
     },
     /// 发布最新布局状态；此类状态通过合并邮箱而非命令队列传递。
@@ -420,11 +459,19 @@ async fn connect_client(pipe_name: &str, target: &Arc<PushTarget>) -> Option<Con
         client.disconnect().await;
         return None;
     }
+    // 握手成功即视为后端已恢复。**必须在这里清 `failed`**：它是"回复投递失败"
+    // 留下的闩锁，旧实现没有任何清除点，一旦在 broker/引擎重启的瞬间置位，
+    // 该宿主进程内的输入法就会永久失效（只有重启宿主进程才能恢复）。
+    target.failed.store(false, Ordering::Release);
     target.connection_failed.store(false, Ordering::Release);
+    target.slow.store(false, Ordering::Release);
     target
         .connection_generation
         .store(generation, Ordering::Release);
     target.epoch.store(epoch, Ordering::Release);
+    // 重建连接后主动唤醒宿主一次，让它按新连接的（空）状态重画一次编码栏/候选窗，
+    // 而不是继续显示断连前那份陈旧快照。
+    target.notify();
     let target = target.clone();
     let push_client = client.clone();
     let updates = tokio::spawn(async move {
@@ -481,6 +528,46 @@ impl RpcCommand {
             _ => Instant::now() + COMMAND_TIMEOUT,
         }
     }
+
+    /// 宿主**放弃等待**这条命令的绝对时刻。
+    ///
+    /// 按键入队的 deadline 是 `入队时刻 + budget`；宿主在 `recv_timeout` 里多等
+    /// [`HOST_WAIT_MARGIN`]，所以它的耐心界线是 `deadline + HOST_WAIT_MARGIN`。
+    /// 派发截止时间必须用这个值：早于它判死会在宿主还在等的时候丢响应（数字/空格
+    /// 透传的直接原因）；晚于它继续处理则结果没人要，还会白踢一条健康连接。
+    fn host_deadline(&self) -> Instant {
+        match self {
+            Self::KeyEvent { .. } => self.deadline() + HOST_WAIT_MARGIN,
+            _ => self.deadline(),
+        }
+    }
+
+    /// 这条命令是否是「回复只是 ack」的候选导航键。
+    fn is_navigation_only(&self) -> bool {
+        matches!(
+            self,
+            Self::KeyEvent { event, .. } if is_candidate_navigation_only_key(event.virtual_key)
+        )
+    }
+
+    /// 把（可能被宽限过的）截止时间写回命令；非按键命令原样返回。
+    ///
+    /// 2026-11-08 19:xx：`run()` 原来为「排队被拖过期」的按键算出
+    /// `arrival + MIN_DISPATCH_BUDGET`(300ms)，但那个宽限比宿主耐心(420ms)短，
+    /// `dispatch()` 里两处 `Instant::now() >= deadline` 照样会在宿主等待期间判死。
+    /// 现在写回的是宿主的放弃时刻（[`host_deadline`]），两边同进同退。
+    fn with_deadline(self, new_deadline: Instant) -> Self {
+        match self {
+            Self::KeyEvent {
+                event, response, ..
+            } => Self::KeyEvent {
+                event,
+                response,
+                deadline: new_deadline,
+            },
+            other => other,
+        }
+    }
 }
 
 /// 由私有运行时线程独占的连接与命令状态。
@@ -522,18 +609,25 @@ impl WorkerState {
                 }
             };
             let Some(command) = command else { break };
-            // ⚠️ 排队期间被"拖过期"的按键不能直接丢！
+            // 派发截止时间只认**宿主的耐心**（`入队 budget + HOST_WAIT_MARGIN`）。
             //
-            // 场景（用户报"打快了前几个字母不识别"）：冷启动/刚切程序时首键要走
-            // "连接 + 握手 + open_input"，它自己拿到 CONNECT_KEY_TIMEOUT(500ms)，但
-            // **它后面排队的第 2、3 个键，deadline 是入队那一刻就按常规预算(80ms)定死的**。
-            // 首键占满 500ms 之后，队列里那几个键的 80ms 早已过期 → 在这里被 `continue`
-            // 丢掉 ⇒ 开头几个字母既不进输入法也不进应用（凭空消失）。
-            //
-            // 这些键**已经被输入法吞下**（不会漏给应用），多等几十毫秒只是晚一点出现，
-            // 所以轮到它们时至少给 MIN_DISPATCH_BUDGET 的预算，而不是按入队时间判死。
-            let arrival = Instant::now();
-            let deadline = command.deadline().max(arrival + MIN_DISPATCH_BUDGET);
+            // 2026-11-08 19:xx 两个实测把这里逼定成这个口径：
+            // * 切方案键引擎侧冷态 273–328ms ⇒ 宿主必须等到 420ms 才收得到响应；
+            // * 旧实现给排队键追加入队后 300ms（`MIN_DISPATCH_BUDGET`），比宿主先
+            //   放弃 ⇒ `dispatch()` 末尾照样丢响应、数字/空格照样漏。
+            // 若出队时宿主已经放弃（deadline 已过），`dispatch()` 开头会直接丢弃：
+            // 不连接、不处理、不拆连接（处理了也没人要，拆连接反而害下一键重连）。
+            let deadline = command.host_deadline();
+            // 宽限必须真正落到命令上，否则 `dispatch()` 仍按入队时的 deadline 判死。
+            let command = command.with_deadline(deadline);
+            // 导航键 soft miss：保留一个 sender 克隆。若 `dispatch()` 被截止时间
+            // 取消，它自己的 sender 会随 future 一起消失；没有这个克隆，宿主会
+            // 把「sender 静默消失」误判成传输失败而强拆连接。这里显式投递 SoftMiss。
+            let soft_miss = command.is_navigation_only();
+            let soft_reply = match &command {
+                RpcCommand::KeyEvent { response, .. } if soft_miss => Some(response.clone()),
+                _ => None,
+            };
             self.discard_disconnected_client().await;
 
             // 建立连接时的首键：放宽预算，避免这一键被英文回退吞掉；
@@ -542,7 +636,9 @@ impl WorkerState {
             // 注意：入队时可能还没置位 slow（例如刚切上下文那一瞬），所以这里再兜一层
             let busy = self.push.slow.load(Ordering::Acquire);
             let dispatch_deadline = if establishing || busy {
-                Instant::now() + CONNECT_KEY_TIMEOUT.max(BUSY_KEY_TIMEOUT)
+                // 建连/忙时 worker 自己需要宽预算，但**不能超过宿主耐心**——
+                // 否则结果送到时宿主早已 invalidate 掉 epoch，等于白发。
+                (Instant::now() + CONNECT_KEY_TIMEOUT.max(BUSY_KEY_TIMEOUT)).min(deadline)
             } else {
                 deadline
             };
@@ -559,10 +655,20 @@ impl WorkerState {
                         "request-timeout"
                     },
                     Some(&self.pipe_name),
-                    "command deadline exceeded (80ms budget)",
+                    "command deadline exceeded",
                 );
-                // Invalidate queued racing replies before English fallback.
-                self.disconnect_invalidated_client().await;
+                if let Some(reply) = soft_reply {
+                    // 软失误：键丢掉即止，连接、epoch、待处理队列一概不动。
+                    let _ = reply.send(KeyOutcome::SoftMiss);
+                    report(
+                        "candidate-nav-soft-miss",
+                        Some(&self.pipe_name),
+                        "navigation key deadline exceeded; connection kept",
+                    );
+                } else {
+                    // Invalidate queued racing replies before English fallback.
+                    self.disconnect_invalidated_client().await;
+                }
             }
         }
         if let Some(current) = self.client.take() {
@@ -584,21 +690,14 @@ impl WorkerState {
             self.client = Some(client);
             return;
         }
-        // 连不上多半是"五分钟不打字 → 引擎空闲自退"。顺序很关键：
-        // 旧代码先置 connection_failed 再唤醒，宿主当帧就把这一键按英文穿透了，
-        // 而且唤醒后不等引擎起来，后面连着几键同样落空。改成先唤醒再等它就绪，
-        // 全都失败才宣告不可用。
+        // 连不上多半是"五分钟不打字 → 引擎空闲自退"。唤醒必须在后台：
+        // 冷启动实测 ~1010ms，远超单键预算；同步等待只会让连续几个键
+        // 各自堵满一秒，而且这段时间里的键仍会被判超时。这里只负责戳一次
+        // broker，后续按键各自直连重试，连上即恢复。
         let now = Instant::now();
         if now.duration_since(self.last_wake) >= WAKE_COOLDOWN {
             self.last_wake = now;
-            wake_broker().await;
-            for _ in 0..WAKE_RETRIES {
-                tokio::time::sleep(WAKE_RETRY_INTERVAL).await;
-                if let Some(client) = connect_client(&self.pipe_name, &self.push).await {
-                    self.client = Some(client);
-                    return;
-                }
-            }
+            tokio::spawn(wake_broker());
         }
         self.push.connection_failed.store(true, Ordering::Release);
         self.push.notify();
@@ -635,6 +734,7 @@ impl WorkerState {
 
     /// 分派单条命令；按键结果在截止时间已过或接收方消失时不再交付。
     async fn dispatch(&mut self, command: RpcCommand) {
+        let soft_miss = command.is_navigation_only();
         match command {
             RpcCommand::Log { level, text } => self.handle_log(level, text).await,
             RpcCommand::KeyEvent {
@@ -646,13 +746,35 @@ impl WorkerState {
                 // 这里**不连接、不处理、也不拆连接** —— 处理了结果也没人要，
                 // 白白踢掉一条健康的连接反而害得下一键必须重连（用户看到的
                 // 就是"首键偶尔丢字"）。直接丢掉，保持现状。
+                //
+                // 导航键例外：投递一个明确的 SoftMiss，让宿主知道这是软失误，
+                // 而不是 sender 意外消失（后者会触发强失效）。
                 if Instant::now() >= deadline {
-                    drop(response);
+                    if soft_miss {
+                        report(
+                            "candidate-nav-soft-miss",
+                            Some(&self.pipe_name),
+                            "expired navigation key; connection kept",
+                        );
+                        let _ = response.send(KeyOutcome::SoftMiss);
+                    } else {
+                        drop(response);
+                    }
                     return;
                 }
                 let value = self.handle_key_event(event).await;
-                if Instant::now() >= deadline || response.send(value).is_err() {
-                    self.disconnect_invalidated_client().await;
+                // 迟到的应答或宿主已经放弃的接收方：普通键按传输/调度故障拆连接；
+                // 导航键只是 soft miss（回复永远是 ack，没有丢提交文本的风险）。
+                if Instant::now() >= deadline || response.send(KeyOutcome::Reply(value)).is_err() {
+                    if soft_miss {
+                        report(
+                            "candidate-nav-soft-miss",
+                            Some(&self.pipe_name),
+                            "navigation key reply missed; connection kept",
+                        );
+                    } else {
+                        self.disconnect_invalidated_client().await;
+                    }
                 }
             }
             RpcCommand::Context(command) => self.handle_context(command).await,
@@ -807,6 +929,8 @@ pub struct RpcWorker {
     // and runtime destruction. A lease dropped inside run_thread is too early.
     // On timeout the lease is intentionally retained until process exit.
     module: Option<crate::module::ModuleLease>,
+    /// 上一次重建工作线程的时刻，用于冷却，避免线程反复死亡时每键都重建。
+    last_restart: Option<Instant>,
 }
 
 impl RpcWorker {
@@ -873,17 +997,31 @@ impl RpcWorker {
         self.thread = thread;
     }
 
-    /// 将按键提交到后台，并在宿主线程最多等待 100 毫秒取得结果。
+    /// 将按键提交到后台，并在宿主线程最多等待 `budget + HOST_WAIT_MARGIN` 取得结果。
     ///
-    /// 入队截止时间为 80 毫秒且不会在出队时续期。超时会在宿主线程同步使 epoch
-    /// 失效，防止运行时调度延迟期间到达的响应被误用；失败返回 `None` 供输入直通。
-    pub fn process_key_event(&self, event: InputKey) -> Option<KeyEventResponse> {
-        if self.push.failed.load(Ordering::Acquire) {
+    /// 入队截止时间为 `budget` 且不会在出队时续期；worker 只在宿主耐心耗尽
+    /// （`deadline + HOST_WAIT_MARGIN`）时才放弃这一键，见 [`RpcCommand::host_deadline`]。
+    /// 超时会在宿主线程同步使 epoch 失效，防止运行时调度延迟期间到达的响应被误用；
+    /// 失败返回 `None` 供输入直通。
+    pub fn process_key_event(&mut self, event: InputKey) -> Option<KeyEventResponse> {
+        // 注意：这里**不**因为 `failed` 直接返回 `None`。
+        //
+        // 旧实现把 `failed`（回复订阅溢出/宿主投递失败留下的闩锁）当作永久禁用。
+        // broker/引擎重启的那一刻若置位，之后每个键都在宿主线程立即英文直通，
+        // 连一次重连都不会尝试 —— 用户看到的就是"输入法在这个窗口彻底没反应"，
+        // 只能重启宿主进程。现在 `failed` 仅作诊断标记，真正的恢复由
+        // `connect_client` 握手成功后清除；连接失效时 worker 会自行重建连接。
+        if self.commands.is_none() {
             return None;
         }
-        let Some(commands) = self.commands.as_ref() else {
-            return None;
-        };
+        if self.push.failed.load(Ordering::Acquire) {
+            // 保留一条证据：确实处于投递失败后的恢复路径上。
+            report("key-recover", None, "delivery flagged failed, retrying");
+        }
+        // msime `DeferredKeyFailurePolicy`：Tab / PageUp / PageDown / Up / Down
+        // 的回复只是翻页/移动高亮的 ack，永不提交文本 ⇒ 超时属于 soft miss，
+        // 不拆连接、不清待处理队列。键本身丢掉即止，绝不重发。
+        let navigation_only = is_candidate_navigation_only_key(event.virtual_key);
         let (response, receiver) = mpsc::channel();
         // 后端忙（刚重启/刚切上下文/上次超时）时给更宽的预算，避免这一键被英文直通
         let busy = self.push.slow.load(Ordering::Acquire);
@@ -905,32 +1043,62 @@ impl RpcWorker {
         };
         // 乙-1 插桩：量的是**宿主线程被这一键堵住多久**（= 用户感觉到的卡顿）。
         let latency = crate::key_latency::scoped(budget);
-        if commands
+        let queued = self
+            .commands
+            .as_ref()
+            .expect("commands 已在函数开头检查")
             .try_send(RpcCommand::KeyEvent {
                 event,
                 response,
                 deadline: Instant::now() + budget,
-            })
-            .inspect_err(|error| report("key-queue", None, error))
-            .is_err()
-        {
+            });
+        if let Err(error) = queued {
+            report("key-queue", None, &error);
             latency.finish(crate::key_latency::Outcome::Disconnect, false);
+            // 通道关闭 = worker 线程已经不在了（panic 或运行时创建失败）。
+            // 旧实现只丢这一键、永不重建，于是这个宿主进程永久失去输入法。
+            // 这里按冷却重建一次；`full` 只说明队列满，丢掉这一键即可。
+            let closed = matches!(
+                error,
+                tokio::sync::mpsc::error::TrySendError::Closed(_)
+            );
+            if closed {
+                self.restart_worker();
+            }
             return None;
         }
 
+        // 注意：recv_timeout 的 `Ok(T)` 里 T 就是 KeyOutcome，不再包一层 Option。
+        // 「sender 无应答即消失」表现为 Err(Disconnected)，属于传输级故障。
         match receiver.recv_timeout(budget + HOST_WAIT_MARGIN) {
-            Ok(Some(value)) => {
+            Ok(KeyOutcome::Reply(value)) => {
                 // 这一次往返是通的 → 后端恢复正常，后续按键回到常规预算
                 self.push.slow.store(false, Ordering::Release);
-                latency.finish(crate::key_latency::Outcome::Ok, value.eaten);
-                Some(value)
+                let eaten = value.as_ref().is_some_and(|value| value.eaten);
+                latency.finish(crate::key_latency::Outcome::Ok, eaten);
+                value
             }
-            result => {
-                if let Err(error) = result {
-                    report("host-wait", None, error);
-                }
-                // The runtime can be descheduled past its 80ms timer. The host
-                // must invalidate synchronously before passing the key through.
+            Ok(KeyOutcome::SoftMiss) => {
+                // 导航键 soft miss：worker 明确告知「没等到 ack，但连接还在」。
+                // 这一键丢掉即止，不拆连接、不清待处理队列、也不重发。
+                latency.finish(crate::key_latency::Outcome::Timeout, false);
+                None
+            }
+            Err(RecvTimeoutError::Timeout) if navigation_only => {
+                // worker 还没来得及投递 SoftMiss（例如它自己的截止时间稍晚），
+                // 宿主已经等满耐心。导航键按软失误处理，保留连接。
+                report(
+                    "candidate-nav-soft-miss",
+                    None,
+                    "host wait expired; connection kept",
+                );
+                latency.finish(crate::key_latency::Outcome::Timeout, false);
+                None
+            }
+            Err(error) => {
+                report("host-wait", None, error);
+                // 通道断开（worker 线程死亡/派发被强制取消）或运行时被调度停摆：
+                // 这是传输级故障，导航键也要强失效，不能伪装成 soft miss。
                 self.push.invalidate();
                 latency.finish(crate::key_latency::Outcome::Timeout, false);
                 None
@@ -1069,6 +1237,26 @@ impl RpcWorker {
         self.push.layout.0.send_replace(None);
     }
 
+    /// 命令通道关闭（工作线程已退出）时按冷却重建一次工作线程。
+    ///
+    /// 这里不新增常驻线程：只是替换掉已经死掉的那条。`stop()` 会把
+    /// 宿主窗口句柄清零并换用新的共享状态，所以重建后要把窗口句柄挂回去，
+    /// 否则新的推送无处投递，宿主永远收不到更新。
+    fn restart_worker(&mut self) {
+        let now = Instant::now();
+        if self
+            .last_restart
+            .is_some_and(|last| now.duration_since(last) < WORKER_RESTART_COOLDOWN)
+        {
+            return;
+        }
+        self.last_restart = Some(now);
+        let window = self.push.window.load(Ordering::Acquire);
+        report("worker-restart", None, "command channel closed");
+        self.start();
+        self.push.window.store(window, Ordering::Release);
+    }
+
     /// 停止线程并释放其资源；多次调用安全。
     ///
     /// 先撤销窗口通知并发出停止信号，再等待原生线程最多 `STOP_TIMEOUT_MS`。
@@ -1122,6 +1310,7 @@ impl Default for RpcWorker {
             commands: None,
             push: Arc::default(),
             module: None,
+            last_restart: None,
         }
     }
 }
@@ -1246,6 +1435,24 @@ mod tests {
         }
     }
 
+    /// 构造 msime 清单内的导航键；`keycode` 对本次测试不重要，只保留 Win32 VK。
+    fn navigation_key(virtual_key: u32) -> InputKey {
+        InputKey {
+            virtual_key,
+            token: translated_key().token,
+            ..Default::default()
+        }
+    }
+
+    /// 重连期间允许丢键（生产语义：这一键英文直通），但必须在若干次内恢复。
+    fn key_eaten_within(worker: &mut RpcWorker, attempts: usize) -> bool {
+        (0..attempts).any(|_| {
+            worker
+                .process_key_event(translated_key())
+                .is_some_and(|response| response.eaten)
+        })
+    }
+
     async fn open_input(connection: &weasel_common::rpc::RpcConnection) {
         use weasel_common::message::{Envelope, InputOpened, envelope::Payload};
         let open = connection.recv().await.unwrap().unwrap();
@@ -1302,7 +1509,7 @@ mod tests {
         let RpcCommand::KeyEvent { response, .. } = receiver.try_recv().unwrap() else {
             panic!("expected key")
         };
-        assert!(response.send(Some(update(42))).is_err());
+        assert!(response.send(KeyOutcome::Reply(Some(update(42)))).is_err());
         assert!(enqueue_update(&worker.push, 42, update(42)));
         assert!(worker.take_updates().is_empty());
         // A handshake racing cancellation cannot resurrect its old generation.
@@ -1453,6 +1660,21 @@ mod tests {
         assert_eq!(command.deadline(), deadline);
     }
 
+    #[test]
+    fn key_host_deadline_adds_the_host_wait_margin() {
+        // 入队 deadline 只是 `budget`；宿主实际等到 `budget + HOST_WAIT_MARGIN`。
+        // worker 必须以宿主耐心为派发截止，否则切方案键(273–328ms)会在宿主还在
+        // 等的时候就丢响应 ⇒ 数字/空格透传。
+        let (response, _receiver) = mpsc::channel();
+        let deadline = Instant::now();
+        let command = RpcCommand::KeyEvent {
+            event: translated_key(),
+            response,
+            deadline,
+        };
+        assert_eq!(command.host_deadline(), deadline + HOST_WAIT_MARGIN);
+    }
+
     #[tokio::test]
     async fn expired_key_is_dropped_without_connecting() {
         let push = Arc::new(PushTarget::default());
@@ -1472,7 +1694,8 @@ mod tests {
             .try_send(RpcCommand::KeyEvent {
                 event: translated_key(),
                 response,
-                deadline: Instant::now() - COMMAND_TIMEOUT,
+                // 只有超过「入队 budget + 宿主余量」的键才算真过期（宿主早已 BOOL(0)）。
+                deadline: Instant::now() - COMMAND_TIMEOUT - HOST_WAIT_MARGIN,
             })
             .unwrap();
         drop(sender);
@@ -1673,6 +1896,180 @@ mod tests {
         server.join().unwrap();
     }
 
+    /// msime `DeferredKeyFailurePolicy` 的五项清单要一字不差：多算一个键，
+    /// 就可能把真正的提交失败当软失误放过去；少算一个键，则会继续"越超时越拆连接"。
+    #[test]
+    fn candidate_navigation_only_key_matches_msime_five_vks() {
+        for vk in [VK_TAB, VK_PRIOR, VK_NEXT, VK_UP, VK_DOWN] {
+            assert!(
+                is_candidate_navigation_only_key(vk),
+                "VK {vk:#04x} 属于 msime 的五项导航键"
+            );
+        }
+        for vk in [0x25, 0x27, 0x41, 0x20, 0x0d] {
+            assert!(
+                !is_candidate_navigation_only_key(vk),
+                "VK {vk:#04x} 不能被误判为导航键（Left/Right 会移动编码内光标，依赖会话状态）"
+            );
+        }
+    }
+
+    /// 过期的导航键必须显式投递 SoftMiss，不能让 sender 静默消失——
+    /// 后者在宿主侧等价于传输故障，会触发强失效，正是本轮要根治的恶性循环。
+    #[tokio::test]
+    async fn expired_navigation_key_replies_soft_miss_without_invalidating() {
+        let push = Arc::new(PushTarget::default());
+        push.epoch.store(42, Ordering::Release);
+        let mut state = WorkerState {
+            pipe_name: String::new(),
+            client: None,
+            push: push.clone(),
+            last_wake: Instant::now(),
+        };
+        let (response, receiver) = mpsc::channel();
+        state
+            .dispatch(RpcCommand::KeyEvent {
+                event: navigation_key(VK_NEXT),
+                response,
+                deadline: Instant::now() - COMMAND_TIMEOUT - HOST_WAIT_MARGIN,
+            })
+            .await;
+        assert!(
+            matches!(receiver.try_recv(), Ok(KeyOutcome::SoftMiss)),
+            "导航键过期要发 SoftMiss，不能让 sender 静默消失"
+        );
+        assert_eq!(push.epoch.load(Ordering::Acquire), 42, "软失误不能拆连接");
+        assert!(!push.connection_failed.load(Ordering::Acquire));
+    }
+
+    /// 对照：普通键过期仍按原来的"丢 sender → 宿主强失效"处理，行为零回归。
+    #[tokio::test]
+    async fn expired_letter_key_still_drops_response_silently() {
+        let push = Arc::new(PushTarget::default());
+        push.epoch.store(42, Ordering::Release);
+        let mut state = WorkerState {
+            pipe_name: String::new(),
+            client: None,
+            push: push.clone(),
+            last_wake: Instant::now(),
+        };
+        let (response, receiver) = mpsc::channel();
+        state
+            .dispatch(RpcCommand::KeyEvent {
+                event: translated_key(),
+                response,
+                deadline: Instant::now() - COMMAND_TIMEOUT - HOST_WAIT_MARGIN,
+            })
+            .await;
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        assert_eq!(push.epoch.load(Ordering::Acquire), 42);
+    }
+
+    /// 宿主侧：worker 还没投递 SoftMiss 前就等满耐心，导航键也不许自己拆连接。
+    #[test]
+    fn host_navigation_timeout_without_worker_soft_reply_keeps_connection() {
+        let mut worker = RpcWorker::default();
+        let (commands, _receiver) = tokio::sync::mpsc::channel(1);
+        worker.commands = Some(Arc::new(commands));
+        worker.push.epoch.store(42, Ordering::Release);
+        let started = Instant::now();
+        assert!(worker.process_key_event(navigation_key(VK_DOWN)).is_none());
+        assert!(
+            started.elapsed() >= COMMAND_TIMEOUT + HOST_WAIT_MARGIN,
+            "没拿到软信号时仍要等满宿主耐心（budget=180ms + margin=240ms）"
+        );
+        assert_eq!(worker.connection_epoch(), 42, "导航键超时不能自己拆连接");
+        assert!(!worker.connection_failed());
+    }
+
+    /// 传输级失败（sender 无应答即消失）不属于 soft miss，导航键也要强失效。
+    #[test]
+    fn dropped_navigation_key_response_still_invalidates_connection() {
+        let mut worker = RpcWorker::default();
+        let (commands, mut receiver) = tokio::sync::mpsc::channel(1);
+        worker.commands = Some(Arc::new(commands));
+        worker.push.epoch.store(42, Ordering::Release);
+        let dropper = thread::spawn(move || {
+            let RpcCommand::KeyEvent { response, .. } = receiver.blocking_recv().unwrap() else {
+                panic!("expected key")
+            };
+            drop(response);
+        });
+        assert!(worker.process_key_event(navigation_key(VK_PRIOR)).is_none());
+        dropper.join().unwrap();
+        assert_eq!(worker.connection_epoch(), 0, "传输失败仍要拆连接");
+        assert!(worker.connection_failed());
+    }
+
+    /// 端到端：第一键 PageDown 故意不回，第二键必须复用同一条连接。
+    /// 这同时钉死「被吃键不重发」——第一键只进一次 RPC，没有重投。
+    #[test]
+    fn navigation_key_timeout_is_a_soft_miss_and_keeps_the_connection() {
+        let name = format!(r"\\.\pipe\weaselnext-nav-soft-{}", std::process::id());
+        let server_name = name.clone();
+        let (ready, wait_ready) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let listener = RpcServer::new(server_name);
+                let _ = tokio::time::timeout(Duration::from_millis(5), listener.accept()).await;
+                ready.send(()).unwrap();
+                let connection = listener.accept().await.unwrap();
+                let ping = connection.recv().await.unwrap().unwrap();
+                connection
+                    .send_pong(ping.request_id, "ready")
+                    .await
+                    .unwrap();
+                open_input(&connection).await;
+                // 第一键是导航键：故意不回，逼出软超时。
+                let first = connection.recv().await.unwrap().unwrap();
+                let Some(Payload::KeyEvent(event)) = first.payload else {
+                    panic!("expected navigation key")
+                };
+                assert!(is_candidate_navigation_only_key(event.virtual_key));
+                // 第二键正常回：必须走同一条连接，不再握手 / open_input。
+                let second = connection.recv().await.unwrap().unwrap();
+                let Some(Payload::KeyEvent(event)) = second.payload else {
+                    panic!("expected key")
+                };
+                connection
+                    .send_key_event_response(
+                        second.request_id,
+                        KeyEventResponse {
+                            eaten: true,
+                            token: event.token,
+                            revision: 2,
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .unwrap();
+            });
+        });
+        wait_ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        let mut worker = RpcWorker::default();
+        worker.start_with_pipe(name);
+        assert!(worker.process_key_event(navigation_key(VK_NEXT)).is_none());
+        let kept = worker.connection_epoch();
+        assert!(kept != 0, "导航键超时必须保留连接 epoch");
+        assert!(!worker.connection_failed(), "导航键超时不能置连接失败");
+        // 迟到的第一键应答没有走 pending，也不会污染更新队列。
+        assert!(worker.take_updates().is_empty());
+        let second = worker
+            .process_key_event(translated_key())
+            .expect("下一键应复用同一连接");
+        assert!(second.eaten);
+        assert_eq!(worker.connection_epoch(), kept, "不能因为软失误重建连接");
+        worker.stop();
+        server.join().unwrap();
+    }
+
     // Use an isolated pipe; never load a TIP into an application or start Rime.
     fn stalled_server(
         name: String,
@@ -1813,6 +2210,197 @@ mod tests {
         assert!(worker.connection_failed());
         assert!(worker.process_key_event(translated_key()).unwrap().eaten);
         assert!(!worker.connection_failed());
+        worker.stop();
+        let _ = finish_tx.send(());
+        server.join().unwrap();
+    }
+
+    /// 服务端**以同一个管道名整代重启**（旧监听与旧连接一起销毁）后，TIP 必须自愈。
+    ///
+    /// 这正是线上下事故的形态：broker/引擎被重启，而宿主进程里的 TIP 实例还活着。
+    /// 旧测试 `worker_reconnects_after_server_disconnect` 只覆盖"同一个 listener
+    /// 上换一条连接"，漏了监听器本身被销毁重建的情况。
+    #[test]
+    fn worker_recovers_after_server_restarts_on_same_pipe() {
+        use weasel_common::message::envelope::Payload;
+
+        let name = format!(
+            r"\\.\pipe\weaselnext-tip-server-restart-{}",
+            std::process::id()
+        );
+        let pipe = name.clone();
+        let (ready1_tx, ready1_rx) = mpsc::channel();
+        let (closed1_tx, closed1_rx) = mpsc::channel();
+        let (ready2_tx, ready2_rx) = mpsc::channel();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        let server = thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                tokio::time::timeout(Duration::from_secs(20), async move {
+                    // 第一代服务端：服务若干次按键后整体销毁（监听 + 连接）。
+                    {
+                        let listener = RpcServer::new(pipe.clone());
+                        ready1_tx.send(()).unwrap();
+                        let conn = loop {
+                            match listener.accept().await {
+                                Ok(conn) => break conn,
+                                Err(_) => continue,
+                            }
+                        };
+                        let ping = conn.recv().await.unwrap().unwrap();
+                        conn.send_pong(ping.request_id, "gen1").await.unwrap();
+                        open_input(&conn).await;
+                        // 只服务一次按键就整代销毁。主线程拿到第一个被消费的按键后
+                        // 便会等待关闭信号，若这里继续等第 2..4 个键就会双方互等。
+                        if let Ok(Some(key)) = conn.recv().await {
+                            if let Some(Payload::KeyEvent(event)) = key.payload {
+                                conn.send_key_event_response(
+                                    key.request_id,
+                                    KeyEventResponse {
+                                        eaten: true,
+                                        token: event.token,
+                                        revision: 1,
+                                        ..Default::default()
+                                    },
+                                )
+                                .await
+                                .unwrap();
+                            }
+                        }
+                        drop(conn);
+                        drop(listener);
+                    }
+                    closed1_tx.send(()).unwrap();
+                    // 第二代服务端：同一个管道名重新监听。旧实例可能短暂占用名字，重试即可。
+                    let listener = RpcServer::new(pipe.clone());
+                    loop {
+                        if listener.bind().await.is_ok() {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    ready2_tx.send(()).unwrap();
+                    let conn = loop {
+                        match listener.accept().await {
+                            Ok(conn) => break conn,
+                            Err(_) => continue,
+                        }
+                    };
+                    let ping = conn.recv().await.unwrap().unwrap();
+                    conn.send_pong(ping.request_id, "gen2").await.unwrap();
+                    open_input(&conn).await;
+                    // 重连可能丢掉首个按键，把后续几次都答掉。
+                    for _ in 0..4 {
+                        let Ok(Some(key)) = conn.recv().await else {
+                            break;
+                        };
+                        let Some(Payload::KeyEvent(event)) = key.payload else {
+                            break;
+                        };
+                        conn.send_key_event_response(
+                            key.request_id,
+                            KeyEventResponse {
+                                eaten: true,
+                                token: event.token,
+                                revision: 1,
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    }
+                    let _ = finish_rx.await;
+                })
+                .await
+                .unwrap();
+            });
+        });
+        ready1_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let mut worker = RpcWorker::default();
+        worker.start_with_pipe(name);
+        assert!(key_eaten_within(&mut worker, 5));
+        let first_epoch = worker.connection_epoch();
+        assert!(first_epoch != 0);
+
+        closed1_rx
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        ready2_rx.recv_timeout(Duration::from_secs(15)).unwrap();
+        // 等客户端读到 EOF 并把 epoch 置 0，等价于进程内的断连通知。
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert!(key_eaten_within(&mut worker, 5));
+        assert!(worker.connection_epoch() != first_epoch);
+        assert!(!worker.connection_failed());
+
+        worker.stop();
+        let _ = finish_tx.send(());
+        server.join().unwrap();
+    }
+
+    /// 投递失败闩锁不得让 TIP 永久失效。
+    ///
+    /// 旧实现里 `failed` 一旦置位就没有任何清除点，`process_key_event` 会一直
+    /// 立即返回 `None`（英文直通），只有重启宿主进程才能恢复 —— 线上事故的现场。
+    #[test]
+    fn delivery_failure_flag_does_not_disable_input() {
+        use weasel_common::message::envelope::Payload;
+
+        let name = format!(
+            r"\\.\pipe\weaselnext-tip-failed-latch-{}",
+            std::process::id()
+        );
+        let pipe = name.clone();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        let server = thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                tokio::time::timeout(Duration::from_secs(5), async move {
+                    let listener = RpcServer::new(pipe);
+                    ready_tx.send(()).unwrap();
+                    let conn = listener.accept().await.unwrap();
+                    let ping = conn.recv().await.unwrap().unwrap();
+                    conn.send_pong(ping.request_id, "ready").await.unwrap();
+                    open_input(&conn).await;
+                    for _ in 0..4 {
+                        let Ok(Some(key)) = conn.recv().await else {
+                            break;
+                        };
+                        let Some(Payload::KeyEvent(event)) = key.payload else {
+                            break;
+                        };
+                        conn.send_key_event_response(
+                            key.request_id,
+                            KeyEventResponse {
+                                eaten: true,
+                                token: event.token,
+                                revision: 1,
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    }
+                    let _ = finish_rx.await;
+                })
+                .await
+                .unwrap();
+            });
+        });
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let mut worker = RpcWorker::default();
+        worker.start_with_pipe(name);
+        // 模拟 broker 重启瞬间"回复投递失败"留下的闩锁（尚未建立连接）。
+        worker.push.failed.store(true, Ordering::Release);
+        assert!(key_eaten_within(&mut worker, 3));
+        assert!(!worker.push.failed.load(Ordering::Acquire));
         worker.stop();
         let _ = finish_tx.send(());
         server.join().unwrap();

@@ -13,6 +13,21 @@ use crate::message::{Envelope, PeerRole};
 
 use super::{RpcError, limits::runtime};
 
+/// 命名管道每个实例的入站 / 出站缓冲（字节）。
+///
+/// 2026-11-10 抄 msime `ipc.cpp` 的 `kMainPipeInboundFrames = 128`：一次按键
+/// 会连发十几个 layout change / snapshot，缓冲只装得下十几帧时，对端写入会
+/// 阻塞、会话超时。msime 原来 4 KiB 只容纳 13 帧，改成按 128 帧分配。
+///
+/// ⚠️ Weasel 这里 **tokio 1.53 的 `ServerOptions::new()` 默认已经是 64 KiB
+/// （≈200 帧）**，并没有 msime 那个 4 KiB 问题——不能假装修了一个不存在的
+/// bug。但 `RenderSnapshot` 带最多 256 个 `RenderItem`（见 `renderer.proto`），
+/// 单个大页快照可达数十 KiB，连续几个大帧 + 十几个 layout change 同时到达时
+/// 64 KiB 会吃紧。所以显式按 **128 帧 × 1 KiB = 128 KiB** 配置：给 burst 留
+/// 一倍余量，也防止将来 tokio 改默认值后悄悄退化。代价是每个管道实例多占
+/// 64 KiB 内核分页池，相对输入延迟可以忽略。
+const PIPE_BUFFER_BYTES: u32 = 128 * 1024;
+
 mod connection;
 mod policy;
 
@@ -106,7 +121,9 @@ impl RpcServer {
         let mut options = ServerOptions::new();
         options
             .reject_remote_clients(true)
-            .first_pipe_instance(first);
+            .first_pipe_instance(first)
+            .in_buffer_size(PIPE_BUFFER_BYTES)
+            .out_buffer_size(PIPE_BUFFER_BYTES);
         // SAFETY: attributes has the SECURITY_ATTRIBUTES ABI and references the
         // owned descriptor, both alive through this synchronous creation call.
         // Windows copies the descriptor; neither pointer survives the call.
@@ -309,5 +326,21 @@ impl RpcConnection {
             .await
             .map_err(|_| RpcError::Timeout)?
             .map_err(|_| RpcError::Disconnected)?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PIPE_BUFFER_BYTES;
+
+    #[test]
+    fn pipe_buffer_holds_burst_frames_without_overallocating() {
+        // msime `kMainPipeInboundFrames = 128`：至少能装 128 个 1 KiB 帧。
+        assert!(PIPE_BUFFER_BYTES >= 128 * 1024);
+        // 不能比 tokio 1.53 的 64 KiB 默认还小（防止未来误调把 burst 又打爆）。
+        assert!(PIPE_BUFFER_BYTES >= 64 * 1024);
+        // 单实例缓冲不超过 1 MiB，避免浪费内核分页池。
+        assert!(PIPE_BUFFER_BYTES <= 1024 * 1024);
+        assert_eq!(PIPE_BUFFER_BYTES, 128 * 1024);
     }
 }
