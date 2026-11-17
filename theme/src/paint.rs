@@ -14,23 +14,74 @@
 
 use crate::d2d_bindings::*;
 use crate::theme::config::{Hover, LayoutType, Metrics};
-use crate::theme::layout::{Layout, Rect, RoundInfo, PAGE_NEXT, PAGE_PREV, PREDICTION_KIND};
+use crate::theme::layout::{
+    HEAD_ARROW, Layout, PAGE_NEXT, PAGE_PREV, PREDICTION_KIND, Rect, RoundInfo, SQ_PAGE_NEXT,
+    SQ_PAGE_PREV, bar_text, bar_text_uses_ascii_format, prediction_tag_visible,
+};
 use crate::theme_api::CandidateView;
 use weasel_style::ColorScheme;
 use windows_core::Interface;
 
-/// 材质档位：`%APPDATA%\Rime-Next\theme\material.txt` → `WEASEL_MATERIAL` → 默认 glass。
+/// `material.txt` 的按 mtime 缓存：同一次绘制里 `tier()` 会被调 10 次左右，
+/// 原实现每次都 `read_to_string` + 解析（实测 0.72ms/帧）。缓存后最多每 16ms
+/// 查一次 mtime，切换材质最多晚一帧生效。
 ///
+/// 材质档位：`%APPDATA%\Rime-Next\theme\material.txt` → `WEASEL_MATERIAL` → 默认 glass。
 /// 设置界面把用户选的档位写进 material.txt；文件不存在时才看环境变量。
-pub fn material() -> String {
-    std::env::var_os("APPDATA")
+#[derive(Default)]
+struct MaterialCache {
+    stamp: Option<std::time::SystemTime>,
+    checked_at: Option<std::time::Instant>,
+    text: String,
+}
+
+std::thread_local! {
+    static MATERIAL_CACHE: std::cell::RefCell<MaterialCache> =
+        std::cell::RefCell::new(MaterialCache::default());
+}
+
+/// 材质文件最多每这么多个毫秒查一次 mtime（其余调用直接吃缓存）。
+const MATERIAL_CHECK_MS: u128 = 16;
+
+fn material_cached() -> String {
+    let Some(path) = std::env::var_os("APPDATA")
         .map(std::path::PathBuf::from)
         .map(|base| base.join("Rime-Next").join("theme").join("material.txt"))
-        .and_then(|path| std::fs::read_to_string(path).ok())
+    else {
+        return std::env::var("WEASEL_MATERIAL").unwrap_or_default();
+    };
+    let fresh = MATERIAL_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        cache
+            .checked_at
+            .is_some_and(|at| at.elapsed().as_millis() < MATERIAL_CHECK_MS)
+    });
+    if fresh {
+        return MATERIAL_CACHE.with(|cache| cache.borrow().text.clone());
+    }
+    let stamp = std::fs::metadata(&path).and_then(|meta| meta.modified()).ok();
+    let hit = MATERIAL_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        (cache.checked_at.is_some() && cache.stamp == stamp).then(|| cache.text.clone())
+    });
+    if let Some(text) = hit {
+        MATERIAL_CACHE.with(|cache| cache.borrow_mut().checked_at = Some(std::time::Instant::now()));
+        return text;
+    }
+    let text = std::fs::read_to_string(&path)
+        .ok()
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
         .or_else(|| std::env::var("WEASEL_MATERIAL").ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    MATERIAL_CACHE.with(|cache| {
+        *cache.borrow_mut() = MaterialCache {
+            stamp,
+            checked_at: Some(std::time::Instant::now()),
+            text: text.clone(),
+        };
+    });
+    text
 }
 
 /// 候选窗材质档位（2026-11-02 用户定：**只出一个 DLL，三档在设置里切**）。
@@ -74,9 +125,19 @@ impl Material {
     }
 }
 
-/// 当前材质档位（读 `material.txt` → 解析）。绘制/度量都用它。
+/// 只使用「默认」档（不透明）。21:4x 用户：「隐藏玻璃和亚克力默认选项，
+/// 只使用默认效果，也就是无透明的」——三档在设置界面里不再出现，也不再
+/// 由 `material.txt` / `WEASEL_MATERIAL` 决定。cyime 液态玻璃光泽是**纯绘制层**，
+/// 不依赖窗口透明、抓屏或 DWM backdrop，所以不透明档照样有玻璃光泽。
+/// 想恢复三档：把 `FORCE_OPAQUE` 改回 `false` 即可（`Material::parse` 未动）。
+const FORCE_OPAQUE: bool = true;
+
+/// 当前材质档位（绘制/度量都用它）。
 pub fn tier() -> Material {
-    Material::parse(&material())
+    if FORCE_OPAQUE {
+        return Material::Opaque;
+    }
+    Material::parse(&material_cached())
 }
 
 /// 抓屏模糊/亚克力档（`flat`）的配色 —— 面板底不再写死白色，字色**自动**跟着
@@ -231,18 +292,45 @@ pub fn plain_scheme(
 }
 
 /// 主题要用的 DirectWrite 文本格式（官方 `D2D::pPreeditFormat` / `pTextFormat` /
-/// `pLabelFormat` / `pCommentFormat`），外加我们自己的「预测标签」小号格式。
+/// `pLabelFormat` / `pCommentFormat`），外加「预测标签」小号格式与
+/// 「编码栏 ASCII 编码」放大格式。
 pub struct Formats {
     pub preedit: IDWriteTextFormat,
+    /// 编码栏**纯 ASCII 编码**专用（2026-11-12）。同一 `font_point` 下用户
+    /// 截图同阈值实测 `ff` 墨迹高 24px、中文按钮 28px，故单独放大 1.17×；
+    /// 中文按钮 / 翻页箭头 /「智能预测」仍用 `preedit`，视觉字高才齐。
+    /// `MeasureFormat::PreeditAscii` 保证测量缓存不与 `preedit` 串味。
+    pub preedit_ascii: IDWriteTextFormat,
     pub text: IDWriteTextFormat,
     pub label: IDWriteTextFormat,
     pub comment: IDWriteTextFormat,
     /// 「预测」标签（预测项的 `secondary_text`）专用的小号格式：字号 = 候选字号的一半。
     ///
-    /// 2026-11-08 用户口径：「我说的是预测这个标签做成小一号，预测的候选字号不变」
-    /// ⇒ 打字时的预测候选 / 上屏后联想条，**正文文字仍用 `text`、字号不动**，
-    /// 只有这个「预测」标签换成 `prediction_tag`。见 `make_formats`。
+    /// 2026-11-08 先按「标签小一号、候选正文字号不变」接入；同日稍后用户又要求
+    /// 「不要显示预测这个标签了」⇒ `layout::prediction_tag_visible()` 恒 false，
+    /// 这个格式目前**不会被用于绘制**（`measure_all` 对预测项直接给 ZERO）。
+    /// 保留它只是为了以后想恢复标签时不必重写半字号链路。见 `make_formats`。
     pub prediction_tag: IDWriteTextFormat,
+    /// 挤压三模式的**小号**格式（11px = 0.6875em）：候选序号、拼音注释、底行页码。
+    /// 2026-11-13「完全按 ime_ui_reference.html 做」：HTML 里这三处都是 11px，
+    /// 之前它们和候选正文共用 14pt ⇒ 序号/拼音看起来和候选一样大（用户说难看）。
+    pub squeeze_small: IDWriteTextFormat,
+    /// 挤压三模式顶行预编辑（13px = 0.8125em、等宽、600）：HTML `.cand-head .preedit`。
+    pub squeeze_head: IDWriteTextFormat,
+    /// 挤压三模式顶行「首候选提示」（13px = 0.8125em、600）：HTML `.cand-head .hint`。
+    pub squeeze_head_hint: IDWriteTextFormat,
+    /// 挤压三模式底行按钮字（2/3 em，2026-11-13 用户定）：翻页 `‹`/`›` 与「同/贴/符」。
+    pub squeeze_btn: IDWriteTextFormat,
+    /// 挤压三模式顶行「拼音」pill 文字（10.5px = 0.65625em）：HTML `.tag`。
+    ///
+    /// 2026-11-13「方案②」加：数据源是 `CandidateView.schema_name`（Engine 的
+    /// `RimeStatus.schema_name`）。方案名未知（空串）时不画 pill。
+    pub squeeze_tag: IDWriteTextFormat,
+    /// 挤压三模式底行页码（11px、等宽 Consolas）：HTML `.cand-foot .pg`「1 / N」。
+    ///
+    /// 与 `squeeze_small` 同字号但字体不同（HTML 里 `.pg` 是 `ui-monospace`），
+    /// 且必须用独立格式：同一段文字用不同格式量/画，缓存不能串味。
+    pub squeeze_pg: IDWriteTextFormat,
 }
 
 /// 绘制上下文：一帧所需的全部引用。
@@ -305,21 +393,27 @@ struct SqueezePalette {
     /// 默认档 = 主题 `back_color`；玻璃档 = 模糊桌面平均亮度灰；
     /// 亚克力档 = 蒙版色按自身 alpha 叠在中灰桌面上的结果。
     paper: u32,
-    /// 编码栏文字（`text_color`）。
+    /// 正文墨色（`text_color`）：未选中候选词 / 顶行首候选提示 / 编码栏。
     ink: u32,
-    /// 横/竖分隔线、字符格线（`border_color` → `comment_text_color` → `ink`）。
+    /// 分隔线与按钮描边（HTML `--line`）。配色里没有 `--line` 对应的角色
+    /// （`border_color` 是玻璃亮边、压在浅底上读不出来），按「paper 与 dim 混 22%」
+    /// 逼近 18 套配色各自的 `--line`（浅色 ≈ #e5e8ec / 深色 ≈ #3b4553）。
     line: u32,
-    /// 普通候选底 / 字。
-    cand_bg: u32,
+    /// 次级文字（HTML `--dim`）：候选序号 / 拼音注释 / 页码。配色里对应
+    /// `comment_text_color`（18 套里正是 `--dim`，实测 #66748a）。
+    dim: u32,
+    /// 未选中候选**正文**字色（HTML `--text`，不是灰）：2026-11-13「完全按 html 做」
+    /// 取代 11-07「未选中候选词做成灰」——那条是旧色块设计的口径，HTML 里正文用正文色，
+    /// 只有序号/拼音是 dim。
     cand_text: u32,
-    /// 未选中候选的**灰字**（2026-11-07 用户：「未选中候选词的字体颜色做成灰色」）。
-    /// = `cand_text` 与 `cand_bg` 逐通道取中值：steam 深色主题下约 #8A8B8C 的中性灰，
-    /// 浅色主题同样得到可读中灰（对比度校验见 `muted_mid` / 单测）。
-    /// **选中项不参与**，仍用 `hilite_text`（主题 `hilited_candidate_text_color`）。
-    cand_text_muted: u32,
-    /// 选中候选底 / 字。
+    /// 选中候选底（HTML `--sel`；18 套里映射在 `hilited_back_color`，
+    /// 深色套是半透明 ⇒ 这里先按 `paper` 混成不透明）。
     hilite_bg: u32,
+    /// 选中候选字色（HTML `--seltext`；18 套里映射在 `hilited_text_color`）。
     hilite_text: u32,
+    /// 底行按钮盒底色（HTML `.cand-foot button{background:var(--panel2)}`）：
+    /// 用 paper 与 dim 取 7% 混合近似（配色结构里没有 `--panel2` 角色）。
+    btn_bg: u32,
 }
 
 /// 便捷入口：默认档（不透明）配色。旧单测与设计文档用它验证「按 theme 走」。
@@ -332,7 +426,9 @@ fn squeeze_palette(scheme: &ColorScheme) -> SqueezePalette {
 /// 这时按有效背景明暗回落到中性浅/深墨，而不是硬套主题值。
 ///
 /// * `backdrop_luma`：`self.backdrop` 抓到的模糊桌面平均亮度；`None` = 没抓到。
-/// * `veil`：mod 侧用**原始配色**算好的亚克力蒙版（含 alpha）；`0` = 没注入，现算。
+/// * `_veil`：历史参数，mod 侧注入的亚克力蒙版。2026-11-14 起**大框颜色统一走
+///   `back_color` 同款**（「默认同款颜色 + 档位透明度」），不用它的色相；透明度统一读
+///   [`veil_alpha`]，与官方布局的 [`theme_veil`] 是同一个数字。保留参数只为兼容调用点。
 ///
 /// 三档 `surface` 与官方 `Painter::draw` 的 `back_color` 分档一一对应：默认铺实色、
 /// 玻璃不铺、亚克力铺蒙版；`tier.flat()` 的两档由 `draw_squeeze` 先把抓屏模糊位图
@@ -342,7 +438,7 @@ fn squeeze_palette_for(
     scheme: &ColorScheme,
     tier: Material,
     backdrop_luma: Option<f32>,
-    veil: u32,
+    _veil: u32,
 ) -> SqueezePalette {
     let opaque = |c: u32| 0xFF00_0000u32 | (c & 0x00FF_FFFF);
     let lum = |c: u32| {
@@ -374,82 +470,118 @@ fn squeeze_palette_for(
     let (surface, paper) = match tier {
         // 默认（含老金属档）：主题 `back_color` 铺满，不抓屏、不模糊。
         Material::Opaque | Material::Metal => (back, back),
+        // 2026-11-14 用户定式:透明/亚克力 = **默认同款颜色** + 档位透明度
+        // (两档都是 80% 透 = alpha 0x33),选中底也按同档透；差别在抓屏高斯模糊的
+        // 强度(亚克力 σ=12 / 透明 σ=3)与官方布局那一层染色，不靠不透明度区分。
         Material::Glass => {
-            // 抓到模糊桌面 ⇒ 面板不染色（官方「不要白色了，直接透明」），
-            // 露出的就是那张糊过的图；没抓到就退回 50% 白，否则面板整个消失。
-            // `plain_scheme` 估字色时同样按白底（见 `backdrop_luma.unwrap_or(255.0)`），
-            // 两边口径必须一致。
             let l = backdrop_luma
                 .unwrap_or(255.0)
                 .clamp(0.0, 255.0)
                 .round() as u32;
             let gray = 0xFF00_0000u32 | (l << 16) | (l << 8) | l;
-            let surface = if backdrop_luma.is_some() {
-                0
-            } else {
-                0x80FF_FFFFu32
-            };
+            let surface = (0x33 << 24) | (back & 0x00FF_FFFF);
             (surface, gray)
         }
         Material::Acrylic => {
-            let v = if veil != 0 { veil } else { theme_veil(scheme) };
-            let a = ((v >> 24) & 0xFF) as f32 / 255.0;
-            // 蒙版叠在模糊桌面上；桌面亮度事先不知道，取中灰 128 作代表。
-            // 官方 `plain_scheme` 用黑/白两端算最坏对比度，这里只给一个可比较的基准，
-            // 真正的字色仍由那份校正过的 `scheme` 决定。
-            let mix = |c: u32| -> u32 {
-                ((c as f32 * a) + 128.0 * (1.0 - a))
-                    .round()
-                    .clamp(0.0, 255.0) as u32
-            };
-            let r = mix((v >> 16) & 0xFF);
-            let g = mix((v >> 8) & 0xFF);
-            let b = mix(v & 0xFF);
-            (v, 0xFF00_0000u32 | (r << 16) | (g << 8) | b)
+            // 2026-11-14 20:0x 用户:「亚克力做成 80% 透明,然后加一层高斯模糊」——
+            // 大框 = 默认档同款底色 + 80% 透的半透明蒙版；透明度走 veil_alpha()
+            // （默认 0x33，可用 theme/veil.txt 实时调），与官方布局 theme_veil() 同一个数，
+            // 字色计算与绘制不再打架。底下由 draw_squeeze 先铺 σ=12 的抓屏高斯模糊位图，
+            // 大框只剩 20% 染色，磨砂质感全靠那张糊过的桌面撑住。
+            let surface = (veil_alpha() << 24) | (back & 0x00FF_FFFF);
+            // 21:3x「32 个配色都做好」：有效背景回到**这套配色自己的底色**，
+            // 字色跟着皮肤走（浅底深字 / 深底浅字），不再锁成某一套参考图的酒红。
+            let paper = back;
+            (surface, paper)
         }
     };
 
     let ink = pick(scheme.text_color, paper, neutral(paper));
-    let line = pick(
-        scheme.border_color,
+    // 2026-11-13「完全按 ime_ui_reference.html 做」：
+    //   `--dim`  = 18 套配色里的 `comment_text_color`（实测 #66748a = HTML 的 --dim）
+    //   `--line` = 配色里没有这个角色（`border_color` 被映射成玻璃亮边）；
+    //              按 paper→dim 混 22% 逼近（浅色 ≈ #e5e8ec、深色 ≈ #3b4553）
+    //   `--sel`  = `hilited_back_color`（深色套半透明 ⇒ 按 paper 混成不透明）
+    //   `--seltext` = `hilited_text_color`
+    //   `--panel2`  = 按钮底，配色里也没有 ⇒ paper→dim 混 7%
+    let dim = pick(
+        scheme.comment_text_color,
         paper,
-        pick(scheme.comment_text_color, paper, ink),
+        blend_toward(ink, paper, 0.45),
     );
-    // 官方语义：candidate_back_color == 0 = 普通候选没有底色 ⇒ 回落有效背景；
-    // flat 档 `plain_scheme` 也会把它清零，所以这条回落必须留着。
-    let cand_bg = pick_alpha(scheme.candidate_back_color, paper);
-    let hilite_bg = pick_alpha(scheme.hilited_candidate_back_color, paper);
-    let cand_text = pick(
-        scheme.candidate_text_color,
-        cand_bg,
-        neutral(cand_bg),
-    );
-    let hilite_text = pick(
-        scheme.hilited_candidate_text_color,
-        hilite_bg,
-        neutral(hilite_bg),
-    );
-    // 2026-11-07 用户「未选中候选词的字体颜色做成灰色」：候选字与候选底取中值。
-    // 不能直接压暗主题的 candidate_text_color —— 玻璃/亚克力档的有效底会随桌面变，
-    // 这里按**已经算好并通过可读性校验**的 cand_text/cand_bg 取中点，三档都自适应。
-    let cand_text_muted = muted_mid(cand_text, cand_bg);
+    let line = blend_toward(paper, dim, 0.22);
+    let cand_text = pick(scheme.candidate_text_color, paper, ink);
+    // 选中底：优先 HTML `--sel`（`hilited_back_color`）；老主题没填时回退到
+    // `hilited_candidate_back_color`（18 套里是 accent 实色）。
+    let sel_raw = if (scheme.hilited_back_color >> 24) >= 0x40 {
+        scheme.hilited_back_color
+    } else {
+        scheme.hilited_candidate_back_color
+    };
+    let hilite_bg = if tier == Material::Glass || tier == Material::Acrylic {
+        // 透明/亚克力档:选中候选背景**按自身 alpha 透**(2026-11-14 用户:「包括当前候选的背景色」)。
+        sel_raw
+    } else {
+        blend_alpha(sel_raw, paper)
+    };
+    // 选中字：HTML `--seltext`（`hilited_text_color`）；没填时回退候选高亮字色。
+    let sel_text_raw = if (scheme.hilited_text_color >> 24) >= 0x40 {
+        scheme.hilited_text_color
+    } else {
+        scheme.hilited_candidate_text_color
+    };
+    let hilite_text = pick(sel_text_raw, hilite_bg, neutral(hilite_bg));
+    let btn_bg = blend_toward(paper, dim, 0.07);
     SqueezePalette {
         tier,
         surface,
         paper,
         ink,
         line,
-        cand_bg,
+        dim,
         cand_text,
-        cand_text_muted,
         hilite_bg,
         hilite_text,
+        btn_bg,
     }
 }
 
-/// 两个不透明颜色逐通道取中值（50%）。用于「未选中候选字 = 灰」：
+/// 把 `fg` 按 `t`（0..1）混到 `bg` 上，输出不透明 ARGB。
+/// 用于两种配色里没有对应角色的 HTML 色（`--line` / `--panel2` /
+/// 选中序号 75% 透明度）—— 从已有角色推，18 套配色各自得到同色系的近似值。
+fn blend_toward(bg: u32, fg: u32, t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    let mix = |shift: u32| -> u32 {
+        let f = ((fg >> shift) & 0xFF) as f32;
+        let b = ((bg >> shift) & 0xFF) as f32;
+        (f * t + b * (1.0 - t)).round().clamp(0.0, 255.0) as u32
+    };
+    0xFF00_0000u32 | (mix(16) << 16) | (mix(8) << 8) | mix(0)
+}
+
+/// 把带 alpha 的颜色按自身 alpha 混到不透明底 `bg` 上，输出不透明 ARGB。
+/// 18 套深色配色的 `--sel` 是 26% 透明的蓝（`0x42...`），D2D 直接铺会盖掉面板色，
+/// 先混成等效不透明色再画，与浏览器里的合成结果一致。
+fn blend_alpha(c: u32, bg: u32) -> u32 {
+    let a = ((c >> 24) & 0xFF) as f32 / 255.0;
+    if a <= 0.0 {
+        return 0xFF00_0000u32 | (bg & 0x00FF_FFFF);
+    }
+    if a >= 1.0 {
+        return 0xFF00_0000u32 | (c & 0x00FF_FFFF);
+    }
+    let mix = |shift: u32| -> u32 {
+        let f = ((c >> shift) & 0xFF) as f32;
+        let b = ((bg >> shift) & 0xFF) as f32;
+        (f * a + b * (1.0 - a)).round().clamp(0.0, 255.0) as u32
+    };
+    0xFF00_0000u32 | (mix(16) << 16) | (mix(8) << 8) | mix(0)
+}
+
+/// 两个不透明颜色逐通道取中值（50%）。11-07「未选中候选字 = 灰」口径已作废，\n/// 但保留这个工具函数备查（#[allow(dead_code)]，不参与本帧绘制）。
 /// 白字压深底 → 中性灰，深字压浅底 → 中灰；输出恒不透明。
 /// 例：`#FFFFFF` 与 `#141617` → `#898A8B`（约 #8B8B8B，与用户口径一致）。
+#[allow(dead_code)]
 fn muted_mid(fg: u32, bg: u32) -> u32 {
     let mix = |shift: u32| -> u32 {
         ((((fg >> shift) & 0xFF) + ((bg >> shift) & 0xFF)) / 2) & 0xFF
@@ -457,7 +589,8 @@ fn muted_mid(fg: u32, bg: u32) -> u32 {
     0xFF00_0000u32 | (mix(16) << 16) | (mix(8) << 8) | mix(0)
 }
 
-/// 底色专用：alpha ≥ 0x40 才认，否则回落到面板底色并强制不透明。
+/// 底色专用：alpha ≥ 0x40 才认，否则回落到面板底色并强制不透明。\n/// 选中底的 alpha 回落现由 lend_alpha 统一处理，此函数保留备查。
+#[allow(dead_code)]
 fn pick_alpha(c: u32, fallback: u32) -> u32 {
     if (c >> 24) >= 0x40 {
         0xFF00_0000u32 | (c & 0x00FF_FFFF)
@@ -722,26 +855,31 @@ pub(crate) const GLASS_ALPHA: u32 = 0x33;
 /// 真凶其实是**颜色被面积加权平均洗成了中性灰**，跟不透明度关系不大。改完
 /// [`theme_veil`] 的"借色相不借明度"（10:5x）后，10:41 回调到 `0xCC`（80%）。
 ///
-/// 11:10 用户：「亚克力做成 50 透明」⇒ 回到 **`0x80`（50%）**。有配色染色 + σ=8 打底，
-/// 50% 已经是"透光不透影"：背景的明暗起伏明显能感知，但认不出内容，也不再像玻璃那样清透。
+/// 2026-11-14 19:4x 用户「透明度压缩一下，上一层高斯模糊」：先压到 40% 透（0x99）；
+/// 20:0x 又定为 **80% 透（0x33，20% 不透明）** —— 大框几乎不染色，视觉主体是底下
+/// 那张 σ=12 抓屏高斯模糊位图。这个数字同时供官方布局 [`theme_veil`] 与挤压布局
+/// [`squeeze_palette_for`] 使用 —— 字色计算与实际绘制必须是同一个 alpha，
+/// 否则会「算得挺好却看不清」（19:42 版两处打架：官方 0x40 / 挤压 0x99）。
 ///
-/// 三档的"透明度"口径（面板底的不透明占比）：
-/// 透明档 **0%**（面板底全透明，只剩抓屏模糊图；抓不到屏幕才退回 50% 白）
-/// · 亚克力 **50%** · 默认（原"不透明"）**100%**（yaml 的 `back_color` 铺满）。
+/// 三档的"透明度"口径（大框底的不透明占比）：
+/// 透明档 **20%**（0x33，只剩抓屏模糊图；抓不到屏幕才退回 50% 白）
+/// · 亚克力 **20%**（0x33，同透但模糊更狠 σ=12、且铺配色蒙版）
+/// · 默认（原"不透明"）**100%**（yaml 的 `back_color` 铺满）。
 ///
 /// `plain_scheme` 用它算"有效背景亮度"（决定字色），`Painter::draw` 用它铺面板 ——
 /// 两处必须是同一个值，否则字色按 A 算、底按 B 画，看着就会"算得挺好却看不清"。
 /// 运行时可用 [`veil_alpha`]（`veil.txt`）覆盖。
-pub(crate) const VEIL_ALPHA: u32 = 0x80;
+pub(crate) const VEIL_ALPHA: u32 = 0x33; // 2026-11-14 20:0x 用户「80% 透明」:20% 不透明 = 255*0.2 = 51
 
 /// 蒙版不透明度的**实际生效值**：`VEIL_ALPHA` 可被
-/// `%APPDATA%\Rime-Next\theme\veil.txt`（一个 30..95 的百分数）实时覆盖。
+/// `%APPDATA%\Rime-Next\theme\veil.txt`（一个 5..95 的百分数）实时覆盖。
 ///
 /// 和 `material.txt` / `blur.txt` 同一套机制：每次用时现读，改完下一次显示候选窗就生效，
 /// 不用重编译、不用重装 DLL。调"亚克力多透"这种主观手感，用户自己滑比来回改代码快：
-/// 写 `40` 更透（偏玻璃）、写 `80` 更实（接近不透明）。
+/// 数字是**不透明度百分数**，写 `20` = 80% 透（当前默认）、`40` = 60% 透、
+/// `80` = 20% 透（接近不透明）。
 ///
-/// 30 以下就真成玻璃了（背后什么都看得见）；95 以上磨砂感消失、跟不透明没区别 ——
+/// 5 以下连配色蒙版都看不见（只剩模糊桌面）；95 以上磨砂感消失、跟不透明没区别 ——
 /// 两头都当"没写"，用档位默认值。
 pub fn veil_alpha() -> u32 {
     let tuned = std::env::var_os("APPDATA")
@@ -752,13 +890,13 @@ pub fn veil_alpha() -> u32 {
     tuned.unwrap_or(VEIL_ALPHA)
 }
 
-/// `veil.txt` 的内容 → alpha。容忍结尾的 `%` 和空白；超出 30..95 的当没写。
+/// `veil.txt` 的内容 → alpha。容忍结尾的 `%` 和空白；超出 5..95 的当没写。
 fn parse_veil_pct(text: &str) -> Option<u32> {
     text.trim()
         .trim_end_matches('%')
         .parse::<f32>()
         .ok()
-        .filter(|pct| (30.0..=95.0).contains(pct))
+        .filter(|pct| (5.0..=95.0).contains(pct))
         .map(|pct| (pct / 100.0 * 255.0).round() as u32)
 }
 
@@ -769,7 +907,109 @@ const GLASS_SIGMA: f32 = 3.0;
 /// 用户 2026-11-04 09:4x：「再模糊一些」。DWM 的亚克力模糊半径是系统写死的（不能调），
 /// 所以亚克力档也改走自绘高斯 —— 半径、强度、染色全在自己手里。
 /// σ=8 ⇒ 屏幕 σ≈16px（1/2 降采样），3σ 半径接近 50px：背后再大的色块也只剩一片渐变。
-const ACRYLIC_SIGMA: f32 = 8.0;
+const ACRYLIC_SIGMA: f32 = 12.0; // σ=8 观感不够提到 12;20:0x 用户「加一层高斯模糊」再次确认。糊过的位图铺在**候选窗大框**最底层
+
+/// 候选窗「光泽」：逐字照抄 `skins.html` 的 `.candidate` 两条 CSS。
+///
+/// 23:1x 用户「html的颜色直接照搬不就行了」⇒ 撤掉此前全部自适应加工：
+///   ✗ 亮端按亮度混白、暗端等比压暗（原 `gloss_shade`）
+///   ✗ 亮边按底色明暗取 24% / 72% 白
+///   ✗ 118° 斜光按底色明暗分档（38% 白→10% 墨 / 22% 白→全透）
+///   ✗ 底色渐变强制 78% / 90% 不透明
+/// 现在代码里**不再产生任何颜色**：140° 两端、1px 亮边全部原样取 YAML，
+/// 而 YAML 由 `sync_from_skins_html.py` 从 `skins.html` 的 THEMES 直搬。
+///
+/// ```css
+/// .candidate{ background:linear-gradient(140deg,var(--cand),var(--cand2));
+///             border:1px solid var(--glass-border);
+///             opacity:var(--cand-op) }   /* :root = 1，32 配色都未覆盖 */
+/// body[data-glass=on] .candidate::before{
+///   background:linear-gradient(118deg,rgba(255,255,255,.18),
+///     rgba(255,255,255,0) 38%,rgba(255,255,255,0) 62%,rgba(255,255,255,.09)) }
+/// ```
+/// 都是纯色带，没有网格 / 放射 / 任何线条。
+///
+/// 2026-11-15 23:0x 用户「像雾气一样，颜色的渐变呢，怎么没有渐变，纯棕褐色啊」⇒
+/// 撤掉上一版的**白色雾状高光**（白亮带/亮线/向白提亮会把颜色洗成一片灰棕），
+/// 改成 HTML 原稿的**彩色多层渐变**：
+///   ① 140° 底色：`--cand` → 混进 `--accent` 的 `--cand2`；
+///      （YAML 里 `back_color` 与 `candidate_back_color` 都来自 `--cand`，两端同色
+///        ⇒ 这就是「怎么没有渐变」的真根因）
+///   ② 左上 `--accent2` 光晕、右下 `--accent` 光晕（HTML `.stage` 两团
+///      radial-gradient 的线性近似，中心有颜色、边缘全透，不依赖径向 API）；
+///   ③ 118° 白色斜光回到 CSS 原值 .16 / 0 / 0 / .08，只做玻璃反光，不糊成雾；
+///   ④ 1px 玻璃亮边原样取 `--glass-border`。
+/// 配色 YAML / skins.html 一个字段都不动，颜色全部来自当前生效的 ColorScheme。
+const GLOSS_BASE_DEG: f32 = 140.0;
+const GLOSS_SHEEN_DEG: f32 = 118.0;
+const GLOSS_SHEEN_HEAD: u32 = 0x29FF_FFFF; // .16 白（CSS 原值）
+const GLOSS_SHEEN_MID: u32 = 0x0000_0000;
+const GLOSS_SHEEN_TAIL: u32 = 0x14FF_FFFF; // .08 白
+const GLOSS_SHEEN_AT_34: f32 = 0.38;
+const GLOSS_SHEEN_AT_66: f32 = 0.62;
+/// 两团彩色光晕的 alpha（中心→中段→边缘全透）与覆盖半径。
+const GLOSS_GLOW_A2: u32 = 0x8C;      // 左上 .55
+const GLOSS_GLOW_A2_MID: u32 = 0x2E;  // 左上 .18
+const GLOSS_GLOW_A: u32 = 0x70;       // 右下 .44
+const GLOSS_GLOW_A_MID: u32 = 0x1F;   // 右下 .12
+const GLOSS_GLOW_SPAN_X: f32 = 0.78;
+const GLOSS_GLOW_SPAN_Y: f32 = 0.68;
+/// 140° 次端混进 `--accent` 的比例：让两端真的有颜色差。
+const GLOSS_CAND2_ACCENT_MIX: f32 = 0.42;
+
+/// 把 `b` 的 RGB 按 `t` 混进 `a`，alpha 取 `a` 的（颜色混合不改透明度）。
+fn mix_gloss_rgb(a: u32, b: u32, t: f32) -> u32 {
+    let mix = |x: u32, y: u32| -> u32 {
+        (x as f32 + (y as f32 - x as f32) * t)
+            .round()
+            .clamp(0.0, 255.0) as u32
+    };
+    let alpha = (a >> 24) & 0xff;
+    (alpha << 24)
+        | (mix((a >> 16) & 0xff, (b >> 16) & 0xff) << 16)
+        | (mix((a >> 8) & 0xff, (b >> 8) & 0xff) << 8)
+        | mix(a & 0xff, b & 0xff)
+}
+
+/// 用配色里的颜色做光晕：RGB 原样，alpha 换成渐变需要的档位。
+fn gloss_glow(color: u32, alpha: u32) -> u32 {
+    ((alpha & 0xff) << 24) | (color & 0x00ff_ffff)
+}
+
+/// 140° 两端 / 1px 亮边：首端原样、次端混进 `--accent`、亮边原样。
+/// 具体 I/O 见单测 `gloss_endpoints_mix_accent_into_cand2`。
+fn gloss_endpoints(back: u32, cand2: u32, border: u32, accent: u32) -> (u32, u32, u32) {
+    (
+        back,
+        mix_gloss_rgb(cand2, accent, GLOSS_CAND2_ACCENT_MIX),
+        border,
+    )
+}
+
+/// 118° 方向的斜率 dy/dx = -cosθ/sinθ（118° ⇒ 0.531）。
+fn sheen_slope(deg: f32) -> f32 {
+    let rad = deg.to_radians();
+    -rad.cos() / rad.sin()
+}
+
+/// CSS `linear-gradient(deg)` 在矩形上的渐变轴（CSS 标准算法）：
+/// 方向 (sinθ, -cosθ)，轴长 L = |w·sinθ| + |h·cosθ|，起终点 = 中心 ∓ dir·L/2。
+/// 具体例子见单测：100×50 矩形 / 140° ⇒ 起点 (17.03, -14.28)、终点 (82.97, 64.28)。
+fn gradient_axis(
+    rect: &Rect,
+    deg: f32,
+) -> (windows_numerics::Vector2, windows_numerics::Vector2) {
+    let rad = deg.to_radians();
+    let (dx, dy) = (rad.sin(), -rad.cos());
+    let len = (rect.width() * dx).abs() + (rect.height() * dy).abs();
+    let cx = (rect.left + rect.right) * 0.5;
+    let cy = (rect.top + rect.bottom) * 0.5;
+    let half = len * 0.5;
+    (
+        windows_numerics::Vector2 { x: cx - dx * half, y: cy - dy * half },
+        windows_numerics::Vector2 { x: cx + dx * half, y: cy + dy * half },
+    )
+}
 
 /// 当前档位的抓屏模糊强度（σ，降采样后像素）。
 ///
@@ -948,6 +1188,7 @@ fn darken_color(argb: u32, factor: f32) -> u32 {
 }
 
 /// RGB 分量往白里混（提亮）。
+#[allow(dead_code)]
 fn lighten_color(argb: u32, amount: f32) -> u32 {
     let mix = |channel: u32| ((channel as f32) + (255.0 - channel as f32) * amount).min(255.0) as u32;
     (mix((argb >> 16) & 0xFF) << 16) | (mix((argb >> 8) & 0xFF) << 8) | mix(argb & 0xFF)
@@ -1188,6 +1429,20 @@ impl Painter<'_> {
                     0,
                     &RoundInfo::default(),
                 );
+                // 21:3x「全部按 cyime 光泽做」：官方六种布局也铺同一套光泽。
+                // 必须放在 `highlight_rect` **之后** —— 它内部会用 `back_color`
+                // 整片 `fill_geometry`（不透明档是实色），画在前面会被完全盖掉。
+                // 与挤压三模式 `draw_squeeze` 共用 `draw_gloss`，颜色取每套配色
+                // 自己的 `back_color`；16×2=32 套配色同款光泽、各自色相。
+                // 之后才是 Metal 老渐变 / preedit / 候选 / 页码，都压在光泽上层。
+                if tier != Material::Metal {
+                    self.draw_gloss(
+                        &back_rect,
+                        style.round_corner_ex.max(0.0),
+                        &RoundInfo::default(),
+                        self.scheme.back_color,
+                    );
+                }
                 if tier == Material::Metal {
                     // 金属：**分段渐变**（用户 23:1x：4:2:3:1 的黑白黑白，但每一段之间要有过渡）。
                     // 做法：给出若干控制点，段内线性插值 ⇒ 既保留 4:2:3:1 的比例，又不再是刀切边。
@@ -1237,8 +1492,9 @@ impl Painter<'_> {
                     self.fill_geometry(&Rect::new(back_rect.left, back_rect.bottom - 1.0, back_rect.right, back_rect.bottom), 0x8800_0000, 0.0, &info, false);
                 }
             }
-            // 预编辑（L452-457）：非 inline 且有内容才画
-            if !inline && self.view.preedit.is_some() {
+            // 预编辑（L452-457）：非 inline 且有内容才画。
+            // 联想条没有真实 preedit，但编码栏写「智能预测」，同样要画。
+            if !inline && bar_text(&self.view).is_some() {
                 self.draw_preedit(layout, true)?;
             }
             if has_candidates {
@@ -1272,6 +1528,453 @@ impl Painter<'_> {
     /// 三个配色」）：flat 档先铺抓屏模糊位图，再按档位决定面板层铺不铺色。
     /// 所有矩形都取自 `Layout`（窗口尺寸已经按 squeeze 算好），只换颜色与装饰，
     /// 绝不自己改坐标 —— 不会被窗口裁掉。
+    /// 对角 wash(HTML `.bg-orbs` 同款观感):起点色 → 50% 衰减 → 透明。
+    /// 2026-11-14 用户:「这种光泽,渐变变化大一点」——三档都画。
+    fn diagonal_wash(&self, rect: &Rect, from_tl: bool, color: D2D_COLOR_F) {
+        unsafe {
+            let (start_point, end_point) = if from_tl {
+                (
+                    windows_numerics::Vector2 { x: rect.left, y: rect.top },
+                    windows_numerics::Vector2 { x: rect.right, y: rect.bottom },
+                )
+            } else {
+                (
+                    windows_numerics::Vector2 { x: rect.right, y: rect.bottom },
+                    windows_numerics::Vector2 { x: rect.left, y: rect.top },
+                )
+            };
+            let stops = [
+                D2D1_GRADIENT_STOP {
+                    position: 0.0,
+                    color,
+                },
+                D2D1_GRADIENT_STOP {
+                    position: 0.5,
+                    color: D2D_COLOR_F {
+                        r: color.r,
+                        g: color.g,
+                        b: color.b,
+                        a: color.a * 0.3,
+                    },
+                },
+                D2D1_GRADIENT_STOP {
+                    position: 1.0,
+                    color: D2D_COLOR_F {
+                        r: color.r,
+                        g: color.g,
+                        b: color.b,
+                        a: 0.0,
+                    },
+                },
+            ];
+            let Ok(collection) = self.target.CreateGradientStopCollection(
+                &stops,
+                D2D1_GAMMA_2_2,
+                D2D1_EXTEND_MODE_CLAMP,
+            ) else {
+                return;
+            };
+            let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                startPoint: start_point,
+                endPoint: end_point,
+            };
+            let Ok(brush) = self
+                .target
+                .CreateLinearGradientBrush(&props, None, &collection)
+            else {
+                return;
+            };
+            self.target.FillRectangle(&d2d_rect(rect), &brush);
+        }
+    }
+
+    /// 白光斜扫(HTML `.candidate::before` 同款):25% → 12%,中段全透。
+    /// 2026-11-14 晚:被 AC2 几何背景层取代,保留函数备用。
+    #[allow(dead_code)]
+    fn diagonal_sheen(&self, rect: &Rect) {
+        unsafe {
+            let (start_point, end_point) = (
+                windows_numerics::Vector2 { x: rect.left, y: rect.top },
+                windows_numerics::Vector2 {
+                    x: rect.left + (rect.right - rect.left) * 0.72,
+                    y: rect.bottom,
+                },
+            );
+            let stops = [
+                D2D1_GRADIENT_STOP {
+                    position: 0.0,
+                    color: d2d_color(0x40FFFFFF),
+                },
+                D2D1_GRADIENT_STOP {
+                    position: 0.38,
+                    color: d2d_color(0x00FFFFFF),
+                },
+                D2D1_GRADIENT_STOP {
+                    position: 0.62,
+                    color: d2d_color(0x00FFFFFF),
+                },
+                D2D1_GRADIENT_STOP {
+                    position: 1.0,
+                    color: d2d_color(0x17FFFFFF),
+                },
+            ];
+            let Ok(collection) = self.target.CreateGradientStopCollection(
+                &stops,
+                D2D1_GAMMA_2_2,
+                D2D1_EXTEND_MODE_CLAMP,
+            ) else {
+                return;
+            };
+            let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                startPoint: start_point,
+                endPoint: end_point,
+            };
+            let Ok(brush) = self
+                .target
+                .CreateLinearGradientBrush(&props, None, &collection)
+            else {
+                return;
+            };
+            self.target.FillRectangle(&d2d_rect(rect), &brush);
+        }
+    }
+
+    /// 在圆角面板内铺一条 CSS 同款线性渐变（裁进圆角，不会在四角戳出方亮块）。
+    fn fill_gloss_gradient(
+        &self,
+        shell: &Rect,
+        radius: f32,
+        info: &RoundInfo,
+        start: windows_numerics::Vector2,
+        end: windows_numerics::Vector2,
+        stops: &[D2D1_GRADIENT_STOP],
+    ) {
+        unsafe {
+            let Ok(path) = rounded_rect_path(self.factory, shell, radius, info) else {
+                return;
+            };
+            let Ok(collection) = self.target.CreateGradientStopCollection(
+                stops,
+                D2D1_GAMMA_2_2,
+                D2D1_EXTEND_MODE_CLAMP,
+            ) else {
+                return;
+            };
+            let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                startPoint: start,
+                endPoint: end,
+            };
+            let Ok(brush) = self.target.CreateLinearGradientBrush(&props, None, &collection) else {
+                return;
+            };
+            self.target.FillGeometry(&path, &brush, None::<&ID2D1Brush>);
+        }
+    }
+
+    /// HTML 同款彩色多层渐变（11-15 23:0x「颜色的渐变呢，纯棕褐色啊」）：
+    ///   ① 140° `--cand → --cand2+--accent` 彩色底色；
+    ///   ② 左上 `--accent2` 光晕；③ 右下 `--accent` 光晕；
+    ///   ④ 118° 白色斜光（CSS 原值，轻）；⑤ 1px 玻璃亮边。
+    /// 三模式 + 官方六布局共用，与材质档解耦；不依赖窗口透明、不抓屏。
+    fn draw_gloss(&self, shell: &Rect, radius: f32, info: &RoundInfo, back: u32) {
+        let accent = self.scheme.hilited_candidate_back_color; // --accent
+        let accent2 = self.scheme.hilited_text_color;          // --seltext ≈ --accent2
+        let (cand, cand2, border) = gloss_endpoints(
+            back,
+            self.scheme.candidate_back_color,
+            self.scheme.border_color,
+            accent,
+        );
+        let w = shell.width();
+        let h = shell.height();
+        // ① 140° 彩色底色：两端必须有色差。
+        let (base_start, base_end) = gradient_axis(shell, GLOSS_BASE_DEG);
+        self.fill_gloss_gradient(shell, radius, info, base_start, base_end, &[
+            D2D1_GRADIENT_STOP { position: 0.0, color: d2d_color(cand) },
+            D2D1_GRADIENT_STOP { position: 1.0, color: d2d_color(cand2) },
+        ]);
+        // ② 左上 accent2 光晕（HTML radial-gradient(280px 180px at 12% 0%) 线性近似）。
+        self.fill_gloss_gradient(
+            shell, radius, info,
+            windows_numerics::Vector2 { x: shell.left, y: shell.top },
+            windows_numerics::Vector2 {
+                x: shell.left + w * GLOSS_GLOW_SPAN_X,
+                y: shell.top + h * GLOSS_GLOW_SPAN_Y,
+            },
+            &[
+                D2D1_GRADIENT_STOP { position: 0.0, color: d2d_color(gloss_glow(accent2, GLOSS_GLOW_A2)) },
+                D2D1_GRADIENT_STOP { position: 0.55, color: d2d_color(gloss_glow(accent2, GLOSS_GLOW_A2_MID)) },
+                D2D1_GRADIENT_STOP { position: 1.0, color: d2d_color(0) },
+            ],
+        );
+        // ③ 右下 accent 光晕（HTML radial-gradient(260px 200px at 95% 100%) 线性近似）。
+        self.fill_gloss_gradient(
+            shell, radius, info,
+            windows_numerics::Vector2 { x: shell.right, y: shell.bottom },
+            windows_numerics::Vector2 {
+                x: shell.right - w * GLOSS_GLOW_SPAN_X,
+                y: shell.bottom - h * GLOSS_GLOW_SPAN_Y,
+            },
+            &[
+                D2D1_GRADIENT_STOP { position: 0.0, color: d2d_color(gloss_glow(accent, GLOSS_GLOW_A)) },
+                D2D1_GRADIENT_STOP { position: 0.60, color: d2d_color(gloss_glow(accent, GLOSS_GLOW_A_MID)) },
+                D2D1_GRADIENT_STOP { position: 1.0, color: d2d_color(0) },
+            ],
+        );
+        // ④ 118° 白色斜光：CSS 原值，薄薄一层玻璃反光，不再糊成雾。
+        let sheen_start = windows_numerics::Vector2 { x: shell.left, y: shell.top };
+        let sheen_end = windows_numerics::Vector2 {
+            x: shell.right,
+            y: shell.top + h * sheen_slope(GLOSS_SHEEN_DEG),
+        };
+        self.fill_gloss_gradient(shell, radius, info, sheen_start, sheen_end, &[
+            D2D1_GRADIENT_STOP { position: 0.0, color: d2d_color(GLOSS_SHEEN_HEAD) },
+            D2D1_GRADIENT_STOP { position: GLOSS_SHEEN_AT_34, color: d2d_color(GLOSS_SHEEN_MID) },
+            D2D1_GRADIENT_STOP { position: GLOSS_SHEEN_AT_66, color: d2d_color(GLOSS_SHEEN_MID) },
+            D2D1_GRADIENT_STOP { position: 1.0, color: d2d_color(GLOSS_SHEEN_TAIL) },
+        ]);
+        // ⑤ 玻璃亮边画在各层渐变**之后**，否则会被渐变盖掉。
+        self.stroke_geometry(shell, border, radius, self.m.bar_sep, info);
+    }
+
+    /// AC2(刺客信条 2)背景几何层(2026-11-14 用户:「做成刺客信条2的背景,不要
+    /// 图片,只要它的背景配色的布局」)。纯 D2D 几何,无贴图:
+    ///   ① 45° 菱形网格(两向细线)  ② 中央放射线 24 根
+    ///   ③ 同心菱形徽记 + 超出四角的大菱形  ④ 四周晕影(vignette)
+    /// 动画(漂移/旋转/呼吸)已于 2026-11-17 **永久废弃**(用户指示)——
+    /// 相位取固定值,只在交互/数据变化时随整帧重绘,不再有定时重绘。
+    /// 深色 = 白线;浅色 = 墨线(文艺复兴手稿感,AC2 正是文艺复兴题材)。
+    /// 全部裁进面板圆角路径(PushLayer),不会戳到圆角外。
+    /// 2026-11-14 20:1x 用户「去掉背景的白线」⇒ 停止调用（函数保留，想恢复直接放开）。
+    #[allow(dead_code)]
+    fn paint_ac2(&self, shell: &Rect, dark: bool) {
+        unsafe {
+            // 动画已永久废弃(2026-11-17 用户):相位全部取固定值,几何层纯静态。
+            let now_ms = 0.0_f32;
+            let w = shell.width();
+            let h = shell.height();
+            let cx = shell.left + w * 0.5;
+            let cy = shell.top + h * 0.5;
+            // 线色:深底白线 / 浅底墨线,按层分档(网格最淡、徽记最实)。
+            let (grid_ink, ray_ink, mark_ink, veil_ink) = if dark {
+                (0x14FF_FFFFu32, 0x24FF_FFFF, 0x3CFF_FFFF, 0x8C00_0000)
+            } else {
+                (0x1000_0000, 0x1C00_0000, 0x2E00_0000, 0x4600_0000)
+            };
+            let radius = (w.max(h) * 0.5).max(1.0);
+
+            // 圆角面板做蒙版,把整个几何层裁进面板(PushLayer)。
+            let mask = match rounded_rect_path(
+                self.factory,
+                &Rect::new(shell.left + 1.0, shell.top + 1.0, shell.right - 1.0, shell.bottom - 1.0),
+                (self.m.panel_radius() - 1.0).max(0.0),
+                &RoundInfo::default(),
+            ) {
+                Ok(p) => p,
+                Err(_) => return,
+            };
+            let Ok(layer) = self.target.CreateLayer(None) else {
+                return;
+            };
+            let params = D2D1_LAYER_PARAMETERS {
+                contentBounds: d2d_rect(shell),
+                geometricMask: core::mem::ManuallyDrop::new(Some(mask.into())),
+                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                maskTransform: windows_numerics::Matrix3x2::identity(),
+                opacity: 1.0,
+                opacityBrush: core::mem::ManuallyDrop::new(None),
+                layerOptions: D2D1_LAYER_OPTIONS_NONE,
+            };
+            self.target.PushLayer(&params, &layer);
+
+            // ① 45° 菱形网格:两向平行线族,沿各自方向漂移(spacing 的 2 倍周期循环)。
+            let spacing = 46.0_f32.max(self.m.panel_radius() * 2.2);
+            let mut grid_segs: Vec<windows_numerics::Vector2> = Vec::new();
+            let collect_family = |angle_deg: f32, phase: f32, out: &mut Vec<windows_numerics::Vector2>| {
+                // 过面板的斜线族:法向 (cosA, sinA),族沿法向排开(相位已静态化)。
+                let (nx, ny) = (angle_deg.to_radians().cos(), angle_deg.to_radians().sin());
+                let diag = (w * w + h * h).sqrt();
+                let count = ((diag / spacing).ceil() as i32 + 2).max(2);
+                let offset = ((cx * nx + cy * ny) + phase) % spacing;
+                for k in -(count / 2)..(count / 2 + 1) {
+                    let d = offset + k as f32 * spacing;
+                    let px = cx + nx * d;
+                    let py = cy + ny * d;
+                    let half = diag;
+                    out.push(windows_numerics::Vector2 {
+                        x: px - ny * half,
+                        y: py + nx * half,
+                    });
+                    out.push(windows_numerics::Vector2 {
+                        x: px + ny * half,
+                        y: py - nx * half,
+                    });
+                }
+            };
+            let drift = (now_ms * 0.006) % (spacing * 2.0);
+            collect_family(45.0, drift, &mut grid_segs);
+            collect_family(135.0, drift * 0.7 + 23.0, &mut grid_segs);
+            self.ac2_stroke_many(&grid_segs, grid_ink, 1.0);
+
+            // ② 放射线 24 根:从中心向外,只画外段(r0 起),整组缓慢旋转(2.5°/s
+            //    ≈ 144 秒一圈——可感知但不抢戏)。
+            let rays = 24;
+            let rot_deg = (now_ms * 0.0025) % 360.0;
+            let r0 = radius * 0.30;
+            let r1 = radius * 1.45;
+            let mut ray_segs: Vec<windows_numerics::Vector2> = Vec::with_capacity(rays * 2);
+            for i in 0..rays {
+                let a = (rot_deg + i as f32 * (360.0 / rays as f32)).to_radians();
+                let (ca, sa) = (a.cos(), a.sin());
+                ray_segs.push(windows_numerics::Vector2 { x: cx + ca * r0, y: cy + sa * r0 });
+                ray_segs.push(windows_numerics::Vector2 { x: cx + ca * r1, y: cy + sa * r1 });
+            }
+            self.ac2_stroke_many(&ray_segs, ray_ink, 1.0);
+
+            // ③ 同心菱形徽记:两层嵌套 + 一个超出四角的大菱形(只露 4 个角,
+            //    AC2 菜单的斜切框语言);alpha 呼吸(3.2 秒周期 ±30%)。
+            let breath = 0.72 + 0.28 * (now_ms * std::f32::consts::TAU / 3200.0).sin();
+            let breathe = |argb: u32, scale: f32| {
+                let a = (((argb >> 24) as f32 / 255.0) * breath * scale * 255.0).round() as u32;
+                (a << 24) | (argb & 0x00FF_FFFF)
+            };
+            let diamond = |half: f32, ink: u32| {
+                let pts = [
+                    windows_numerics::Vector2 { x: cx, y: cy - half },
+                    windows_numerics::Vector2 { x: cx + half, y: cy },
+                    windows_numerics::Vector2 { x: cx, y: cy + half },
+                    windows_numerics::Vector2 { x: cx - half, y: cy },
+                    windows_numerics::Vector2 { x: cx, y: cy - half },
+                ];
+                self.ac2_stroke(&pts, ink, 1.0);
+            };
+            diamond(radius * 0.34, breathe(mark_ink, 1.0));
+            diamond(radius * 0.52, breathe(mark_ink, 0.6));
+            diamond(radius * 1.55, breathe(mark_ink, 0.45));
+
+            // ④ 四周晕影:四条向内的线性渐变(边缘 → 透明),AC2 的 vignette。
+            let edge = (w.min(h) * 0.22).max(28.0);
+            // 2026-11-14 实测:veil 铺全窗时轴外区域不被 clamp 成透明(整窗蒙暗),
+            // FillRectangle 只铺各自边缘条带,渐变轴与条带重合。
+            let veil = |rect: (f32, f32, f32, f32), from: (f32, f32), to: (f32, f32)| {
+                let stops = [
+                    D2D1_GRADIENT_STOP { position: 0.0, color: d2d_color(veil_ink) },
+                    D2D1_GRADIENT_STOP {
+                        position: 1.0,
+                        color: D2D_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+                    },
+                ];
+                if let Ok(collection) =
+                    self.target.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)
+                {
+                    let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                        startPoint: windows_numerics::Vector2 { x: from.0, y: from.1 },
+                        endPoint: windows_numerics::Vector2 { x: to.0, y: to.1 },
+                    };
+                    if let Ok(vb) = self.target.CreateLinearGradientBrush(&props, None, &collection) {
+                        self.target.FillRectangle(
+                            &D2D_RECT_F { left: rect.0, top: rect.1, right: rect.2, bottom: rect.3 },
+                            &vb,
+                        );
+                    }
+                }
+            };
+            veil((shell.left, shell.top, shell.right, shell.top + edge),
+                (shell.left, shell.top), (shell.left, shell.top + edge));
+            veil((shell.left, shell.bottom - edge, shell.right, shell.bottom),
+                (shell.left, shell.bottom), (shell.left, shell.bottom - edge));
+            veil((shell.left, shell.top, shell.left + edge, shell.bottom),
+                (shell.left, shell.top), (shell.left + edge, shell.top));
+            veil((shell.right - edge, shell.top, shell.right, shell.bottom),
+                (shell.right, shell.top), (shell.right - edge, shell.top));
+
+            self.target.PopLayer();
+        }
+    }
+
+    /// 线段族批量描边(2026-11-17 渲染提速):一族几十条线合进**一个** path
+    /// (每 figure 一条线),一次 DrawGeometry —— 与设置窗同款优化,候选窗网格
+    /// +放射线从 ~60 个几何对象/帧降到 3 个。
+    fn ac2_stroke_many(
+        &self,
+        segs: &[windows_numerics::Vector2],
+        ink: u32,
+        width: f32,
+    ) {
+        if segs.is_empty() {
+            return;
+        }
+        unsafe {
+            let Ok(path) = self.factory.CreatePathGeometry() else {
+                return;
+            };
+            let Ok(sink) = path.Open() else {
+                return;
+            };
+            for pair in segs.chunks(2) {
+                if pair.len() < 2 {
+                    break;
+                }
+                sink.BeginFigure(pair[0], D2D1_FIGURE_BEGIN_HOLLOW);
+                sink.AddLine(pair[1]);
+                sink.EndFigure(D2D1_FIGURE_END_OPEN);
+            }
+            let _ = sink.Close();
+            let _ = self.brush.SetColor(&d2d_color(ink));
+            self.target.DrawGeometry(&path, self.brush, width, None::<&ID2D1StrokeStyle>);
+        }
+    }
+
+    /// 折线描边(AC2 层专用):一条共享 path,N 个点,HOLLOW 开始 + OPEN 结束。
+    fn ac2_stroke(&self, pts: &[windows_numerics::Vector2], ink: u32, width: f32) {
+        if pts.len() < 2 {
+            return;
+        }
+        unsafe {
+            let Ok(path) = self.factory.CreatePathGeometry() else {
+                return;
+            };
+            let Ok(sink) = path.Open() else {
+                return;
+            };
+            sink.BeginFigure(pts[0], D2D1_FIGURE_BEGIN_HOLLOW);
+            for p in &pts[1..] {
+                sink.AddLine(*p);
+            }
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+            let _ = sink.Close();
+            let _ = self.brush.SetColor(&d2d_color(ink));
+            self.target.DrawGeometry(&path, self.brush, width, None::<&ID2D1StrokeStyle>);
+        }
+    }
+
+    /// 斜切高亮条(AC2 菜单选中语言):平行四边形,左右两侧各切 `slant` px,
+    /// 直角不圆角。用于选中候选行 —— 颜色仍走皮肤的 hilite_bg(形状 AC2 化,
+    /// 配色保持皮肤,2026-11-14 用户:「还有现在的选中背景呢」)。
+    fn fill_slanted(&self, rect: &Rect, slant: f32, color: u32) {
+        if transparent(color) || rect.width() <= slant * 2.0 || rect.height() <= 1.0 {
+            return;
+        }
+        unsafe {
+            let path = match self.factory.CreatePathGeometry() {
+                Ok(p) => p,
+                Err(_) => return,
+            };
+            let Ok(sink) = path.Open() else {
+                return;
+            };
+            let point = |x: f32, y: f32| windows_numerics::Vector2 { x, y };
+            sink.BeginFigure(point(rect.left + slant, rect.top), D2D1_FIGURE_BEGIN_FILLED);
+            sink.AddLine(point(rect.right, rect.top));
+            sink.AddLine(point(rect.right - slant, rect.bottom));
+            sink.AddLine(point(rect.left, rect.bottom));
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            let _ = sink.Close();
+            let _ = self.brush.SetColor(&d2d_color(color));
+            self.target.FillGeometry(&path, self.brush, None::<&ID2D1Brush>);
+        }
+    }
+
     fn draw_squeeze(&self, layout: &Layout, empty_context: bool) -> Result<(), String> {
         let _ = empty_context; // 自带壳始终画满；官方「空上下文不画背景」不适用于这里
         // 2026-11-06「界面按 theme 的配色做」+「接入默认玻璃亚克力三个配色」：
@@ -1282,101 +1985,132 @@ impl Painter<'_> {
         if shell.is_empty() {
             return Ok(());
         }
-        // 2026-11-06「大界面圆角做成一半」：挤压三模式用 `panel_radius()`
-        // （= `round_corner_ex` × 0.5），官方布局仍是原值。窗口裁剪与毛玻璃遮罩
-        // 也走同一个函数，三处弧线才同心同半径。
+        // 面板圆角：挤压三模式按 HTML `--r:14px`（= 0.875em）走 `panel_radius()`，
+        // 官方六种布局仍是原值。窗口裁剪与毛玻璃遮罩也走同一个函数，三处弧线同心。
         let round = self.m.panel_radius().max(0.0);
-        // 外圈那一圈就是 **padding**（HTML `.ime` 的 padding: 0.5em；
-        // 2026-11-06 21:2x「都 0.5」后 `squeeze_frame()` 与 `panel_radius()` 同为 0.5em；
-        // 21:3x「padding 去掉颜色」+ 21:4x「按 theme 配色」⇒ 只剩一层圆角板，
-        // 21:5x 后这层的颜色由 `pal.surface` 按材质档位给出）。
-        // 内容区是直角矩形，所以 padding 至少要把「外圈圆角被切掉的那块」让出来，
-        // 否则内容区的直角会从圆角里戳出去：要求 lip ≥ R(1 − 1/√2) ≈ 0.293R。
-        // 公式在 `Metrics::squeeze_lip`（layout 排按钮组/箭头时要拿同一个数顶右沿）。
+        // 2026-11-13 21:2x「完全按 html 做」：挤压三模式**取消灰壳 padding** ——
+        // HTML 的 `.candidate` 没有内圈留白，`.cand-head/.cand-list/.cand-foot` 都是
+        // 面板的直接子项，行内留白由各自 padding 给（13px / 6px / 12px）。
+        // `Metrics::squeeze_frame()` 已归零，这里 `lip` 只保留给旧调用点做防御。
         let lip = self.m.squeeze_lip(shell.width());
+        let _ = lip;
 
-        // ① 面板圆角板（外圈那一圈 = 0.5em padding）。
-        // 三档接入（2026-11-06）：flat 档先把抓屏高斯模糊位图铺满整个窗口矩形
-        // （窗口 `SetWindowRgn` 已按 `panel_radius()` 裁圆角，mod 侧抓图时也用同半径
-        // `mask_rounded`，四角不会露出方角）；再按 `pal.surface` 决定铺不铺色：
-        //   默认 = 不透明主题实色 / 玻璃 = 0（不铺，露模糊桌面）/ 亚克力 = 半透明配色蒙版。
-        // ⚠️ 只画**一层**圆角板：旧版还叠了一层内缩 lip 的直角板（当时两层同色不透明，
-        // 冗余但无害）；半透明蒙版若画两遍，中心会叠成 75% 不透明、比外圈实一圈。
-        // `paper` 这个 Rect 仍要算，下面的横分隔 band 拿它的左右边定位。
+        // ① 面板：flat 档先铺抓屏模糊底图，再按 `pal.surface` 铺一层圆角板
+        // （半透明蒙版只铺一遍，两遍会叠得更实）。
         if pal.tier.flat() {
             self.draw_backdrop(&shell, self.backdrop);
         }
         if !transparent(pal.surface) {
             self.fill_geometry(&shell, pal.surface, round, &info, false);
         }
+        // ①b 面板 1px 描边（HTML `.candidate{border:1px solid ...;overflow:hidden}`）。
+        //    主题的 `border_color` 在 18 套里是玻璃亮边（浅底上读不出来），统一改用
+        //    按 paper→dim 推出来的 `--line`，与两条分隔线同色，边缘像 HTML 那样细而清。
+        self.stroke_geometry(&shell, pal.line, round, self.m.bar_sep, &info);
+        // 21:3x「全部按这个做，要 cyime 的光泽，16 皮肤 32 配色都做好」：
+        //   光泽与**材质档解耦** —— 默认（不透明）/ 玻璃 / 亚克力三档一律铺，
+        //   颜色取每套配色自己的 `back_color`（不是被档位改写过的 pal.paper），
+        //   这样 16×2=32 套配色切到任意一套都是同款液态玻璃光泽、各自色相。
+        //   AC2 几何网格 / 晕影 / 白光斜扫仍然停用（20:1x「去掉背景的白线」）。
+        //   Metal 老档自带上白下黑分段渐变，跳过以免两层打架。
+        if pal.tier != Material::Metal {
+            self.draw_gloss(&shell, round, &info, self.scheme.back_color);
+        }
+        // 面板内容区（描边以内）：分隔线画在描边里侧，不压面板线。
         let mut paper = shell;
-        paper.deflate(lip, lip);
+        paper.deflate(self.m.bar_sep, self.m.bar_sep);
 
-        // ③ 编码栏：左侧字符格拼音 + 右侧按钮组（同 / 贴 / 符）+ 翻页箭头（见 ⑤），
-        //    下方一条 0.25em 横分隔（设计稿 `.ime-bar` / `.hsep`，2026-11-06
-        //    从 0.5em 收窄、并去掉绿底，只剩居中的细线）。
-        //
-        //    这里量 1em 用 `font_point`（= config 里的 font_h），和 layout 内部
-        //    「圆角/间距全部按字高推导」的 em 同口径；`em` 那个变量是绘制用的放大值，
-        //    拿它算按钮会整体偏大 1/3，两边就对不齐了。
-        let bar_em = self.m.font_point.max(8.0);
-        let preedit_text = self
-            .view
-            .preedit
-            .as_ref()
-            .map(|p| p.text.as_str())
-            .filter(|t| !t.is_empty());
+        // ②b 两条 1px 分隔线（`.cand-head{border-bottom:1px}` / `.cand-foot{border-top}`）。
+        let sep_left = shell.left + self.m.bar_sep;
+        let sep_right = shell.right - self.m.bar_sep;
+        if !layout.preedit_row.is_empty() {
+            let y = layout.preedit_row.bottom;
+            self.fill_geometry(
+                &Rect::new(sep_left, y, sep_right, y + self.m.bar_sep),
+                pal.line,
+                0.0,
+                &info,
+                false,
+            );
+        }
+        if !layout.foot_row.is_empty() {
+            let y = layout.foot_row.top;
+            self.fill_geometry(
+                &Rect::new(sep_left, y, sep_right, y + self.m.bar_sep),
+                pal.line,
+                0.0,
+                &info,
+                false,
+            );
+        }
+        // 顶行右侧的「首候选」提示（HTML `.cand-head .hint`：13px 600、颜色 --text）。
+        if !layout.head_hint.is_empty() {
+            if let Some(item) = self.view.items.first() {
+                if !item.primary_text.is_empty() {
+                    self.text_out(
+                        &layout.head_hint,
+                        &item.primary_text,
+                        pal.ink,
+                        &self.formats.squeeze_head_hint,
+                    )?;
+                }
+            }
+        }
+        // 顶行预编辑与首候选之间的引导箭头 `›`（HTML `.cand-head .arrow`：
+        // `--dim` + `opacity:.6`）；13px，与预编辑同字号。
+        if !layout.head_arrow.is_empty() {
+            self.text_out(
+                &layout.head_arrow,
+                HEAD_ARROW,
+                blend_toward(pal.paper, pal.dim, 0.6),
+                &self.formats.squeeze_head,
+            )?;
+        }
+        // 顶行右侧「拼音」pill（HTML `.cand-head .tag`，2026-11-13「方案②」）：
+        // `--panel2` 底 + `--line` 1px 描边 + 全圆角胶囊 + `--dim` 字 10.5px。
+        // 数据源 = `view.schema_name`；空串时 layout 不给矩形 ⇒ 不画不占位。
+        if !layout.head_tag.is_empty() {
+            let info = RoundInfo::default();
+            // 全圆角：HTML 是 `border-radius:999px`，实际就是半高。
+            let radius = layout.head_tag.height() / 2.0;
+            self.fill_geometry(&layout.head_tag, pal.btn_bg, radius, &info, false);
+            self.stroke_geometry(&layout.head_tag, pal.line, radius, self.m.bar_sep, &info);
+            self.text_out_centered(
+                &layout.head_tag,
+                &self.view.schema_name,
+                pal.dim,
+                &self.formats.squeeze_tag,
+            )?;
+        }
+
+        // ③ 顶行预编辑（HTML `.cand-head .preedit`：13px 等宽 600、颜色 --preedit）。
+        //    配色结构里没有独立的 `--preedit` 角色；18 套里它与「选中候选字」同色系
+        //    （浅色 #1b53c4 vs HTML #2f6fed、深色 #b8c9ea vs HTML #99b1e0），
+        //    取 `hilite_text` 最接近，且对比度已按有效背景校验过。
+        //    2026-11-12 的「ASCII 编码放大 1.17×」只服务旧编码栏的左右对视，
+        //    新顶行右侧是首候选、右下按钮另有 12px 字号，这里不再补偿。
+        let preedit_text = bar_text(&self.view);
         if !layout.inline_preedit && !layout.preedit.is_empty() {
             if let Some(text) = preedit_text {
-                // 设计稿的编码栏**没有字符格**：`.ch` 只是给每个字定宽的 flex 项，
-                // 没有底色也没有格线（`.bar-inner` 是纯白）。旧实现画了浅灰格底 +
-                // 逐格竖线，跟设计稿对不上，2026-11-05 按 `.ime-bar` 去掉。
-                                // 编码=配色字色(steam 蓝 #528CCD;用户 2026-11-07 编码颜色是蓝色)。
-                // 编码 = steam 蓝 #528CCD 不透明(0xAARRGGBB;用户 2026-11-07 定色)。
-                self.text_out(&layout.preedit, text, 0xFF528CCD, &self.formats.preedit)?;
-            }
-            // 横分隔贴**编码栏底**，不是贴文字底：栏高 1.5em 而文字带只有 1em，
-            // 按文字底画会把分隔条切进栏里、把留白挤掉。
-            // 2026-11-05 18:5x：布局那边已经把「候选区顶」放在分隔下沿，这里**不能**
-            // 再 +1（会把整条分隔往下推 1px，和第一只框的顶沿错开）。
-            // 高度必须与 `layout` 用同一个 `m.bar_hsep`（0.25em），不再 `.max(3.0)`：
-            // 绿底去掉后 band 只用来定细线的中线，多出来的保底会把线挪位。
-            let bar_bottom = if layout.preedit_row.is_empty() {
-                layout.preedit.bottom
-            } else {
-                layout.preedit_row.bottom
-            };
-            let y = bar_bottom;
-            let band = Rect::new(
-                paper.left,
-                y,
-                paper.right,
-                (y + self.m.bar_hsep).min(paper.bottom),
-            );
-            if !band.is_empty() {
-                // 用户 2026-11-06「分界线去掉背景颜色」：绿底（SQ_GREEN）整层不画，
-                // 只留压在 0.25em 正中的这条 2px 线（设计稿 `.hsep::before` 居中）。
-                let mid = (band.top + band.bottom) / 2.0;
-                self.fill_geometry(
-                    &Rect::new(band.left, mid - 1.0, band.right, mid + 1.0),
-                    pal.line,
-                    0.0,
-                    &info,
-                    false,
-                );
+                self.text_out(
+                    &layout.preedit,
+                    text,
+                    pal.hilite_text,
+                    &self.formats.squeeze_head,
+                )?;
             }
         }
 
-        // ④ 候选：整块主题底色 + 白色字（序号 / 正文 / 注释）。
-        //    `layout.highlight_rect()` 已带 per-candidate padding（选中 2p、其余 p），
-        //    挤压后的框与鼠标命中矩形天然一致，paint 不用再算一遍。
+        // ④ 候选：HTML `.cand-list` 的 `.ci` —— **未选中行不铺底**（面板渐变透出来），
+        //    只有 `.ci.sel` 铺 `--sel` 浅蓝底 + `--rs` 7px 圆角。
+        //    `layout.highlight_rect()` 已按行 pad 外扩，命中矩形与这块完全一致。
         let count = layout.rows.len();
         let highlighted = if (self.view.selected_index as usize) < count {
             self.view.selected_index as usize
         } else {
             usize::MAX
         };
-        // 三模式在这里分形：竹简=方片竖排，飞瀑=竖列，横流=单行。
+        // 三模式在这里分形：竹简=竖排单列，飞瀑=竖列，横流=单行。
         let cells = matches!(self.m.layout_type, LayoutType::Cells);
         for i in 0..count {
             let row = layout.rows[i];
@@ -1389,41 +2123,29 @@ impl Painter<'_> {
             let Some(item) = self.view.items.get(i) else {
                 continue;
             };
-            // 候选块（橘红选中 / 橘黄未选中）圆角恒为 **0.25em**（用户 2026-11-05）。
-            //
-            // 以前三种模式各写一套，而且都不是 0.25em：
-            //   横流/飞瀑 = `hi.height() / 2.0` —— 胶囊，框高约 2em 时圆角约 1em；
-            //   竹简      = `em * 0.12`       —— 且 `em` 已乘过 `dpi_scale_font`（4/3），
-            //                                   实际约 0.16em，还随 DPI 漂移。
-            // 现在统一用 `bar_em`（= `font_point`，和 layout 里预算 1em 同口径，
-            // **不再**乘 `dpi_scale_font`），三种模式只差一个值来源。
-            let radius = (bar_em * 0.25).max(2.0);
-            // 候选词整块（含 padding）接皮肤配色（用户 2026-11-06「整个候选词做成 theme」）。
-            // 整块 `hi` 统一铺色，padding 自然同色；白核那层直角板早已删掉。
-            // 2026-11-06 21:4x「界面按 theme 的配色做」：底 / 字一起收进 `SqueezePalette`
-            // （底 = candidate_back_color / hilited_candidate_back_color，透明时回落面板底；
-            //  字 = candidate_text_color / hilited_candidate_text_color，压在对应底上校验对比，
-            //  读不出来才回落中性墨）。steam 下这两组字色都是白色 ⇒ 视觉不变。
-            //   · `hi` / `highlight_rect` / `row_padding` / 挤压位移 / 命中矩形一个像素不动，
-            //     只换填充对象与颜色；圆角仍是 0.25em。
-            //   · 2026-11-07 用户「未选中候选词的字体颜色做成灰色」：未选中项（含序号/正文/
-            //     注释）改用 `cand_text_muted`（候选字与候选底的中点，steam 下约 #8A8B8C）；
-            //     选中项仍用 `hilite_text`，主题的高亮字色一个字节都不动。
-            //     编码栏按钮/箭头不跟着变灰（见 `bar_ink`，免得按钮看起来像禁用）。
-            let bg = if i == highlighted {
-                pal.hilite_bg
-            } else {
-                pal.cand_bg
-            };
-            self.fill_geometry(&hi, bg, radius, &info, false);
-            // 序号 / 正文 / 注释同色，压在候选底色上。
-            // 2026-11-07 用户：未选中候选词改成灰色 ⇒ 未选中项统一用 muted 灰；
-            // 选中项保持主题的高亮字色，绝不跟着变灰。
-            let cand_ink = if i == highlighted {
+            let selected = i == highlighted;
+            // 2026-11-13 21:2x「完全按 html 做」：选中块 = 浅蓝底（HTML `--sel`）+ 蓝字
+            // （`--seltext`）+ 7px 圆角（`--rs`）。旧实现是 accent 实心蓝 + 白字，正是
+            // 用户说「太难看了」的主因；未选中行**不再铺色块**（旧实现铺满整行底色）。
+            if selected {
+                // 选中条保持圆角(2026-11-14 用户:「候选窗选中候选还是做成圆角」)
+                // —— AC2 斜切只用于设置窗的导航/配色行,候选窗仍走 --rs 圆角。
+                self.fill_geometry(&hi, pal.hilite_bg, self.m.sq_row_radius, &info, false);
+            }
+            // 字色（HTML）：正文 `--text`；选中正文 `--seltext`；
+            // 序号未选中 `--dim`、选中 `--seltext` @75% 透明；
+            // 拼音 `.py` 显式 `--dim`（选不选中都一样）。
+            let word_ink = if selected {
                 pal.hilite_text
             } else {
-                pal.cand_text_muted
+                pal.cand_text
             };
+            let num_ink = if selected {
+                blend_toward(pal.hilite_bg, pal.hilite_text, 0.75)
+            } else {
+                pal.dim
+            };
+            let py_ink = pal.dim;
             let text = &item.primary_text;
             // 竹简：序号写进竖列**首格**，和正文同一条竖线。序号格下面的间隔
             // 必须与 `layout::cells_measured` 用同一个数（0.25em = `bar_dot` 一半），
@@ -1454,77 +2176,129 @@ impl Painter<'_> {
                 } else {
                     self.m.format_label(&(i as u32 + 1).to_string())
                 };
-                // 三种模式的序号都在自己的 `label_rect` 内水平居中（用户 2026-11-06 反复
-                // 反馈「序号没有水平居中」）。用 DirectWrite CENTER 精确居中，替代旧的
-                // 「估算字宽收窄矩形」hack——那个仍是 LEADING 左对齐、且估宽口径不对。
-                self.text_out_centered(&label_rect, &label, cand_ink, &self.formats.label)?;
+                // 11px 小号（HTML `.ci .num`）+ 居中/左对齐：
+                // 2026-11-13 21:5x 用户「布局和对齐好像也不对」—— HTML 里 `.num` 是
+                // flex 首项、**默认左对齐**（只有 `min-width:13px`），不是在自己那格里
+                // 居中；居中会让序号与候选词之间空出一截，看起来整行右移。
+                // 竹简仍居中（那颗序号写在竖列首格正中，是另一套语义）。
+                if cells {
+                    self.text_out_centered(
+                        &label_rect,
+                        &label,
+                        num_ink,
+                        &self.formats.squeeze_small,
+                    )?;
+                } else {
+                    self.text_out(&label_rect, &label, num_ink, &self.formats.squeeze_small)?;
+                }
             }
-            // 序号与正文之间的间隔仍按 0.25em 保留（竹简里 `gap` 参与 head 均分，
-            // 其余模式是 `hilite_spacing` 那道缝），但**不再画红块**（用户 2026-11-06
-            // 「去掉分隔符的背景色，不显示红点了」）。只去装饰，几何一个像素不动。
             if !text.is_empty() {
                 if cells {
-                    // 竹简：竖排逐字（设计稿 `.cell .core { flex-direction: column }`，
-                    // 每个字是一个 flex item ⇒ 天然一列）。**不画格线**：
-                    // 设计稿里 `.cell` 没有 border，旧实现的 `squeeze_grid_v` 会画出
-                    // 一片横线，跟「一模一样」冲突（2026-11-05 按设计稿去掉）。
-                    self.text_out_vertical(&body, text, cand_ink, &self.formats.text)?;
+                    // 竹简：竖排逐字（`.cell .core` 天然一列），**不画格线**。
+                    self.text_out_vertical(&body, text, word_ink, &self.formats.text)?;
                 } else {
-                    self.text_out(&row.text, text, cand_ink, &self.formats.text)?;
+                    self.text_out(&row.text, text, word_ink, &self.formats.text)?;
                 }
             }
             let comment = &item.secondary_text;
-            if !comment.is_empty() && !row.comment.is_null() {
-                // 2026-11-08 用户口径：「预测」这个标签做成小一号，预测的候选字号不变。
-                // 只有 kind == prediction（打字时 comment=="预测" 的预测候选 / 上屏后
-                // 联想条）的标签换小号格式；正文 `formats.text` 两处都不动。
-                let comment_format = if item.kind == PREDICTION_KIND {
-                    &self.formats.prediction_tag
-                } else {
-                    &self.formats.comment
-                };
+            // 2026-11-08「不要显示预测这个标签了」：预测项的 secondary_text 恒不落笔
+            // （与 `measure_all` 的 ZERO 同口径，避免往零宽矩形里画溢出字形）。
+            let tag_hidden = item.kind == PREDICTION_KIND && !prediction_tag_visible();
+            if !tag_hidden && !comment.is_empty() && !row.comment.is_null() {
+                // 拼音注释 = HTML `.ci .py`：11px 小号、`--dim`。
                 if cells {
-                    self.text_out_vertical(&row.comment, comment, cand_ink, comment_format)?;
+                    self.text_out_vertical(
+                        &row.comment,
+                        comment,
+                        py_ink,
+                        &self.formats.squeeze_small,
+                    )?;
                 } else {
-                    self.text_out(&row.comment, comment, cand_ink, comment_format)?;
+                    self.text_out(&row.comment, comment, py_ink, &self.formats.squeeze_small)?;
                 }
             }
-            // 分隔：相邻两候选之间 0.25em 缝（设计稿 `.row > .space`）**不填色**。
-            // 历史：11-06 早些时候为「贴紧」把整条缝填成候选底色 `bg`，
-            // 换到 steam 深色配色后候选底色是纯黑 ⇒ 2/3/4/5 之间的缝也变黑，
-            // 连成一整条黑带；选中项与下一项之间那条则是深蓝（用户截图
-            // 「这个候选中间是不是有黑条，去掉」）。现在缝露出下方主题面板底色，
-            // 每个候选是独立的圆角色块，只有块本身的主题底色、没有连接条。
-            // 几何（`squeeze_gap` / `highlight_rect` / 命中矩形）一个像素不动。
         }
 
-        // ⑤ 编码栏右端：按钮组（符 / 贴 / 同）+ 翻页箭头。
-        //    设计稿 `_shots/ime-three-modes.html` 的 `.ime-bar` 就是这么排的：
-        //      拼音 … |vsep| 符 · 贴 · 同 |vsep| ◀ · ▶   （· = 只留间隔，不画红块）
-        //    箭头矩形由 layout 给出（官方语义，命中测试也用它们），
-        //    按钮组贴着 `page_prev` 的左边往左排，所以点和点自动对齐。
+        // ⑤ 底行：`‹`/`›` 翻页按钮 + 右下「同/贴/符」三按钮。
+        //    2026-11-13 21:2x「完全按 ime_ui_reference.html 做」：全部改成 HTML
+        //    `.cand-foot button` 那种**边框盒子**（22×20px、圆角 5px、`--panel2` 底、
+        //    `--line` 描边、12px 字），不再是裸字形 / 裸大字。
         if !layout.inline_preedit {
             self.draw_bar_buttons(layout)?;
-            // 翻页箭头自动识别（用户 2026-11-06）：可翻页＝选中的候选词字体颜色（高亮），
-            // 不可翻页＝未选中候选词的字体颜色。只换字色，不画圆角底 / 不加 padding。
+            // 底行页码「1 / N」（HTML `.cand-foot .pg`，2026-11-13「方案②」）：
+            // 11px 等宽、左对齐在底行左内沿、`‹` 左侧。
+            // 只有 layout 给了非零宽矩形才画（`page_no`/`page_count` 缺一即不画）。
+            // 2026-11-14 20:49 用户「页码数字也和右面的字颜色一样」：原来用
+            // `pal.dim`（--dim 淡蓝灰），在暖棕面板上几乎看不见；改成与右侧
+            // 「符/贴/同」按钮未选中态**同一个字色来源** `bar_ink(false)`，
+            // 无论皮肤深浅、哪档材质，两处都严格同色（不写死具体 RGB）。
+            if !layout.foot_page.is_empty() {
+                if let (Some(page_no), Some(page_count)) =
+                    (self.view.page_no, self.view.page_count)
+                {
+                    self.text_out(
+                        &layout.foot_page,
+                        &format!("{} / {}", page_no.saturating_add(1), page_count),
+                        self.bar_ink(false),
+                        &self.formats.squeeze_pg,
+                    )?;
+                }
+            }
             if !layout.page_prev.is_empty() {
-                self.text_out(
+                self.draw_foot_button(
                     &layout.page_prev,
-                    PAGE_PREV,
-                    if self.view.can_page_previous { self.squeeze_pal().hilite_text } else { self.bar_ink(false) },
-                    &self.formats.preedit,
+                    SQ_PAGE_PREV,
+                    self.bar_ink(self.view.can_page_previous),
                 )?;
             }
             if !layout.page_next.is_empty() {
-                self.text_out(
+                self.draw_foot_button(
                     &layout.page_next,
-                    PAGE_NEXT,
-                    if self.view.can_page_next { self.squeeze_pal().hilite_text } else { self.bar_ink(false) },
-                    &self.formats.preedit,
+                    SQ_PAGE_NEXT,
+                    self.bar_ink(self.view.can_page_next),
                 )?;
             }
         }
         Ok(())
+    }
+
+    /// 底行按钮盒子（HTML `.cand-foot button`）：`--panel2` 底 + `--line` 1px 描边 +
+    /// 5px 圆角，字形居中。`color` 由调用方按「可翻页 / 悬停」决定。
+    fn draw_foot_button(&self, rect: &Rect, glyph: &str, color: u32) -> Result<(), String> {
+        if rect.is_empty() {
+            return Ok(());
+        }
+        let pal = self.squeeze_pal();
+        let info = RoundInfo::default();
+        let radius = self.m.sq_btn_radius.max(1.0);
+        self.fill_geometry(rect, pal.btn_bg, radius, &info, false);
+        self.stroke_geometry(rect, pal.line, radius, self.m.bar_sep, &info);
+        self.text_out_centered(rect, glyph, color, &self.formats.squeeze_btn)
+    }
+
+    /// 1px 圆角描边（面板 / 按钮盒子共用）：路径按半线宽内缩，描边外沿正好落在
+    /// `rect` 边界上（与官方 `_HighlightRect` 的内描边同一套做法）。
+    fn stroke_geometry(&self, rect: &Rect, color: u32, radius: f32, width: f32, info: &RoundInfo) {
+        if transparent(color) || width <= 0.0 {
+            return;
+        }
+        unsafe {
+            let mut stroked = *rect;
+            stroked.deflate(width / 2.0, width / 2.0);
+            if stroked.width() <= 0.0 || stroked.height() <= 0.0 {
+                return;
+            }
+            let inner = (radius - width / 2.0).max(0.0);
+            if let Ok(path) = rounded_rect_path(self.factory, &stroked, inner, info) {
+                let _ = self.brush.SetColor(&d2d_color(color));
+                self.target.DrawGeometry(
+                    &path,
+                    self.brush,
+                    width,
+                    None::<&ID2D1StrokeStyle>,
+                );
+            }
+        }
     }
 
     /// 编码栏按钮 / 翻页箭头的字色（用户 2026-11-06）：
@@ -1591,82 +2365,32 @@ impl Painter<'_> {
     /// 布局是纯绘制层的：箭头矩形来自 `Layout`（命中测试不变），按钮组矩形也直接取
     /// `Layout::bar_buttons`（有箭头时贴 `page_prev` 左侧；**零候选帧**没有箭头，
     /// 从白板内右沿往左排——用户 2026-11-08「打大写字母时右边光秃秃」就是这种帧）。
-    /// 每个按钮 1em 见方、按钮之间夹 0.5em 空白（红块已去掉）、
-    /// vsep 是 0.25em 占位 + 2px 竖线（无绿底）。
-    ///
-    /// 所有尺寸从 `Metrics` 的编码栏统一参数读（见 `config::bar`），
-    /// 不再自己算 `em * 倍数`（2026-11-05 统一编码栏参数）。
+    /// 2026-11-08 用户「符号剪贴板同步箭头之间做成 0.25em 间距，去掉竖的分界线」：
+    /// **竖分隔（vsep）与红块全部不画**，按钮之间 / 按钮与箭头之间只留 `bar_gap`
+    /// （0.25em）空白；几何统一由 `Layout` 给出，绘制端不再自己算分隔线位置。
+    /// 所有尺寸仍从 `Metrics` 的编码栏统一参数读（见 `config::bar`）。
     fn draw_bar_buttons(&self, layout: &Layout) -> Result<(), String> {
         if layout.bar_buttons.iter().all(|rect| rect.is_empty()) {
             return Ok(());
         }
+        // 2026-11-13 21:2x「完全按 ime_ui_reference.html 做」：三颗按钮改成 HTML
+        // `.cand-foot button` 那种**边框盒子**（22×20px / 圆角 5px / `--panel2` 底 /
+        // `--line` 描边 / 12px 字）；选中态（悬停 / 对应面板正打开）字色用强调色。
+        let pal = self.squeeze_pal();
         let info = RoundInfo::default();
-        // 整组（分隔条 / 按钮 / 箭头）共用**编码栏的中线**做垂直居中
-        // （用户 2026-11-05：「这些编码分隔线按钮箭头都做成垂直居中」）。
-        // 栏高 1.5em 而箭头/按钮的字形只有 ~1em，按各自矩形贴顶排会高低不齐。
-        let mid = if layout.preedit_row.is_empty() {
-            (layout.bar_buttons[0].top + layout.bar_buttons[0].bottom) / 2.0
-        } else {
-            (layout.preedit_row.top + layout.preedit_row.bottom) / 2.0
-        };
-        // 分隔条高度取 `bar_vsep_h`（= 1em），栏内居中留出 0.25em 上下气。
-        let vsep_h = if layout.preedit_row.is_empty() {
-            layout.bar_buttons[0].height().max(self.m.bar_vsep_h)
-        } else {
-            layout.preedit_row.height().min(self.m.bar_vsep_h)
-        };
-        let vsep_top = mid - vsep_h / 2.0;
-        let vsep_w = self.m.bar_vsep_w;
-
-        // ① 箭头左边的 vsep（零候选帧没有翻页箭头，这截分隔也不画）
-        if !layout.page_prev.is_empty() {
-            self.draw_vsep(
-                layout.page_prev.left - vsep_w,
-                vsep_top,
-                vsep_w,
-                vsep_h,
-                &info,
-            );
-        }
-        // ② 三个按钮，从右往左；按钮之间的 `dot` 宽间隔保留，但红块不画。
-        // 中文按钮（用户 2026-11-06）：同 = 同步 / 贴 = 剪贴板 / 符 = 符号。
-        // 单字才装得进 1em 见方的按钮框，编码栏几何、间隔、配色一个都不动。
+        let radius = self.m.sq_btn_radius.max(1.0);
         for (idx, icon) in ["同", "贴", "符"].iter().enumerate() {
             let rect = layout.bar_buttons[idx];
-            if rect.is_empty() || rect.left + self.m.bar_btn <= 0.0 {
+            if rect.is_empty() {
                 continue;
             }
-            // 选中态：鼠标悬停，或对应面板正打开（「选中后一直显示」）。
-            // 只用字色表达，不画圆角底 / 不加 padding。
             let on = self.hover_button == Some(idx) || crate::panels::button_active(idx);
-            // 字色表达(用户 2026-11-07:不画背景,黑色底去掉):
-            // 激活/有效 = 白,未激活 = 灰。
-            let pal = self.squeeze_pal();
             let color = if on { pal.hilite_text } else { self.bar_ink(false) };
-            self.text_out(&rect, icon, color, &self.formats.preedit)?;
-        }
-        // ③ 按钮组左边的 vsep（把拼音和按钮隔开）
-        let x = layout.bar_buttons[2].left - vsep_w;
-        if x > 0.0 {
-            self.draw_vsep(x, vsep_top, vsep_w, vsep_h, &info);
+            self.fill_geometry(&rect, pal.btn_bg, radius, &info, false);
+            self.stroke_geometry(&rect, pal.line, radius, self.m.bar_sep, &info);
+            self.text_out_centered(&rect, icon, color, &self.formats.squeeze_btn)?;
         }
         Ok(())
-    }
-
-    /// 竖向分隔：0.25em 占位 + 居中 2px 线（设计稿 `.vsep::before`）。
-    /// 2026-11-06 去掉绿底；21:4x 起线色也读主题（`SqueezePalette::line`）。
-    fn draw_vsep(&self, x: f32, top: f32, w: f32, h: f32, info: &RoundInfo) {
-        if w <= 0.0 || h <= 0.0 {
-            return;
-        }
-        let cx = x + w / 2.0;
-        self.fill_geometry(
-            &Rect::new(cx - 1.0, top, cx + 1.0, top + h),
-            self.squeeze_pal().line,
-            0.0,
-            info,
-            false,
-        );
     }
 
     /// 字符格：ASCII 半格、其它全格，逐格画浅底 + 右边界线。
@@ -1981,12 +2705,10 @@ impl Painter<'_> {
 
     /// 官方 `_DrawPreedit`（WeaselPanel.cpp:511）。
     pub fn draw_preedit(&self, layout: &Layout, is_preedit: bool) -> Result<(), String> {
-        let Some(preedit) = &self.view.preedit else {
+        // 真实预编辑优先；上屏后联想条回退为「智能预测」（2026-11-12）。
+        let Some(text) = bar_text(&self.view) else {
             return Ok(());
         };
-        if preedit.text.is_empty() {
-            return Ok(());
-        }
         let (base, before, hilite, after) = if is_preedit {
             (
                 layout.preedit,
@@ -2004,25 +2726,22 @@ impl Painter<'_> {
         };
         // 我们的快照只给"整段都是组字中"，所以官方那套 before/hilite/after 里
         // hilite 是整段、before/after 为空（composition 预编辑的常态）。
+        // 2026-11-12：非挤压骨架同样补偿 ASCII 编码视觉字高，判定与
+        // `measure_all` / `draw_squeeze` 共用，中文文案不受影响。
+        let format = if bar_text_uses_ascii_format(text) {
+            &self.formats.preedit_ascii
+        } else {
+            &self.formats.preedit
+        };
         if !hilite.is_null() {
             // 用户 14:3x：预编辑（编码）那块**不要黑色底**，要透明——只画字。
             let mut rc = hilite;
             rc.inflate(self.m.hilite_padding_x, self.m.hilite_padding_y);
             let _ = &rc;
             // 编码 = steam 蓝(选中段白);用户 2026-11-07 定色。
-            self.text_out(
-                &hilite,
-                &preedit.text,
-                0xFFFFFFFF,
-                &self.formats.preedit,
-            )?;
+            self.text_out(&hilite, text, 0xFFFFFFFF, format)?;
         } else if !base.is_null() {
-            self.text_out(
-                &base,
-                &preedit.text,
-                0xFF528CCD,
-                &self.formats.preedit,
-            )?;
+            self.text_out(&base, text, 0xFF528CCD, format)?;
         }
         let _ = (before, after);
 
@@ -2151,8 +2870,11 @@ impl Painter<'_> {
             }
             if !transparent(comment_color) && !row.comment.is_null() {
                 let comment = &self.view.items[i].secondary_text;
-                if !comment.is_empty() {
-                    // 同 `draw_squeeze`：只有预测项的「预测」标签用小号格式，
+                // 2026-11-08「不要显示预测这个标签了」（同 `draw_squeeze`）。
+                let tag_hidden =
+                    self.view.items[i].kind == PREDICTION_KIND && !prediction_tag_visible();
+                if !tag_hidden && !comment.is_empty() {
+                    // 标签若重新打开：只有预测项换小号格式，
                     // 正文（`formats.text`）与普通候选的字号一致。
                     let comment_format = if self.view.items[i].kind == PREDICTION_KIND {
                         &self.formats.prediction_tag
@@ -2381,14 +3103,17 @@ mod tests {
     /// 颜色」的成果仍在（没有独立灰边，但仍是不透明实色，圆角才画得出来）。
     #[test]
     fn squeeze_palette_follows_theme() {
+        // 2026-11-13 21:2x「完全按 ime_ui_reference.html 做」后的角色映射：
+        //   --text = candidate_text_color、--dim = comment_text_color、
+        //   --sel = hilited_back_color、--seltext = hilited_text_color。
+        // （存储格式是 ABGR：HTML #e5efff → 0xFFFF_EFE5、#1b53c4 → 0xFFC4_531B）
         let base = scheme(0xFF14_1617, 0x528CCDFF);
         let s = ColorScheme {
             border_color: 0xFF35_3638,
             comment_text_color: 0xFFA7_A7A9,
             candidate_text_color: 0xFFFF_FFFF,
-            candidate_back_color: 0, // 官方语义：普通候选无底色 → 回落面板底
-            hilited_candidate_back_color: 0xFF59_4231,
-            hilited_candidate_text_color: 0xFFFF_FFFF,
+            hilited_back_color: 0xFFFF_EFE5,  // HTML --sel #e5efff
+            hilited_text_color: 0xFFC4_531B,  // HTML --seltext #1b53c4
             ..base
         };
         let p = squeeze_palette(&s);
@@ -2397,14 +3122,13 @@ mod tests {
         // ⇒ `0xFF8CCDFF`。旧断言写的是原始带 alpha 的 `0x528CCDFF`，与 `pick()` 的
         // 不透明化口径不一致，一直是红的（2026-11-07 本棒修正断言，不改实现）。
         assert_eq!(p.ink, 0xFF8C_CDFF, "编码文字 = text_color（不透明化，深底上可读）");
-        assert_eq!(
-            p.line, 0xFFA7_A7A9,
-            "border 在深底对比不足 → 回落 comment_text_color"
-        );
-        assert_eq!(p.cand_bg, 0xFF14_1617, "候选底透明 → 面板底");
-        assert_eq!(p.cand_text, 0xFFFF_FFFF, "候选字 = candidate_text_color");
-        assert_eq!(p.hilite_bg, 0xFF59_4231, "选中底 = hilited_candidate_back_color");
-        assert_eq!(p.hilite_text, 0xFFFF_FFFF, "选中字 = hilited_candidate_text_color");
+        assert_eq!(p.dim, 0xFFA7_A7A9, "序号/拼音 = comment_text_color（HTML --dim）");
+        // --line 配色里没有对应角色 ⇒ paper→dim 混 22%（浅色 ≈ #e5e8ec、深色 ≈ #3b4553）。
+        assert_eq!(p.line, 0xFF34_3637, "分隔线 = paper→dim 22%（近似 HTML --line）");
+        assert_eq!(p.cand_text, 0xFFFF_FFFF, "未选中正文 = candidate_text_color（HTML --text）");
+        assert_eq!(p.hilite_bg, 0xFFFF_EFE5, "选中底 = hilited_back_color（HTML --sel）");
+        assert_eq!(p.hilite_text, 0xFFC4_531B, "选中字 = hilited_text_color（HTML --seltext）");
+        assert_eq!(p.btn_bg, 0xFF1E_2021, "按钮底 = paper→dim 7%（近似 HTML --panel2）");
         assert_eq!(p.paper >> 24, 0xFF, "不透明实色，不是靠透明实现");
     }
 
@@ -2430,27 +3154,34 @@ mod tests {
         assert_eq!(d.paper, 0xFF14_1617, "有效背景 = 面板自身");
         assert!(!d.tier.flat(), "默认档不抓屏模糊");
 
-        // ② 玻璃：抓到模糊桌面（平均亮度 200）⇒ 面板不染色，只露那张糊过的图。
+        // ② 玻璃：大框 = 默认同款底色 + 80% 透（0x33），底下铺抓屏高斯模糊位图。
+        //    有效背景仍按模糊桌面的亮度算（200 灰）。
         let g = squeeze_palette_for(&s, Material::Glass, Some(200.0), 0);
-        assert_eq!(g.surface, 0, "玻璃档不铺色");
+        assert_eq!(g.surface, 0x3314_1617, "玻璃档大框 = 同款底色 80% 透");
         assert_eq!(g.paper, 0xFFC8_C8C8, "有效背景 = 200 灰");
         assert!(g.tier.flat(), "玻璃档要铺模糊底图");
-        // 抓不到背景 ⇒ 退回 50% 白，字色按白底估（与 plain_scheme 同口径）。
+        // 抓不到背景 ⇒ 字色按白底估（与 plain_scheme 同口径），大框颜色不变。
         let g2 = squeeze_palette_for(&s, Material::Glass, None, 0);
-        assert_eq!(g2.surface, 0x80FF_FFFF);
+        assert_eq!(g2.surface, 0x3314_1617);
         assert_eq!(g2.paper, 0xFFFF_FFFF);
 
-        // ③ 亚克力：半透明配色蒙版（实机 theme_veil(steam) = 0x801B242F）。
-        let veil = 0x801B_242F;
+        // ③ 亚克力：大框 = 默认同款底色 + **80% 透**蒙版（0x33）；
+        //    底层由 draw_squeeze 铺 σ=12 的抓屏高斯模糊位图。
+        //    veil 参数（历史遗留）不再影响大框颜色，两条布局路径共用 veil_alpha()。
+        let veil = 0x331B_242F;
         let a = squeeze_palette_for(&s, Material::Acrylic, Some(40.0), veil);
-        assert_eq!(a.surface, veil, "面板层就是蒙版本身（含 alpha）");
-        assert_eq!(a.paper, 0xFF4D_5257, "蒙版 50% 叠中灰桌面的代表背景");
+        assert_eq!(a.surface >> 24, VEIL_ALPHA, "大框不透明度 = 20%（80% 透）");
+        assert_eq!(a.surface & 0x00FF_FFFF, 0x14_1617, "大框颜色 = 默认档同款底色");
+        // 21:3x 撤销酒红锁定：亚克力档有效背景 = 这套配色自己的底色（与默认档一致）。
+        assert_eq!(a.paper, 0xFF14_1617, "有效背景 = 皮肤自己的 back_color");
         assert_eq!(a.paper >> 24, 0xFF, "有效背景恒不透明");
         assert!(a.tier.flat(), "亚克力档要铺模糊底图");
 
         assert_ne!(d.surface, g.surface);
-        assert_ne!(g.surface, a.surface);
         assert_ne!(d.surface, a.surface);
+        // 透明档与亚克力同为 80% 透（用户 20:0x），区分靠模糊强度而非染色深浅。
+        assert_eq!(g.surface, a.surface);
+        assert!(super::ACRYLIC_SIGMA > super::GLASS_SIGMA * 2.0);
     }
 
     /// 三档下文字都不能与有效背景糊成一片（亮度差 > 0.30）。
@@ -2478,26 +3209,34 @@ mod tests {
                 p.paper
             );
             assert!(
-                (lum(p.cand_text) - lum(p.cand_bg)).abs() > 0.30,
-                "{tier:?} 候选字 {:#010X} 压在 {:#010X} 上读不出来",
+                (lum(p.cand_text) - lum(p.paper)).abs() > 0.30,
+                "{tier:?} 候选字 {:#010X} 压在面板 {:#010X} 上读不出来",
                 p.cand_text,
-                p.cand_bg
+                p.paper
             );
             assert!(
-                (lum(p.cand_text_muted) - lum(p.cand_bg)).abs() > 0.30,
-                "{tier:?} 未选中灰字 {:#010X} 压在 {:#010X} 上读不出来",
-                p.cand_text_muted,
-                p.cand_bg
+                (lum(p.dim) - lum(p.paper)).abs() > 0.30,
+                "{tier:?} 序号/拼音 {:#010X} 压在面板 {:#010X} 上读不出来",
+                p.dim,
+                p.paper
+            );
+            assert!(
+                (lum(p.hilite_text) - lum(p.hilite_bg)).abs() > 0.30,
+                "{tier:?} 选中字 {:#010X} 压在选中底 {:#010X} 上读不出来",
+                p.hilite_text,
+                p.hilite_bg
             );
         }
-        // 玻璃档浅桌面：白字读不出来 ⇒ 深墨；亚克力深蒙版：白字可读 ⇒ 保留主题白。
+        // 玻璃档浅桌面：白字读不出来 ⇒ 深墨。
+        // 亚克力：21:3x 起有效背景回到皮肤自己的 back_color（浅底），白字同样
+        // 读不出来 ⇒ 深墨；这样 32 套配色切到任意一套，字色都跟着自己的明暗走。
         assert_eq!(
             squeeze_palette_for(&s, Material::Glass, Some(200.0), 0).ink,
             0xFF1B_1D_22
         );
         assert_eq!(
-            squeeze_palette_for(&s, Material::Acrylic, Some(40.0), 0x801B_242F).ink,
-            0xFFFF_FFFF
+            squeeze_palette_for(&s, Material::Acrylic, Some(40.0), 0x991B_242F).ink,
+            0xFF1B_1D_22
         );
     }
 
@@ -2519,40 +3258,26 @@ mod tests {
         assert_eq!(p.cand_text, 0xFF1B_1D_22, "候选字同理");
     }
 
-    /// 2026-11-07 用户「未选中候选词的字体颜色做成灰色」：
-    /// steam 深底（#141617）+ 主题白字 ⇒ 未选中字 = 两者逐通道中点 ≈ #898A8B（中性灰），
-    /// 与候选底对比仍 > 0.30（读得出来）；选中字仍是主题 hilited 白，绝不跟着变灰。
+    /// 2026-11-13 21:2x「完全按 html 做」取代 2026-11-07「未选中候选词的字体颜色做成灰色」：
+    /// HTML 里未选中正文用 `--text`（正文色），**只有序号 `.num` 与拼音 `.py` 用 `--dim`**。
+    /// 旧「未选中字变灰」是 11-07 色块设计的口径，已作废。
+    /// 具体 I/O：steam 深底 #141617 + 正文白 + --dim #A9A7A7 ⇒ 正文白、序号灰、选中蓝。
     #[test]
-    fn squeeze_unselected_candidate_text_is_grey() {
+    fn squeeze_unselected_candidate_uses_text_color_not_grey() {
         let base = scheme(0xFF14_1617, 0x528CCDFF);
         let s = ColorScheme {
-            border_color: 0xFF35_3638,
             comment_text_color: 0xFFA7_A7A9,
             candidate_text_color: 0xFFFF_FFFF,
-            candidate_back_color: 0, // 普通候选无底色 → 回落面板底
-            hilited_candidate_back_color: 0xFF59_4231,
-            hilited_candidate_text_color: 0xFFFF_FFFF,
+            hilited_back_color: 0xFFFF_EFE5,
+            hilited_text_color: 0xFFC4_531B,
             ..base
         };
         let p = squeeze_palette(&s);
-        let lum = |c: u32| {
-            let r = ((c >> 16) & 0xFF) as f32;
-            let g = ((c >> 8) & 0xFF) as f32;
-            let b = (c & 0xFF) as f32;
-            (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
-        };
-        assert_eq!(p.cand_text, 0xFFFF_FFFF, "主题候选字本身不变（按钮/选中口径不受影响）");
-        assert_eq!(
-            p.cand_text_muted, 0xFF89_8A8B,
-            "未选中字 = 白 #FFFFFF 与面板底 #141617 的中点灰"
-        );
-        assert_ne!(p.cand_text_muted, p.cand_text, "未选中字必须真的变灰");
-        assert!(
-            (lum(p.cand_text_muted) - lum(p.cand_bg)).abs() > 0.30,
-            "灰字压在候选底 {:#010X} 上读不出来",
-            p.cand_bg
-        );
-        assert_eq!(p.hilite_text, 0xFFFF_FFFF, "选中项字色不能一起改灰");
+        assert_eq!(p.cand_text, 0xFFFF_FFFF, "未选中正文 = --text，不再是灰");
+        assert_eq!(p.dim, 0xFFA7_A7A9, "序号/拼音 = --dim");
+        assert_ne!(p.cand_text, p.dim, "正文与序号/拼音必须是两种字色");
+        assert_eq!(p.hilite_text, 0xFFC4_531B, "选中正文 = --seltext");
+        assert_eq!(p.hilite_bg, 0xFFFF_EFE5, "选中底 = --sel");
     }
 
     /// 只关心 back/text 的配色；其余按 `resolve` 的缺省关系填成同色，
@@ -2585,6 +3310,8 @@ mod tests {
             hilited_mark_color: 0,
             nextpage_color: text,
             prevpage_color: text,
+            corner_radius: None,
+            hilited_corner_radius: None,
         }
     }
 
@@ -2663,13 +3390,16 @@ mod tests {
 
     #[test]
     fn veil_txt_overrides_opacity() {
-        // `veil.txt` 写百分数：40 更透、95 更实；带 % 和空白都认。档位默认 50 也在范围内。
-        assert_eq!(super::parse_veil_pct("50"), Some(128)); // 50%  → 0x80（档位默认值）
+        // `veil.txt` 写**不透明度**百分数：20 = 80% 透（当前默认）、95 更实；
+        // 带 % 和空白都认，5..95 之外当没写。
+        assert_eq!(super::parse_veil_pct("20"), Some(51)); // 20% 不透明 = 0x33 = 档位默认
+        assert_eq!(super::parse_veil_pct("50"), Some(128)); // 50%  → 0x80
         assert_eq!(super::parse_veil_pct("40"), Some(102));
         assert_eq!(super::parse_veil_pct(" 78% "), Some(199)); // 78%  → 0xC7
         assert_eq!(super::parse_veil_pct("95"), Some(242));
-        // 两头越界（低于 30 变玻璃 / 高于 95 没磨砂）与乱写一律当"没写"。
-        assert_eq!(super::parse_veil_pct("25"), None);
+        assert_eq!(super::parse_veil_pct("5"), Some(13));
+        // 两头越界（低于 5 没蒙版 / 高于 95 没磨砂）与乱写一律当"没写"。
+        assert_eq!(super::parse_veil_pct("4"), None);
         assert_eq!(super::parse_veil_pct("99"), None);
         assert_eq!(super::parse_veil_pct("abc"), None);
         assert_eq!(super::parse_veil_pct(""), None);
@@ -2690,20 +3420,77 @@ mod tests {
     }
 
     #[test]
-    fn acrylic_veil_is_firmly_wedged_between_glass_and_solid() {
-        // 11:10 用户定档「50 透明」⇒ 蒙版不透明度 50%（0x80）。
-        // 底线：必须比透明档（0x33）实一大截，否则又退回玻璃；上限留出余量。
+    fn acrylic_is_eighty_percent_transparent_with_heavy_blur() {
+        // 2026-11-14 20:0x 用户「亚克力做成 80% 透明，然后加一层高斯模糊」：
+        // 大框蒙版只剩 20% 不透明（0x33），磨砂感由 σ=12 的抓屏高斯模糊撑住。
+        assert_eq!(VEIL_ALPHA, 0x33, "20% 不透明 = 80% 透明");
+        assert_eq!((255 - VEIL_ALPHA) * 100 / 255, 80, "实测透明度 80%");
+        assert_eq!(VEIL_ALPHA, super::GLASS_ALPHA, "与透明档同透，靠模糊强度区分");
         assert!(
-            (0x80..0xB3).contains(&VEIL_ALPHA),
-            "蒙版 {:.0}% 不在「半透但仍是磨砂面」的区间",
-            VEIL_ALPHA as f32 / 255.0 * 100.0
+            super::ACRYLIC_SIGMA > super::GLASS_SIGMA * 2.0,
+            "亚克力那一层高斯模糊必须明显糊过透明档"
         );
-        assert!(VEIL_ALPHA > super::GLASS_ALPHA * 2);
         // 深色皮肤 + 任意壁纸（纯黑/纯白）都得用浅色字。
         for backdrop in [None, Some(0.0), Some(255.0)] {
             let out = plain_scheme(&steam(), Material::Acrylic, backdrop);
             assert_eq!(out.text_color, 0xFF_F2_F3_F5, "backdrop={backdrop:?}");
         }
+    }
+
+    /// 11-15 23:0x：彩色渐变（HTML 同款），白色斜光回到 CSS 原值，不再铺白雾。
+    /// 具体 I/O：140°/118°、白色 alpha 41/0/0/20、光晕 alpha 107/31/87/20、
+    /// 100×50 矩形 140° 轴 (17.03,-14.28)→(82.97,64.28)。
+    #[test]
+    fn gloss_uses_html_color_gradients() {
+        assert_eq!(super::GLOSS_BASE_DEG, 140.0);
+        assert_eq!(super::GLOSS_SHEEN_DEG, 118.0);
+        assert_eq!(super::GLOSS_SHEEN_HEAD, 0x29FF_FFFF); // .16 白
+        assert_eq!(super::GLOSS_SHEEN_MID, 0x0000_0000);
+        assert_eq!(super::GLOSS_SHEEN_TAIL, 0x14FF_FFFF); // .08 白
+        assert_eq!(super::GLOSS_SHEEN_AT_34, 0.38);
+        assert_eq!(super::GLOSS_SHEEN_AT_66, 0.62);
+        assert_eq!(super::GLOSS_GLOW_A2, 0x8C);
+        assert_eq!(super::GLOSS_GLOW_A, 0x70);
+        assert_eq!(super::GLOSS_GLOW_SPAN_X, 0.78);
+        assert_eq!(super::GLOSS_CAND2_ACCENT_MIX, 0.42);
+        assert_eq!(super::gloss_glow(0xFFE0_A422, 0x8C), 0x8CE0_A422);
+        // 118° ⇒ 斜率 0.531（从左往右略向下，不是水平光带）。
+        assert!((super::sheen_slope(118.0) - 0.531).abs() < 0.001);
+        let r = crate::theme::Rect::new(0.0, 0.0, 100.0, 50.0);
+        let (s, e) = super::gradient_axis(&r, 140.0);
+        assert!((s.x - 17.03).abs() < 0.05 && (s.y + 14.28).abs() < 0.05, "start=({s:?})");
+        assert!((e.x - 82.97).abs() < 0.05 && (e.y - 64.28).abs() < 0.05, "end=({e:?})");
+        let (s2, e2) = super::gradient_axis(&r, 118.0);
+        assert!((e2.x - s2.x) > (e2.y - s2.y), "光泽主轴偏水平");
+    }
+
+    /// 11-15 23:0x：140° 两端必须真的有色差 —— YAML 里 back_color 与
+    /// candidate_back_color 都来自 `--cand`，次端混进 `--accent` 后渐变才看得出来。
+    /// 具体 I/O：back=cand2=0xFF302A1A / border=0x3DFFFFFF / accent=0xFFE0A422
+    ///   -> 首端完全不变、次端 R 由 0x30 升到 0x68、alpha 仍 0xFF、亮边原样。
+    #[test]
+    fn gloss_endpoints_mix_accent_into_cand2() {
+        let back = 0xFF30_2A1A;
+        let border = 0x3DFF_FFFF;
+        let (cand, cand2, out_border) =
+            super::gloss_endpoints(back, back, border, 0xFFE0_A422);
+        assert_eq!(cand, back, "首端原样 --cand");
+        assert_ne!(cand2, back, "次端必须混进 accent，否则渐变两端同色");
+        assert!((cand2 >> 16) & 0xff > 0x30, "R 通道要被金色拉高");
+        assert_eq!(cand2 >> 24, 0xFF, "混合不改 alpha");
+        assert_eq!(out_border, border, "玻璃亮边原样");
+        assert_eq!(super::gloss_endpoints(back, back, 0, 0xFFE0_A422).2, 0);
+    }
+
+    /// 21:3x「只使用默认效果，也就是无透明的」：默认不透明档也必须铺光泽，
+    /// 而不是只有亚克力档才有（旧代码 `pal.tier == Acrylic` 会把 32 配色全漏掉）。
+    #[test]
+    fn gloss_is_independent_of_material_tier() {
+        let tiers = [Material::Opaque, Material::Glass, Material::Acrylic, Material::Metal];
+        assert_eq!(tiers.map(|t| t != Material::Metal), [true, true, true, false]);
+        assert!(!Material::Opaque.flat(), "默认档不抓屏、不模糊 = 无透明");
+        // 彩色渐变只在 RGB 上做，底色 alpha 仍由 YAML 决定（11-15）。
+        assert_eq!(super::gloss_endpoints(0xFFFF_FFFF, 0xFFE8_EEFF, 0xB8FF_FFFF, 0xFFE0_A422).0 >> 24, 0xFF);
     }
 
     #[test]

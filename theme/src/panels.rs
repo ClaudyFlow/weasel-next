@@ -1246,15 +1246,30 @@ fn tab_geometry(p: &Panel) -> (f32, f32, usize, usize) {
             (p.pad, tw, 2, 0)
         }
         Kind::Symbol => {
-            // 聚合后仍有 20+ 个分类：左右箭头分页，每页 5 个。
-            let count = 5;
-            let tw = (w - p.pad * 2.0 - ARROW_W * 2.0 - 4.0 * TAB_GAP) / count as f32;
+            // 聚合后仍有 20+ 个分类：左右箭头分页。**每页个数按面板宽自适应**
+            // （2026-11-14 00:1x 用户报「显示有问题」：面板宽=候选窗宽、下限 360，
+            // 固定 5 个时每个只有 ~51px，装不下「😀 常用」就折行、第二行被裁）。
+            let count = sym_tab_count(p);
+            let avail = w - p.pad * 2.0 - ARROW_W * 2.0;
+            let tw = (avail - (count - 1) as f32 * TAB_GAP) / count as f32;
             let pages = (tab_titles(p).len() + count - 1) / count;
             let page = p.tab_page.min(pages.saturating_sub(1));
             (p.pad + ARROW_W, tw, count, page * count)
         }
     }
 }
+
+/// 符号分类标签每页个数：面板宽装得下几个就放几个（1..=5）。
+///
+/// 一个标签最小要「图标 18 + 缝 4 + 两个汉字 28 + 左右内边距 16 ≈ 66px」，
+/// 取 68 留余量；窄候选窗（面板跟着窄）就少放几个，靠 ◀ ▶ 翻页。
+fn sym_tab_count(p: &Panel) -> usize {
+    let avail = p.width as f32 - p.pad * 2.0 - ARROW_W * 2.0;
+    (((avail + TAB_GAP) / (SYM_TAB_MIN_W + TAB_GAP)).floor() as usize).clamp(1, 5)
+}
+
+/// 符号分类标签的最小宽度（DIP，含左右内边距）。
+const SYM_TAB_MIN_W: f32 = 68.0;
 
 /// 剪贴板竖向最大滚动量（卡片列表）。
 fn max_scroll(p: &Panel) -> f32 {
@@ -1939,6 +1954,12 @@ unsafe fn make_text_format(
             PCWSTR(locale.as_ptr()),
         )
         .ok()
+        .map(|fmt| {
+            // 面板文本一律**不折行**（2026-11-14：窄面板标签「😀 常用」折到第二行
+            // 被裁成两截的教训）。DirectWrite 默认 WRAP，必须显式关掉。
+            let _ = fmt.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+            fmt
+        })
 }
 
 fn solid(brush: &ID2D1SolidColorBrush, c: D2D_COLOR_F) -> &ID2D1SolidColorBrush {
@@ -2092,7 +2113,7 @@ unsafe fn draw_tabs(p: &Panel, rt: &ID2D1HwndRenderTarget, brush: &ID2D1SolidCol
     if p.kind == Kind::Symbol {
         // 分类很多（聚合后 20+）：左右箭头分页；到边时变灰。
         let prev = if p.tab_page > 0 { p.pal.ink } else { p.pal.mute };
-        let next = if (p.tab_page + 1) * 5 < p.sym_tabs.len() { p.pal.ink } else { p.pal.mute };
+        let next = if (p.tab_page + 1) * sym_tab_count(p) < p.sym_tabs.len() { p.pal.ink } else { p.pal.mute };
         label(rt, brush, small, "◀", rect(p.pad, top, p.pad + ARROW_W, top + TAB_H), prev);
         label(rt, brush, small, "▶", rect(w - p.pad - ARROW_W, top, w - p.pad, top + TAB_H), next);
     }
@@ -2811,11 +2832,11 @@ fn activate(p: &mut Panel, hit: Hit) -> bool {
         }
         Hit::TabPrev => {
             p.tab_page = p.tab_page.saturating_sub(1);
-            let pages = (p.sym_tabs.len() + 4) / 5;
+            let pages = (p.sym_tabs.len() + sym_tab_count(p) - 1) / sym_tab_count(p);
             p.tab_page = p.tab_page.min(pages.saturating_sub(1));
         }
         Hit::TabNext => {
-            let pages = (p.sym_tabs.len() + 4) / 5;
+            let pages = (p.sym_tabs.len() + sym_tab_count(p) - 1) / sym_tab_count(p);
             p.tab_page = (p.tab_page + 1).min(pages.saturating_sub(1));
         }
         Hit::Search => unsafe {

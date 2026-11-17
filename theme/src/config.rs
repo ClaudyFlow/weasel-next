@@ -19,31 +19,103 @@ use std::path::PathBuf;
 /// 出厂皮肤名（数据在 `<程序文件夹>\Rime-Next\theme\default\default.theme.yaml`）。
 pub const SKIN: &str = "default";
 
+/// 候选窗字号统一口径（2026-11-15 用户：「候选窗做成除候选外全部 0.75em」）。
+/// **只有候选正文 `text` 是 1em**（= `font_point`）；其余所有文字——编码/序号/
+/// 注释/顶行预编辑/底行按钮/页码/方案名 pill/预测标签/指示器——一律
+/// `font_point * 0.75`。倍率只放这一处，测量（`Metrics`）与绘制（`make_formats`）
+/// 共用，避免「量的是一套字号、画的是另一套」导致布局错位。
+pub const NON_CANDIDATE_FONT_EM: f32 = 0.75;
+
 /// 编码栏（挤压三模式）的**统一尺寸参数**——全部以 em 倍数表达，
 /// 在 `Metrics::new` 里乘 `font_point` 得到像素值。
 ///
 /// 以前这些数散在三处各自硬编码：`layout.rs`（栏高 `font_point*1.5`、按钮组占宽 5em）
 /// 与 `paint.rs`（vsep 宽 0.5em/高 1em、按钮 1em 见方、红块 0.5em、绿带 0.5em）。
-/// 2026-11-06：横/竖分隔统一改 0.25em（用户「绿色分界线做成 0.25em」），
-/// 按钮组占宽因此从 5em 变 4.5em；红块只作间隔、不再绘制。
+/// 2026-11-06：横分隔改 0.25em，红块只作间隔、不再绘制。
+/// 2026-11-08 用户「符号剪贴板同步箭头之间做成 0.25em 间距，然后去掉竖的分界线」：
+/// **竖分隔（vsep）整条链路删除**，编码栏内所有相邻元素（拼音↔符、符↔贴、
+/// 贴↔同、同↔◀、◀↔▶）统一由 `GAP_EM` 留 0.25em 空隙，不再落任何竖线。
 /// 改一处忘一处就会对不齐（2026-11-05 用户：「统一编码栏的处理，做成一套参数」）。
 /// 现在唯一入口是这里，layout 与 paint 都从 `Metrics` 的像素字段读。
 pub mod bar {
     /// 栏高（编码栏那一整行，文字带 1em + 上下各 0.25em 气）。
     pub const HEIGHT_EM: f32 = 1.5;
-    /// 分隔条（vsep）宽：0.25em（2026-11-06 从 0.5em 收窄）。
-    pub const VSEP_W_EM: f32 = 0.25;
-    /// 分隔条高（设计稿 `.vsep { height: 1em }`；实际取 `min(栏高, 按钮)` = 1em）。
-    pub const VSEP_H_EM: f32 = 1.0;
+    /// 编码栏内相邻元素的统一间距：0.25em（2026-11-08 取代 vsep 占位 + 0.5em 红块）。
+    pub const GAP_EM: f32 = 0.25;
     /// 按钮 1em 见方。
     pub const BTN_EM: f32 = 1.0;
-    /// 按钮之间的红块。
+    /// 红块边长（历史基准，早已不绘制）。仍被候选间隔 / 序号间隔当
+    /// 「半个 em」复用：`bar_dot * 0.5 == bar_gap == 0.25em`。
     pub const DOT_EM: f32 = 0.5;
     /// 编码栏下方的横分隔带高：0.25em（2026-11-06 从 0.5em 收窄）。
     /// 绿底已去掉，这个数现在是分隔线上下留白的占位高度。
     pub const HSEP_EM: f32 = 0.25;
-    /// 编码栏左右留白（设计稿 `.ime-bar { padding: .25em }`，紫色是调试色，只留空间）。
-    pub const PAD_EM: f32 = 0.25;
+    /// 编码栏左右留白（设计稿 `.ime-bar { padding: .25em }`）。
+    /// 2026-11-08 用户「编码栏去掉padding」：`PAD_EM = 0`，拼音贴栏左沿、
+    /// 按钮组贴白板右内沿，栏内不再留这 0.25em。
+    pub const PAD_EM: f32 = 0.0;
+
+    // ---- 2026-11-13 21:2x 用户：候选窗「**完全按 html 做**」（当前竖排难看）----
+    // 基准 = `%APPDATA%\Rime-Next\theme\weasel-next\ime_ui_reference.html`，
+    // fluent_next 浅色：`--r:14px --rs:7px --fs:16px`（THEMES L492-512），
+    // CSS 在 L100-134。下面的 em 全部以 **1em = 候选正文字号 = `font_h`** 折算
+    // （HTML 的 `--fs:16px` 就是这里的 1em），所以 16px 的值直接除 16：
+    //   `.candidate{min-width:288px;border:1px;border-radius:var(--r);overflow:hidden}`
+    //   `.cand-head{display:flex;gap:8px;padding:9px 13px;border-bottom:1px;font-size:13px}`
+    //   `.cand-list{padding:6px}`（竖排下 `.cand-list.h` 变 block、行紧贴）
+    //   `.ci{display:flex;gap:9px;padding:7px 10px;border-radius:var(--rs)}`（选中只换底色）
+    //   `.cand-foot{display:flex;gap:7px;padding:7px 12px;border-top:1px;font-size:9px}`
+    //   `.cand-foot button{width:22px;height:20px;border-radius:5px;border:1px;font-size:10px}`
+    /// 顶行高：padding 9×2 + 13px 行高 ≈ 34px = 2.125em。
+    pub const HEAD_EM: f32 = 2.125;
+    /// 底行高：padding 7×2 + 按钮 20px = 34px = 2.125em。
+    pub const FOOT_EM: f32 = 2.125;
+    /// 顶行左右内边距（`.cand-head` 的 13px）。
+    pub const HEAD_PAD_EM: f32 = 0.8125;
+    /// 底行左右内边距（`.cand-foot` 的 12px）。
+    pub const FOOT_PAD_EM: f32 = 0.75;
+    /// 顶行内元素间距（`.cand-head{gap:8px}`）。
+    pub const HEAD_GAP_EM: f32 = 0.5;
+    /// 底行内元素间距（`.cand-foot{gap:7px}`）。
+    pub const FOOT_GAP_EM: f32 = 0.4375;
+    /// 候选列表四周留白（`.cand-list{padding:6px}`）。
+    pub const LIST_PAD_EM: f32 = 0.375;
+    /// 顶/底行分隔线与面板描边厚度（HTML 的 1px border）。
+    pub const SEP_EM: f32 = 0.0625;
+    /// 候选行内边距（`.ci{padding:7px 10px}`）。11-12「所有候选 padding 一致、
+    /// 尺寸恒定不闪」的口径保留：三模式/选中未选中全部同值，选中只换底色。
+    pub const ROW_PAD_X_EM: f32 = 0.625;
+    pub const ROW_PAD_Y_EM: f32 = 0.4375;
+    /// 序号最小宽度（`.ci .num{min-width:13px}`）与行内元素间距（`.ci{gap:9px}`）。
+    pub const NUM_MIN_EM: f32 = 0.8125;
+    pub const ITEM_GAP_EM: f32 = 0.5625;
+    /// 候选之间的间隙：竖排/竹简 0（HTML 竖排里 `.ci` 是紧贴的 block），
+    /// 横排 2px（`.cand-list.h{gap:2px}`）。
+    pub const V_GAP_EM: f32 = 0.0;
+    pub const H_GAP_EM: f32 = 0.125;
+    /// 面板圆角（`--r` 14px）与候选块圆角（`--rs` 7px）。
+    pub const PANEL_RADIUS_EM: f32 = 0.875;
+    pub const ROW_RADIUS_EM: f32 = 0.4375;
+    /// 底行按钮盒子（`.cand-foot button` 22×20px、radius 5px）。
+    pub const BTN_W_EM: f32 = 1.375;
+    pub const BTN_H_EM: f32 = 1.25;
+    pub const BTN_RADIUS_EM: f32 = 0.3125;
+    /// 挤压模式各段字号（相对 1em）。
+    /// 2026-11-15 用户统一口径：**除候选正文外全部 0.75em**，不再分
+    /// 2/3em（顶行/序号/页码）与 0.5em（按钮/pill）两档。
+    /// 历史上这里按 `ime_ui_reference.html` 折算过多套倍率，现全部收敛到
+    /// [`super::NON_CANDIDATE_FONT_EM`]，改一处即可全窗生效。
+    pub const HEAD_FONT_EM: f32 = super::NON_CANDIDATE_FONT_EM;
+    pub const SMALL_FONT_EM: f32 = super::NON_CANDIDATE_FONT_EM;
+    pub const BTN_FONT_EM: f32 = super::NON_CANDIDATE_FONT_EM;
+    /// 底行「1 / N」页码：与其它非候选文字同为 0.75em（字体仍是等宽 Consolas）。
+    pub const PG_FONT_EM: f32 = super::NON_CANDIDATE_FONT_EM;
+    /// 顶行「方案名」pill：字号同为 0.75em，内边距仍按 HTML 折算。
+    pub const TAG_FONT_EM: f32 = super::NON_CANDIDATE_FONT_EM;
+    /// pill 左右内边距 8px = 0.5em。
+    pub const TAG_PAD_X_EM: f32 = 0.5;
+    /// pill 上下内边距 2px = 0.125em。
+    pub const TAG_PAD_Y_EM: f32 = 0.125;
 }
 
 /// 官方 `UIStyle::LayoutType`：六种布局。
@@ -210,8 +282,17 @@ pub fn load(dark: bool) -> Loaded {
     };
 
     match load_theme(&shared, &user, SKIN) {
-        Ok(Some(config)) => {
+        Ok(Some(mut config)) => {
+            // 深浅三合一(color_mode: auto=太阳/系统,dark/light 强制,2026-11-14)。
+            let dark = config.resolve_dark(dark);
             let scheme = config.active_scheme(dark);
+            // 圆角随皮肤(skins.html 的 --r/--rs),None = 跟随 style/layout。
+            if let Some(r) = scheme.corner_radius {
+                config.style.layout.round_corner = r as i32;
+            }
+            if let Some(r) = scheme.hilited_corner_radius {
+                config.style.layout.hilited_corner_radius = r as i32;
+            }
             // 说明布局取自哪一份（官方顺序：用户目录的 theme.yaml 优先，其次程序文件夹）
             let user_main = user.join("theme").join("theme.yaml");
             let shared_main = shared.join("theme").join("theme.yaml");
@@ -380,10 +461,8 @@ pub struct Metrics {
     // ---- 编码栏统一参数（见 `bar` 模块；像素值 = em 倍数 × font_point）----
     /// 栏高（编码栏那一整行）。
     pub bar_height: f32,
-    /// 分隔条（vsep）宽。
-    pub bar_vsep_w: f32,
-    /// 分隔条高（实际 `min(栏高, 按钮)`）。
-    pub bar_vsep_h: f32,
+    /// 编码栏内相邻元素的统一间距（0.25em，2026-11-08 起 vsep 与红块间隔都由它代替）。
+    pub bar_gap: f32,
     /// 按钮见方边长。
     pub bar_btn: f32,
     /// 按钮之间的红块边长。
@@ -392,6 +471,50 @@ pub struct Metrics {
     pub bar_hsep: f32,
     /// 编码栏左右留白（紫块的位置，产品里只留空间不涂色）。
     pub bar_pad: f32,
+    // ---- 2026-11-13「候选窗按 ime_ui_reference.html 重做」：顶行 / 底行参数 ----
+    /// 顶行高（预编辑 + `›` + 首候选；HTML `.cand-head`）。
+    pub bar_head: f32,
+    /// 底行高（页码 + `‹`/`›` + 右侧「同/贴/符」；HTML `.cand-foot`）。
+    pub bar_foot: f32,
+    /// 顶行左右内边距。
+    pub head_pad: f32,
+    /// 底行左右内边距。
+    pub foot_pad: f32,
+    /// 顶行内元素间距（预编辑 ↔ `›` ↔ 首候选）。
+    pub head_gap: f32,
+    /// 底行内元素间距（页码 ↔ `‹` ↔ `›`）。
+    pub foot_gap: f32,
+    /// 候选列表四周留白（HTML `.cand-list` 的 padding）。
+    pub list_pad: f32,
+    /// 顶/底行分隔线厚度（HTML 的 1px border）。
+    pub bar_sep: f32,
+    // ---- 2026-11-13 21:2x「完全按 ime_ui_reference.html 做」的挤压样式参数 ----
+    /// 候选行内边距（HTML `.ci{padding:7px 10px}`；所有候选同值，选中只换底色）。
+    pub sq_row_pad_x: f32,
+    pub sq_row_pad_y: f32,
+    /// 序号最小宽度（`.num{min-width:13px}`）。
+    pub sq_num_min: f32,
+    /// 序号↔正文↔拼音的行内间距（`.ci{gap:9px}`）。
+    pub sq_item_gap: f32,
+    /// 候选之间的间隙（竖排 0 / 横排 2px）。
+    pub sq_v_gap: f32,
+    pub sq_h_gap: f32,
+    /// 底行按钮盒子 22×20px / radius 5px。
+    pub sq_btn_w: f32,
+    pub sq_btn_h: f32,
+    pub sq_btn_radius: f32,
+    /// 候选块圆角（`--rs` 7px）。
+    pub sq_row_radius: f32,
+    /// 挤压模式三档字号（像素）：顶行 13px、序号/拼音/页码 11px、按钮 12px。
+    pub head_font_point: f32,
+    pub small_font_point: f32,
+    pub btn_font_point: f32,
+    /// 底行「1 / N」页码字号（独立于序号/拼音的 2/3 em，见 `bar::PG_FONT_EM`）。
+    pub pg_font_point: f32,
+    /// 顶行「拼音」pill 的字号（10.5px）与内边距（8px / 2px）。2026-11-13「方案②」。
+    pub tag_font_point: f32,
+    pub tag_pad_x: f32,
+    pub tag_pad_y: f32,
     pub border: f32,
     pub margin_x: f32,
     pub margin_y: f32,
@@ -423,6 +546,12 @@ pub struct Metrics {
     /// 点→DIP（`dpi/72`），官方 `m_dpiScaleFontPoint`。
     pub dpi_scale_font: f32,
 
+    /// 编码栏是否画在候选**下方**（2026-11-08 用户要求「编码栏在底部，候选在顶部」）。
+    /// 由 `style/layout/bar_position` 决定；`auto` 时由 `Window::render` 按候选窗
+    /// 相对光标的方位在每帧覆盖（见 `bar_position_auto`）。
+    pub bar_at_bottom: bool,
+    /// `bar_position == "auto"`：运行时按窗口方位自动切换上一项的取值。
+    pub bar_position_auto: bool,
     pub inline_preedit: bool,
     pub label_format: String,
     pub mark_text: String,
@@ -580,12 +709,40 @@ impl Metrics {
             // `font_h` 就是这里的 1em（= `style.font_point * font_scale`），
             // layout 与 paint 都从这里读，不再各自硬编码倍数。
             bar_height: font_h * bar::HEIGHT_EM,
-            bar_vsep_w: font_h * bar::VSEP_W_EM,
-            bar_vsep_h: font_h * bar::VSEP_H_EM,
+            bar_gap: font_h * bar::GAP_EM,
             bar_btn: font_h * bar::BTN_EM,
             bar_dot: font_h * bar::DOT_EM,
             bar_hsep: font_h * bar::HSEP_EM,
             bar_pad: font_h * bar::PAD_EM,
+            // 2026-11-13 20:5x 按 `ime_ui_reference.html` 的候选窗重做顶行/底行。
+            bar_head: font_h * bar::HEAD_EM,
+            bar_foot: font_h * bar::FOOT_EM,
+            head_pad: font_h * bar::HEAD_PAD_EM,
+            foot_pad: font_h * bar::FOOT_PAD_EM,
+            head_gap: font_h * bar::HEAD_GAP_EM,
+            foot_gap: font_h * bar::FOOT_GAP_EM,
+            list_pad: font_h * bar::LIST_PAD_EM,
+            bar_sep: (font_h * bar::SEP_EM).max(1.0),
+            // 2026-11-13 21:2x「完全按 html 做」：行内边距 / 序号宽 / 行内 gap / 按钮盒 /
+            // 圆角 / 三档字号全部按 HTML 的 em 折算（16px 为 1em）。
+            sq_row_pad_x: font_h * bar::ROW_PAD_X_EM,
+            sq_row_pad_y: font_h * bar::ROW_PAD_Y_EM,
+            sq_num_min: font_h * bar::NUM_MIN_EM,
+            sq_item_gap: font_h * bar::ITEM_GAP_EM,
+            sq_v_gap: font_h * bar::V_GAP_EM,
+            sq_h_gap: font_h * bar::H_GAP_EM,
+            sq_btn_w: font_h * bar::BTN_W_EM,
+            sq_btn_h: font_h * bar::BTN_H_EM,
+            sq_btn_radius: font_h * bar::BTN_RADIUS_EM,
+            sq_row_radius: font_h * bar::ROW_RADIUS_EM,
+            head_font_point: font_h * bar::HEAD_FONT_EM,
+            small_font_point: font_h * bar::SMALL_FONT_EM,
+            btn_font_point: font_h * bar::BTN_FONT_EM,
+            pg_font_point: font_h * bar::PG_FONT_EM,
+            // 2026-11-13「方案②」：顶行「拼音」pill 的字号与内边距（HTML `.tag`）。
+            tag_font_point: font_h * bar::TAG_FONT_EM,
+            tag_pad_x: font_h * bar::TAG_PAD_X_EM,
+            tag_pad_y: font_h * bar::TAG_PAD_Y_EM,
             border: abs_scaled(border),
             // margin 仍保留 yaml 的符号（负 margin = 内容往外挪），绝对值 = 1em 边距 + pad 外扩
             margin_x: margin_sign_x as f32 * (font_h + font_h / 2.0),
@@ -614,10 +771,18 @@ impl Metrics {
             label_font_face: style.label_font_face.clone(),
             comment_font_face: style.comment_font_face.clone(),
             font_point: style.font_point as f32 * font_scale,
-            label_font_point: style.label_font_point as f32 * font_scale,
-            comment_font_point: style.comment_font_point as f32 * font_scale,
+            // 2026-11-15：序号/注释与所有非候选文字统一 0.75em，yaml 里
+            // `label_font_point` / `comment_font_point` 两个旋钮不再驱动字号。
+            label_font_point: font_h * NON_CANDIDATE_FONT_EM,
+            comment_font_point: font_h * NON_CANDIDATE_FONT_EM,
             dpi_scale: scale,
             dpi_scale_font: font_scale,
+            // `bar_position` 缺省 = `auto`（见 `Layout::default`），运行时按候选窗相对光标方位
+            // 自动切换编码栏上/下（输入框在顶→栏在顶/正序，在底→栏在底/倒序）；
+            // 显式 `top` / `bottom` 才锁死。`auto` 时 `bar_at_bottom` 会被 `desired_bar_at_bottom`
+            // 每帧覆盖。
+            bar_position_auto: l.bar_position.trim().eq_ignore_ascii_case("auto"),
+            bar_at_bottom: !l.bar_position.trim().eq_ignore_ascii_case("top"),
             inline_preedit,
             label_format: if style.label_format.is_empty() {
                 "%s.".to_string()
@@ -639,9 +804,9 @@ impl Metrics {
             mark_visible: false,
             comment_visible_normal: true,
             comment_visible_hilited: true,
-            label_font_valid: style.label_font_point > 0,
+            label_font_valid: style.font_point > 0,
             text_font_valid: style.font_point > 0,
-            comment_font_valid: style.comment_font_point > 0,
+            comment_font_valid: style.font_point > 0,
         };
         crate::diagnostics::record(format_args!(
             "尺寸生效：字高 {:.1} · marginX {:.1} · marginY {:.1} · spacing {:.1} · candSpacing {:.1} · hiliteSpacing {:.1} · hilitePad {:.1}/{:.1} · 圆角 {:.1}/{:.1}",
@@ -714,16 +879,17 @@ impl Metrics {
 
     /// 面板（灰壳）外角半径。
     ///
-    /// 2026-11-06 用户「大界面圆角做成一半」：挤压三模式取 `round_corner_ex`
-    /// 的一半（1em → 0.5em）；官方六种布局仍用原值（1em），零回归。
-    /// 同日 21:2x「都 0.5」后，挤压三模式的圆角与 padding 同为 **0.5em**。
+    /// 2026-11-06 用户「大界面圆角做成一半」、2026-11-08 再减半到 0.25em；
+    /// **2026-11-13 21:2x 按 `ime_ui_reference.html`「完全按 html 做」**：
+    /// 回到 HTML 的 `--r:14px`（14/16 em = 0.875em，fluent_next 浅色），
+    /// 官方六种布局仍用原值（1em），零回归。
     ///
     /// ⚠️ 三处必须同源：窗口 `SetWindowRgn`（mod.rs）、毛玻璃圆角遮罩（mod.rs）、
     /// 灰壳圆角（paint.rs）。只改绘制不动窗口裁剪，窗口还是按大圆角把面板角切掉；
     /// 只改窗口不动遮罩，模糊背景的四角又会方出来。
     pub fn panel_radius(&self) -> f32 {
         if self.squeeze {
-            self.round_corner_ex * 0.5
+            self.round_corner_ex * bar::PANEL_RADIUS_EM
         } else {
             self.round_corner_ex
         }
@@ -731,25 +897,22 @@ impl Metrics {
 
     /// 布局侧用的纸边距（= lip 的**不含宽度夹取**版本）。
     ///
-    /// 布局算宽度时就要用到它，而宽度又会反过来夹 lip —— 所以布局只取这个常数版，
-    /// 绘制侧再用 [`Self::squeeze_lip`] 夹一次（窗宽 < 8×lip 的极端情况才会不同）。
+    /// **2026-11-13 21:2x「完全按 html 做」：挤压三模式归零** ——
+    /// HTML 的 `.candidate` 没有内圈 padding：`.cand-head` / `.cand-list` /
+    /// `.cand-foot` 都是面板的直接子项、贴着 1px 描边铺满，行内留白由各自 padding
+    /// 给（13px / 6px / 12px）。旧的 0.5em→0.25em「灰壳 padding」在 HTML 里不存在，
+    /// 留着会把整块内容往里缩一大截（用户说「难看」的一部分）。
+    /// 圆角由窗口 `SetWindowRgn` 裁，内容不会再从圆角里戳出来（满宽行都离角很远）。
     pub fn squeeze_frame(&self) -> f32 {
-        let em = self.font_point.max(8.0);
-        // 2026-11-06 21:2x「都 0.5」：与 `panel_radius()` 的 0.5em 对齐，
-        // padding 由 0.25em 回到 **0.5em**（= 设计稿 `.ime { padding: .5em }`）。
-        // 下限仍要 ≥ 0.3×面板圆角（0.3×0.5em = 0.15em，正常不触发），
-        // 保证白板直角不会从灰壳圆角里戳出去。
-        (em * 0.5)
-            .max(2.0)
-            .max(self.panel_radius().max(0.0) * 0.3)
+        0.0
     }
 
-    /// 编码栏右侧按钮组的总宽（vsep + 3 按钮 + 2 间隔 + vsep = 4.5em）。
+    /// 底行右侧三按钮组的总宽（3×按钮 22px + 2×7px 间距，按 HTML `.cand-foot` 口径）。
     ///
-    /// 按钮组从 `page_prev.left` 向左排，占宽必须与 [`bar`] 里的 em 倍数一致，
-    /// 否则 layout 预留的宽度和 paint 实际画的宽度会对不上。
+    /// 布局侧用它预留底行宽度、绘制侧按 `Layout::bar_buttons` 的矩形画盒子，
+    /// 两边必须同一公式，否则会差几像素。
     pub fn bar_group_width(&self) -> f32 {
-        2.0 * self.bar_vsep_w + 3.0 * self.bar_btn + 2.0 * self.bar_dot
+        3.0 * self.sq_btn_w + 2.0 * self.foot_gap
     }
 
     /// 官方 `Layout.cpp:51-60` 的 `offsetX/offsetY`：给阴影与描边留出的外扩。
@@ -828,6 +991,12 @@ mod tests {
         assert_eq!(m.layout_type, LayoutType::Vertical);
         assert_eq!(m.align, Align::Center);
         assert_eq!(m.border, 3.0);
+        // 2026-11-08：缺省 `bar_position` 应为 `auto`（编码栏随窗口方位上/下自动切换），
+        // 而不是旧版的永远在底部。
+        assert!(
+            m.bar_position_auto,
+            "缺省 bar_position 应为 auto（随光标方位自动切换编码栏上/下）"
+        );
         // 间距/圆角跟字高绑定（见 Metrics::new ⑤）：14pt 在 96 DPI 下 = 18.6667 DIP
         let font_h = 14.0f32 * 96.0 / 72.0;
         let pad = font_h / 2.0;
@@ -927,9 +1096,10 @@ mod tests {
         assert!((m.real_margin_y() - font_h * 1.5).abs() < 0.01);
     }
 
-    /// 编码栏统一参数（`config::bar`）锁值：em 倍数 × font_h = 像素值，
-    /// `bar_group_width()` = 2×vsep + 3×按钮 + 2×间隔 = 4.5em
-    /// （2026-11-06 分隔 0.5em → 0.25em 后从 5em 收窄）。
+    /// 编码栏统一参数（`config::bar`）锁值：em 倍数 × font_h = 像素值。
+    /// 2026-11-08 用户「符号剪贴板同步箭头之间 0.25em 间距 + 去掉竖的分界线」：
+    /// vsep 字段整体删除，改由 `bar_gap` 统一；`bar_group_width()` =
+    /// 3×1em 按钮 + 4×0.25em 间距 = 4em（旧口径 4.5em）。
     /// 2026-11-05 用户要求「统一编码栏的处理，做成一套参数」——这个测试守住
     /// 改 `bar` 模块的倍数时，像素值与按钮组总宽都跟着变。
     #[test]
@@ -937,23 +1107,25 @@ mod tests {
         let m = Metrics::new(&official_default(), 96.0);
         let font_h = 14.0f32 * 96.0 / 72.0; // = 18.6667
         assert!((m.bar_height - font_h * 1.5).abs() < 0.01, "栏高 = 1.5em");
-        assert!((m.bar_vsep_w - font_h * 0.25).abs() < 0.01, "vsep 宽 = 0.25em");
-        assert!((m.bar_vsep_h - font_h * 1.0).abs() < 0.01, "vsep 高 = 1em");
+        assert!((m.bar_gap - font_h * 0.25).abs() < 0.01, "编码栏间距 = 0.25em");
         assert!((m.bar_btn - font_h * 1.0).abs() < 0.01, "按钮 = 1em");
-        assert!((m.bar_dot - font_h * 0.5).abs() < 0.01, "间隔 = 0.5em");
+        assert!((m.bar_dot - font_h * 0.5).abs() < 0.01, "红块基准 = 0.5em");
         assert!((m.bar_hsep - font_h * 0.25).abs() < 0.01, "横分隔占位 = 0.25em");
-        // 按钮组总宽 = 2×0.25 + 3×1 + 2×0.5 = 4.5em
+        // 按钮组总宽 = 3×1.375em 按钮 + 2×0.4375em 间距 = 5em
+        // （2026-11-13 HTML 口径：`.cand-foot button` 22×20px、`gap:7px`，16px = 1em）
         assert!(
-            (m.bar_group_width() - font_h * 4.5).abs() < 0.01,
-            "按钮组占宽 = 4.5em = {}",
+            (m.bar_group_width() - font_h * 5.0).abs() < 0.01,
+            "按钮组占宽 = 5em = {}",
             m.bar_group_width()
         );
     }
 
-    /// 2026-11-06 21:2x「都 0.5」：挤压三模式面板外角与灰壳 padding
-    /// **同为 0.5em**；官方六种布局仍是 1em 且不受影响。
+    /// 2026-11-13 21:2x「完全按 ime_ui_reference.html 做」：挤压三模式
+    /// 面板圆角 = HTML `--r:14px` = 0.875em、**纸边距归零**（HTML `.candidate` 没有
+    /// 内圈 padding，占位由 `.cand-head/.cand-list/.cand-foot` 各自的 padding 给）；
+    /// 官方六种布局仍是 1em 且不受影响。
     #[test]
-    fn squeeze_panel_radius_and_padding_are_both_half_em() {
+    fn squeeze_panel_radius_and_frame_follow_html() {
         let font_h = 14.0f32 * 96.0 / 72.0; // 18.6667 DIP
         let official = Metrics::new(&official_default(), 96.0);
         assert!(!official.squeeze);
@@ -964,24 +1136,21 @@ mod tests {
         let sq = Metrics::new(&style, 96.0);
         assert!(sq.squeeze, "horizontal_squeeze 应点亮 squeeze");
         assert!(
-            (sq.panel_radius() - font_h * 0.5).abs() < 0.01,
-            "挤压大圆角 = 0.5em = {}",
+            (sq.panel_radius() - font_h * 0.875).abs() < 0.01,
+            "挤压大圆角 = 0.875em（HTML --r:14px）= {}",
             sq.panel_radius()
         );
         assert!(
-            (sq.squeeze_frame() - font_h * 0.5).abs() < 0.01,
-            "挤压 padding = 0.5em = {}",
-            sq.squeeze_frame()
+            sq.squeeze_frame().abs() < 0.01,
+            "挤压纸边距 = 0（HTML 的 .candidate 没有内圈 padding）"
         );
         assert!(
-            (sq.squeeze_lip(1000.0) - font_h * 0.5).abs() < 0.01,
+            sq.squeeze_lip(1000.0).abs() < 0.01,
             "绘制侧 lip 与布局侧同数 = {}",
             sq.squeeze_lip(1000.0)
         );
-        // 具体输入输出：font_h=18.6667 ⇒ 圆角 9.3333 / padding 9.3333 DIP
-        assert!((sq.panel_radius() - 9.3333).abs() < 0.01);
-        assert!((sq.squeeze_frame() - 9.3333).abs() < 0.01);
-        assert!((sq.panel_radius() - sq.squeeze_frame()).abs() < 0.01, "两项都是 0.5em");
+        // 具体输入输出：font_h=18.6667 ⇒ 圆角 16.3333 DIP、纸边距 0
+        assert!((sq.panel_radius() - 16.3333).abs() < 0.01);
     }
 
     #[test]

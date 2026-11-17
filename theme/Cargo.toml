@@ -19,6 +19,10 @@ acrylic = []
 original = []
 
 [dependencies]
+# 2026-11-10：抄 CloudInputMethodEditor 的依赖选型——测量缓存是每帧热路径，
+# 每次查表 SipHash 几十纳秒；foldhash 对这个纯内部 key 足够且更快。
+# ⚠️ 只换纯查找用的 HashMap；依赖字典序的 BTreeMap 不换。
+foldhash = "0.2"
 serde_json = "1"
 weasel-common = { path = "../common" }
 weasel-theme-api = { path = "./api" }

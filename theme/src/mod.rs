@@ -21,18 +21,22 @@ pub mod paint;
 use crate::d2d_bindings::*;
 use crate::theme::paint::{d2d_color, Formats, Painter};
 use crate::theme_api::{CandidateView, EventSink, ThemeBackend, UiAction, UiMode};
-use config::Metrics;
+use config::{Metrics, NON_CANDIDATE_FONT_EM};
 use layout::{
-    prediction_tag_visible, Hit, Layout, Measured, PREDICTION_KIND, Parts, Rect, Size,
+    Hit, Layout, Measured, PREDICTION_KIND, Parts, Rect, Size, bar_text,
+    bar_text_uses_ascii_format, is_prediction_strip, prediction_tag_visible,
 };
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
 };
 use weasel_style::ColorScheme;
 use windows_strings::w;
+
+/// 测量缓存热路径用 foldhash（抄 CloudIME 依赖选型：SipHash 每次查表几十纳秒）。
+/// 本 crate 只有这一处纯查找 `HashMap`；依赖字典序的 `BTreeMap` 一律不换。
+type FastHashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
 
 /// `hide()` 诊断（2026-11-07 23:xx）：候选窗被**谁**成串地收起。
 ///
@@ -47,6 +51,9 @@ static HIDE_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 
 const CLASS: windows_strings::PCWSTR = w!("Weasel.NextTheme.Default");
 const RETRY_TIMER: usize = 1;
+// AC2 背景动画(空闲重绘节拍 BG_TIMER)已**永久废弃**(2026-11-17 用户指示):
+// 每帧全量重绘 + AC2 几何层是大列表页卡顿的主因之一,背景层已静态化
+// (paint_ac2 的相位全部取固定值),不再有任何定时重绘。
 
 /// 抓屏亲和性：`WDA_NONE` = 正常（会被截进画面里）；
 /// `WDA_EXCLUDEFROMCAPTURE` = 本窗口对**所有截屏 API 隐形**，截到的是它背后的画面。
@@ -206,8 +213,10 @@ const HIDE_DEBOUNCE_MS: u32 = 450;
 /// （下一帧重新量一遍，命中率会短暂回落，但不会错）。
 const MEASURE_CACHE_MAX: usize = 2048;
 
-/// 区分四套文本格式 + 预测标签小号格式。字号/字体/DPI 变化由 [`Graphics::refresh_formats`]
-/// 统一清空缓存兜底，所以 key 不必把整个 `Metrics` 塞进来。
+/// 区分四套文本格式 + 预测标签小号格式 + 编码栏 ASCII 放大格式
+/// + 挤压三模式的顶行 / 小号 / 按钮三档格式。
+/// 字号/字体/DPI 变化由 [`Graphics::refresh_formats`] 统一清空缓存兜底，
+/// 所以 key 不必把整个 `Metrics` 塞进来。
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 enum MeasureFormat {
     Label,
@@ -215,6 +224,23 @@ enum MeasureFormat {
     Comment,
     PredictionTag,
     Preedit,
+    /// 2026-11-12：编码栏左侧纯 ASCII 拼音串专用，避免和中文按钮共用
+    /// `Preedit` 缓存串味（同一文本必须用同一格式量/画）。
+    PreeditAscii,
+    /// 2026-11-13 按 HTML 复刻：挤压候选序号 / 拼音注释 / 页码（11px = 0.6875em）。
+    SqueezeSmall,
+    /// 挤压顶行预编辑（13px = 0.8125em，等宽半粗）。
+    SqueezeHead,
+    /// 挤压顶行「首候选提示」（13px = 0.8125em，半粗）。
+    SqueezeHeadHint,
+    /// 挤压底行翻页按钮 `‹`/`›` 与「同/贴/符」（12px = 0.75em）。
+    SqueezeBtn,
+    /// 挤压顶行「拼音」pill 文字（10.5px = 0.65625em，HTML `.cand-head .tag`）。
+    /// 2026-11-13「方案②」加。
+    SqueezeTag,
+    /// 挤压底行页码 `1 / N`（11px 等宽 Consolas，HTML `.cand-foot .pg`）。
+    /// 与 `SqueezeSmall` 同字号但字体不同 ⇒ 必须独立格式，测量缓存不能串味。
+    SqueezePg,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -226,7 +252,7 @@ struct MeasureKey {
 }
 
 #[derive(Default)]
-struct MeasureCache(RefCell<HashMap<MeasureKey, Size>>);
+struct MeasureCache(RefCell<FastHashMap<MeasureKey, Size>>);
 
 impl MeasureCache {
     fn get(&self, key: &MeasureKey) -> Option<Size> {
@@ -254,7 +280,7 @@ impl MeasureCache {
 struct Graphics {
     /// 供文本测量和布局使用的共享 DirectWrite 工厂。
     write: IDWriteFactory,
-    /// 四套文本格式（官方 `InitFontFormats`）。
+    /// 官方四套文本格式 + 预测标签 + ASCII 编码放大格式。
     formats: Formats,
     /// 中英文模式提示用的紧凑格式（官方没有这一项，是我们自己的小窗）。
     indicator: IDWriteTextFormat,
@@ -266,19 +292,16 @@ struct Graphics {
     measure_cache: MeasureCache,
 }
 
-/// 预测标签（预测项的 `secondary_text`）字号 = 候选字号的 1/2。
-///
-/// 2026-11-08 用户口径：「我说的是预测这个标签做成小一号，预测的候选字号不变」
-/// —— 小一号的是「预测」这两个字的标签，**不是**预测候选的正文文字（正文仍用
-/// `formats.text`，字号跟普通候选一致）。「小一号」= `font_point * 0.5`，此前已确认。
-///
-/// 2026-11-08 稍后用户「不要显示预测这个标签了」⇒ 见
-/// [`layout::prediction_tag_visible`]，标签恒不绘制；本函数与半字号格式保留备用。
-///
-/// 抽成独立函数是为了让单测能钉住 1/2 这个口径（真实 DirectWrite 格式无法在
-/// 单测里建）；`Graphics::make_formats` 用它建 `Formats::prediction_tag`。
+/// 「预测」标签字号（标签恒不绘制，见 [`layout::prediction_tag_visible`]；格式保留备用）。
+/// 2026-11-15 用户「除候选外全部 0.75em」后与所有非候选文字统一，不再单独小一号。
 fn prediction_tag_point(m: &Metrics) -> f32 {
-    m.font_point * 0.5
+    m.font_point * NON_CANDIDATE_FONT_EM
+}
+
+/// 编码栏纯 ASCII 编码仍用独立格式（避免与中文按钮共用测量缓存串味），但字号
+/// 2026-11-15 起统一 0.75em；旧的 1.17× 视觉补偿（28:24 墨迹高实测）已撤销。
+fn preedit_ascii_point(m: &Metrics) -> f32 {
+    m.font_point * NON_CANDIDATE_FONT_EM
 }
 
 impl Graphics {
@@ -289,8 +312,9 @@ impl Graphics {
         let indicator = Self::make_format(
             &write,
             "Segoe UI",
-            (m.font_point * 0.75).max(9.0),
+            (m.font_point * NON_CANDIDATE_FONT_EM).max(8.0),
             DWRITE_WORD_WRAPPING_NO_WRAP,
+            DWRITE_FONT_WEIGHT_NORMAL,
             m,
         )?;
         Ok(Self {
@@ -304,11 +328,15 @@ impl Graphics {
 
     /// 官方 `GetOrCreateTextFormat`：字号 = 点 × `dpi/72`，LEADING + 段落居中，
     /// 行距/基线只在两者都非 0 时启用。
+    ///
+    /// 2026-11-13：加 `weight` 形参（HTML 的顶行/首候选是 `font-weight:600`）。
+    #[allow(clippy::too_many_arguments)]
     fn make_format(
         write: &IDWriteFactory,
         face: &str,
         size: f32,
         wrapping: DWRITE_WORD_WRAPPING,
+        weight: DWRITE_FONT_WEIGHT,
         m: &Metrics,
     ) -> windows_core::Result<IDWriteTextFormat> {
         unsafe {
@@ -316,7 +344,7 @@ impl Graphics {
             let format = write.CreateTextFormat(
                 windows_core::PCWSTR(face.as_ptr()),
                 None,
-                DWRITE_FONT_WEIGHT_NORMAL,
+                weight,
                 DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL,
                 size,
@@ -362,16 +390,33 @@ impl Graphics {
             preedit: Self::make_format(
                 write,
                 &m.font_face,
-                m.font_point,
+                m.font_point * NON_CANDIDATE_FONT_EM,
                 wrapping_preedit,
+                DWRITE_FONT_WEIGHT_NORMAL,
                 m,
             )?,
-            text: Self::make_format(write, &m.font_face, m.font_point, wrapping, m)?,
+            preedit_ascii: Self::make_format(
+                write,
+                &m.font_face,
+                preedit_ascii_point(m),
+                wrapping_preedit,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                m,
+            )?,
+            text: Self::make_format(
+                write,
+                &m.font_face,
+                m.font_point,
+                wrapping,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                m,
+            )?,
             label: Self::make_format(
                 write,
                 &m.label_font_face,
                 m.label_font_point,
                 wrapping,
+                DWRITE_FONT_WEIGHT_NORMAL,
                 m,
             )?,
             comment: Self::make_format(
@@ -379,6 +424,7 @@ impl Graphics {
                 &m.comment_font_face,
                 m.comment_font_point,
                 wrapping,
+                DWRITE_FONT_WEIGHT_NORMAL,
                 m,
             )?,
             // 「预测」标签小一号（2026-11-08 用户：「预测这个标签做成小一号，预测的
@@ -390,6 +436,63 @@ impl Graphics {
                 &m.comment_font_face,
                 prediction_tag_point(m),
                 wrapping,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                m,
+            )?,
+            // 2026-11-13 21:2x「候选窗完全按 ime_ui_reference.html 做」的三档字号：
+            //   · 序号 / 拼音注释 = 0.5em（`.ci .num` / `.ci .py`）
+            //   · 顶行预编辑 = 0.8125em、等宽 600（`.cand-head .preedit`）
+            //   · 顶行首候选提示 = 同顶行、600（`.cand-head .hint`）
+            //   · 底行按钮字与「1 / N」页码 = 2/3 em（2026-11-13 23:2x 用户定：
+            //     「底部的工具栏字号大小做成上面编码和候选的 2/3」）
+            squeeze_small: Self::make_format(
+                write,
+                &m.font_face,
+                m.small_font_point,
+                wrapping,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                m,
+            )?,
+            squeeze_head: Self::make_format(
+                write,
+                "Consolas",
+                m.head_font_point,
+                wrapping_preedit,
+                DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                m,
+            )?,
+            squeeze_head_hint: Self::make_format(
+                write,
+                &m.font_face,
+                m.head_font_point,
+                wrapping,
+                DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                m,
+            )?,
+            squeeze_btn: Self::make_format(
+                write,
+                &m.font_face,
+                m.btn_font_point,
+                wrapping,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                m,
+            )?,
+            // 2026-11-13「方案②」：顶行「拼音」pill（HTML `.tag`：10.5px、字体继承顶行）
+            // 与底行页码（HTML `.cand-foot .pg`：11px `ui-monospace,Consolas`）。
+            squeeze_tag: Self::make_format(
+                write,
+                &m.font_face,
+                m.tag_font_point,
+                wrapping,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                m,
+            )?,
+            squeeze_pg: Self::make_format(
+                write,
+                "Consolas",
+                m.pg_font_point,
+                wrapping,
+                DWRITE_FONT_WEIGHT_NORMAL,
                 m,
             )?,
         })
@@ -401,8 +504,9 @@ impl Graphics {
         self.indicator = Self::make_format(
             &self.write,
             "Segoe UI",
-            (m.font_point * 0.75).max(9.0),
+            (m.font_point * NON_CANDIDATE_FONT_EM).max(8.0),
             DWRITE_WORD_WRAPPING_NO_WRAP,
+            DWRITE_FONT_WEIGHT_NORMAL,
             m,
         )?;
         // 字体/DPI 换了，之前量出来的尺寸一律作废。
@@ -489,12 +593,24 @@ impl Graphics {
         };
         for i in 0..count {
             let item = &view.items[i];
-            // 序号：官方来自 rime 的 labels（"1" "2" …续页继续累加），再套 style/label_format
+            // 序号：官方来自 rime 的 labels（"1" "2" …续页继续累加），再套 style/label_format。
+            // 2026-11-13「完全按 ime_ui_reference.html 做」：挤压三模式的序号是 **11px**
+            // （`.ci .num{font-size:11px;min-width:13px}`，1em = 候选正文 16px 口径），
+            // 不是 14pt 正文大小。`min-width:13px` 用 `sq_num_min` 量出来兜住。
             let label = m.format_label(&(i as u32 + 1).to_string());
-            measured.label.push(if m.label_font_valid {
-                self.measure(&label, MeasureFormat::Label, &self.formats.label, m)
-            } else {
+            measured.label.push(if !m.label_font_valid {
                 Size::ZERO
+            } else if m.squeeze {
+                let mut size = self.measure(
+                    &label,
+                    MeasureFormat::SqueezeSmall,
+                    &self.formats.squeeze_small,
+                    m,
+                );
+                size.cx = size.cx.max(m.sq_num_min);
+                size
+            } else {
+                self.measure(&label, MeasureFormat::Label, &self.formats.label, m)
             });
             measured.text.push(if m.text_font_valid {
                 self.measure(
@@ -515,7 +631,11 @@ impl Graphics {
                 } else if m.comment_font_valid {
                     // 标签若将来重新打开：kind == prediction 的 secondary_text 用
                     // font_point/2 的小号格式量；普通候选的注释仍用 `comment`。
-                    let (format, tag) = if item.kind == PREDICTION_KIND {
+                    // 2026-11-13：挤压三模式的拼音注释 = **11px**（`.ci .py`），
+                    // 与序号同一档小号；官方六布局仍按 `comment` 原字号。
+                    let (format, tag) = if m.squeeze {
+                        (&self.formats.squeeze_small, MeasureFormat::SqueezeSmall)
+                    } else if item.kind == PREDICTION_KIND {
                         (&self.formats.prediction_tag, MeasureFormat::PredictionTag)
                     } else {
                         (&self.formats.comment, MeasureFormat::Comment)
@@ -526,14 +646,46 @@ impl Graphics {
                 },
             );
         }
-        // 预编辑：我们的快照只给"整段组字中"，所以整段都是高亮段（官方 composition 的常态）
-        if let Some(preedit) = &view.preedit {
-            let size = self.measure(
-                &preedit.text,
-                MeasureFormat::Preedit,
-                &self.formats.preedit,
-                m,
-            );
+        // 顶行「首候选提示」（HTML `.cand-head .hint`）：横排量第一条候选正文。
+        // 单独存一份，因为竹简（`Cells`）随后会把 `text` 换成竖排尺寸。
+        // 2026-11-13：挤压顶行这条提示按 HTML 是 **13px 600**（不是正文 16px），
+        // 所以用 `squeeze_head_hint` 单独量。
+        measured.head_hint = if m.squeeze {
+            view.items
+                .first()
+                .map(|item| {
+                    self.measure(
+                        &item.primary_text,
+                        MeasureFormat::SqueezeHeadHint,
+                        &self.formats.squeeze_head_hint,
+                        m,
+                    )
+                })
+                .unwrap_or(Size::ZERO)
+        } else {
+            measured.text.first().copied().unwrap_or(layout::Size::ZERO)
+        };
+        // 预编辑：我们的快照只给"整段组字中"，所以整段都是高亮段（官方 composition 的常态）。
+        // 2026-11-12 用户「编码栏是智能预测四个字」：上屏后联想条没有真实 preedit，
+        // 但编码栏要写「智能预测」——量尺寸也按这四个字，与 `Layout::build` / `paint`
+        // 共用 `bar_text` 一个口径，避免「量了四个字、画了另一个字」。
+        if let Some(text) = bar_text(view) {
+            // 2026-11-12 用户「左右字号不一样大」：纯 ASCII 编码用放大格式量，
+            // 中文回退文案仍用原字号；paint 侧复用 `bar_text_uses_ascii_format`，
+            // 保证「量了哪种字号、就画哪种字号」。
+            //
+            // 2026-11-13「完全按 html 做」：挤压三模式的顶行预编辑固定 **13px 等宽 600**
+            // （`.cand-head .preedit`），不再做旧的 1.17× ASCII 视觉补偿 —— 那套补偿
+            // 是给旧编码栏「拼音 vs 中文按钮左右对照」用的，新顶行右侧是首候选、
+            // 右下按钮另有 12px 字号，前后不再需要对齐。
+            let (format, tag) = if m.squeeze {
+                (&self.formats.squeeze_head, MeasureFormat::SqueezeHead)
+            } else if bar_text_uses_ascii_format(text) {
+                (&self.formats.preedit_ascii, MeasureFormat::PreeditAscii)
+            } else {
+                (&self.formats.preedit, MeasureFormat::Preedit)
+            };
+            let size = self.measure(text, tag, format, m);
             measured.preedit = Parts {
                 before: Size::ZERO,
                 hilite: size,
@@ -541,24 +693,67 @@ impl Graphics {
                 total: size,
             };
         }
-        // 翻页字形（官方用 `<` / `>`，字体同预编辑）
-        measured.page_prev = self.measure(
-            layout::PAGE_PREV,
-            MeasureFormat::Preedit,
-            &self.formats.preedit,
-            m,
-        );
-        measured.page_next = self.measure(
-            layout::PAGE_NEXT,
-            MeasureFormat::Preedit,
-            &self.formats.preedit,
-            m,
-        );
+        // 翻页字形（官方用 `<` / `>`，字体同预编辑）。
+        // 2026-11-13：挤压三模式里 `‹`/`›` 是 22×20 边框按钮里的 **12px** 字形，
+        // 与「同/贴/符」同一档（`squeeze_btn`）。
+        let (page_format, page_tag) = if m.squeeze {
+            (&self.formats.squeeze_btn, MeasureFormat::SqueezeBtn)
+        } else {
+            (&self.formats.preedit, MeasureFormat::Preedit)
+        };
+        measured.page_prev = self.measure(layout::PAGE_PREV, page_tag, page_format, m);
+        measured.page_next = self.measure(layout::PAGE_NEXT, page_tag, page_format, m);
+        // 顶行引导箭头 `›`（2026-11-13 候选窗按 `ime_ui_reference.html` 重做）：
+        // 与顶行预编辑同字号（13px），量一次给 layout 定矩形、paint 落笔共用。
+        measured.head_arrow = if m.squeeze {
+            self.measure(
+                layout::HEAD_ARROW,
+                MeasureFormat::SqueezeHead,
+                &self.formats.squeeze_head,
+                m,
+            )
+        } else {
+            self.measure(
+                layout::HEAD_ARROW,
+                MeasureFormat::Preedit,
+                &self.formats.preedit,
+                m,
+            )
+        };
         // 标记：官方在没有 mark_text 时用 "|" 的尺寸做基准
         measured.mark = if m.mark_text.is_empty() {
             self.measure("|", MeasureFormat::Text, &self.formats.text, m)
         } else {
             self.measure(&m.mark_text, MeasureFormat::Text, &self.formats.text, m)
+        };
+        // ---- 2026-11-13「方案②」：顶行「拼音」pill + 底行「1 / N」页码 ----
+        // 两者都只在**数据已知**时才量：`schema_name` 空串 ⇒ 不画 pill；页码要
+        // `page_no`/`page_count` 都 Some ⇒ 旧 Engine 帧（None）保持现状不画。
+        // 这里是几何的**唯一入口**：量出来的外框尺寸由 layout 定位、paint 照着画，
+        // 避免「量了四个字、画了另一个字」那类两处口径漂移。
+        measured.head_tag = if m.squeeze && !view.schema_name.is_empty() {
+            let text = self.measure(
+                &view.schema_name,
+                MeasureFormat::SqueezeTag,
+                &self.formats.squeeze_tag,
+                m,
+            );
+            // pill 外框 = 文字 + 左右 padding + 1px 描边（HTML `.tag{padding:2px 8px;border:1px}`）。
+            Size::new(
+                text.cx + m.tag_pad_x * 2.0 + m.border * 2.0,
+                text.cy + m.tag_pad_y * 2.0 + m.border * 2.0,
+            )
+        } else {
+            Size::ZERO
+        };
+        measured.page_label = match (view.page_no, view.page_count) {
+            (Some(page_no), Some(page_count)) if m.squeeze && page_count > 0 => self.measure(
+                &format!("{} / {}", page_no.saturating_add(1), page_count),
+                MeasureFormat::SqueezePg,
+                &self.formats.squeeze_pg,
+                m,
+            ),
+            _ => Size::ZERO,
         };
         measured
     }
@@ -609,6 +804,8 @@ impl Graphics {
 struct LayoutKey {
     generation: u64,
     bar_at_bottom: bool,
+    /// 翻转(候选列表倒序)也进布局复用键:翻转帧必须重建镜像布局。
+    candidates_bottom_up: bool,
 }
 
 /// 内容没变且布局参数没变时，整份测量结果和布局都能直接复用。
@@ -842,6 +1039,15 @@ struct Window {
     /// 是否已挂起「延迟隐藏」（`HIDE_DEBOUNCE_TIMER` 在跑）。
     /// 打字期间的空快照只置位，不真的 `SW_HIDE`；收到可见快照立即撤销。
     hide_pending: Cell<bool>,
+    /// 挂起那一刻的内容 id(2026-11-17 过期帧防线):选词提交后引擎管道里还压着
+    /// **内容完全相同的旧可见快照**(content_id 不变),它们会把 450ms 隐藏撤销,
+    /// 窗口就"暂留旧候选几秒"——只有 **content_id 变了**的可见帧(如联想新词)
+    /// 才允许撤销隐藏;过期帧照常等 debounce 落地。
+    hide_pending_content: Cell<u64>,
+    /// 上一次真正请求重绘的整帧签名（见 [`frame_signature`]）。
+    last_painted: Cell<Option<FrameSignature>>,
+    /// 上一帧是否在播高亮滑动动画：动画首/末帧强制重绘，避免半截滑块残影。
+    last_animating: Cell<bool>,
 }
 
 /// Direct2D 设备丢失后的有限重试状态。
@@ -863,6 +1069,56 @@ impl Recovery {
     fn succeeded(&mut self) {
         self.failures = 0;
         self.waiting = false;
+    }
+}
+
+/// 整帧签名——抄 CloudInputMethodEditor `dispatch/candidates/mod.rs` 的
+/// `last_shown=(frame,badges,rect)` 三者全等才 `show()`（目标仓 GPL-3.0，只取思路）。
+///
+/// 本仓已有 `same_content`/`MeasureCache`，但它们只省掉重复测量与布局；
+/// 签名全等时连 `InvalidateRect`（一次 D2D 重绘）都能省。不抄它的「无光标
+/// 矩形先不显示」——本仓方案选单在重启后首键没有光标上下文，扣住锚点会整帧
+/// 不画（见 `presentation::is_visible` 的注释与任务 #102）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FrameSignature {
+    content_id: u64,
+    selected_index: u32,
+    page_start: u32,
+    /// `(left, top, right, bottom, valid)`：锚点变了必须重定位 + 重绘。
+    anchor: Option<(i32, i32, i32, i32, bool)>,
+    visible: bool,
+    active: bool,
+    bar_at_bottom: bool,
+    /// 翻转(候选列表倒序)帧必须重绘:内容没变但布局镜像了,跳过重绘会出
+    /// "窗翻上去了、列表还正序"的错帧。
+    candidates_bottom_up: bool,
+    /// 主题代数：换皮肤 / DPI 变化后必须重画，不能复用旧签名。
+    generation: u64,
+    /// 高亮滑块的当前矩形：动画中间帧靠它保证每帧都重绘。
+    visual_hilite: Option<Rect>,
+}
+
+fn frame_signature(
+    view: &CandidateView,
+    bar_at_bottom: bool,
+    generation: u64,
+    candidates_bottom_up: bool,
+    visual_hilite: Option<Rect>,
+) -> FrameSignature {
+    FrameSignature {
+        content_id: view.content_id,
+        selected_index: view.selected_index,
+        page_start: view.page_start,
+        anchor: view
+            .anchor
+            .as_ref()
+            .map(|a| (a.left, a.top, a.right, a.bottom, a.valid)),
+        visible: view.visible,
+        active: view.active,
+        bar_at_bottom,
+        candidates_bottom_up,
+        generation,
+        visual_hilite,
     }
 }
 
@@ -940,7 +1196,7 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
     // 对应关系：
     // - [`Material::Glass`]（透明）  → 自绘高斯模糊 σ=3，面板底**全透明**
     //                                  ⇒ 真玻璃：磨砂但**不染色**
-    // - [`Material::Acrylic`]（亚克力）→ 自绘高斯模糊 σ=8（更糊）+ 配色蒙版 85%
+    // - [`Material::Acrylic`]（亚克力）→ 自绘高斯模糊 σ=12（更糊）+ 80% 透的配色蒙版
     //                                  ⇒ 磨砂 + 有色：色相取配色个性色、明度跟 back_color
     // - 默认 / 金属              → 两者都不用，压根没有模糊
     //
@@ -991,6 +1247,9 @@ fn create(mode: UiMode) -> Result<Box<dyn ThemeBackend>, String> {
         visual_hilite: std::cell::Cell::new(None),
         last_selected: Cell::new(usize::MAX),
         hide_pending: Cell::new(false),
+        hide_pending_content: Cell::new(0),
+        last_painted: Cell::new(None),
+        last_animating: Cell::new(false),
         app: RefCell::new(App::new(loaded, 96.0, glass)?),
         error: RefCell::new(None),
         recovery: RefCell::new(Recovery::default()),
@@ -1381,7 +1640,9 @@ impl Window {
         }
         let app = self.app.borrow();
         let glass = self.acrylic_on();
-        let tint = app.scheme.back_color;
+        // 与自绘亚克力大框同口径（2026-11-14 20:0x「80% 透明」）：80% 透、20% 不透明。
+        // 这条只在 DWM 回退路径生效（glass_self=true 时不走 DWM 合成），色相跟面板。
+        let tint = (paint::veil_alpha() << 24) | (app.scheme.back_color & 0x00FF_FFFF);
         accent::sync_acrylic(hwnd, glass, tint);
     }
 
@@ -1557,27 +1818,68 @@ impl Window {
 
     /// 应用候选快照：内容没变就只重新定位，变了就重新测量 + 布局 + 绘制。
     fn render(&self, snapshot: &CandidateView, events: &EventSink) -> Result<(), String> {
-        // 2026-11-08 防闪烁：只要又收到一帧快照，就撤销挂起的延迟隐藏。
-        // 打字时「空快照 → 有内容」交替，挂起永远到不了期；真停手 120ms 后
-        // WM_TIMER 才会落地隐藏。不可见分支会在下面立刻重新挂起，不冲突。
-        if self.hide_pending.get() {
-            // 2026-11-08 诊断（排查虎整句闪烁）：记录「挂起隐藏又被谁撤销」。
-            crate::diagnostics::record(format_args!(
-                "[取消挂起隐藏] 新快照 visible={} items={} preedit={} content_id={}",
-                snapshot.visible,
-                snapshot.items.len(),
-                snapshot.preedit.is_some(),
-                snapshot.content_id
-            ));
+        // 2026-11-08 防闪烁：收到**可见**快照就撤销挂起的延迟隐藏，避免打字时
+        // 「空快照 → 有内容」交替造成 hide/show 风暴；真停手后 WM_TIMER 才落地隐藏。
+        //
+        // 2026-11-16 修 ③「打完字候选窗暂留 1–2 秒」：旧写法对**任何**快照都撤销，
+        // 而提交后引擎会补发多条 `visible=false, active=true, items=0` 的快照（主题因
+        // resident 仍收到）；每来一条都把 450 ms 计时器重新挂一遍，收窗要等补发结束
+        // +450 ms。probe16 实测：稳态 451.7/482.6 ms，补发拖长时 1426.3 ms。
+        // 现在只让可见快照撤销；不可见帧保留已挂的计时器（不重挂），到时即收。
+        let wants_visible = crate::presentation::is_visible(snapshot)
+            || crate::presentation::is_mode_indicator_visible(snapshot);
+        if wants_visible {
+            if self.hide_pending.get() {
+                // 2026-11-08 诊断（排查虎整句闪烁）：记录「挂起隐藏又被谁撤销」。
+                crate::diagnostics::record(format_args!(
+                    "[取消挂起隐藏判定] 快照 visible={} items={} preedit={} content_id={}",
+                    snapshot.visible,
+                    snapshot.items.len(),
+                    snapshot.preedit.is_some(),
+                    snapshot.content_id
+                ));
+            }
+            // 2026-11-17 过期帧防线:content_id 没变的可见帧 = 提交后管道里的旧帧,
+            // 不撤销隐藏(否则窗口反复复活旧候选,看起来像卡了几秒)。
+            self.cancel_pending_hide_if_content_changed(snapshot.content_id);
         }
-        self.cancel_pending_hide();
         // 2026-11-08 `bar_position: auto`：本帧的编码栏位置按候选窗相对光标的
         // 方位决定，做成一份局部 metrics，不污染 `App::metrics` 里的全局配置。
         let layout_metrics = self.layout_metrics(snapshot);
-        let layout_key = LayoutKey {
+        // 水杉式:先用上一帧内容高度估翻转(复用判定与估算共用一份高度;
+        // 布局建好后用本帧精确高度重算并回填,见下方 rebuild 分支)。
+        let flip_est = {
+            let est_h = self
+                .app
+                .borrow()
+                .content
+                .as_ref()
+                .map(|c| c.layout.content_size.cy)
+                .unwrap_or(0.0);
+            let dpi = self.dpi.get();
+            exact_flip(snapshot, &layout_metrics, est_h, dpi)
+        };
+        let mut layout_key = LayoutKey {
             generation: self.app.borrow().generation,
             bar_at_bottom: layout_metrics.bar_at_bottom,
+            candidates_bottom_up: flip_est,
         };
+        // 整帧去重（抄 CloudIME `last_shown=(frame,badges,rect)`）：内容 / 锚点 /
+        // 高亮矩形 / 主题代数全等，且窗口正显示、不在动画中 ⇒ 这是重复帧，
+        // 省掉一次 InvalidateRect（= 一次 D2D 重绘）。position() 仍照旧调用：
+        // 它便宜，而且 sticky / 锚点状态由它自己维护。
+        let animating = self.anim.borrow().is_some();
+        let frame_sig = frame_signature(
+            snapshot,
+            layout_metrics.bar_at_bottom,
+            layout_key.generation,
+            layout_key.candidates_bottom_up,
+            self.visual_hilite.get(),
+        );
+        let frame_unchanged = self.shown.get()
+            && !animating
+            && !self.last_animating.get()
+            && self.last_painted.get() == Some(frame_sig);
         // 面板常驻（2026-11-07 用户要求）：**每次**渲染都留下最新的 EventSink。
         // 候选窗收起后 `content` 会被清空，面板点按（`WM_APP_COMMIT_TEXT`）靠它把
         // 文本送进引擎；配合 `Factory::capabilities` 的 `resident=true`，渲染器在
@@ -1624,14 +1926,16 @@ impl Window {
             }
         }
         self.position().map_err(|e| e.to_string())?;
-            self.invalidate();
+            if !frame_unchanged {
+                self.invalidate();
+            }
+            self.last_animating.set(animating);
+            self.last_painted.set(Some(frame_sig));
             return self.health();
         }
         self.cancel();
         self.health()?;
-        if !(crate::presentation::is_visible(snapshot)
-            || crate::presentation::is_mode_indicator_visible(snapshot))
-        {
+        if !wants_visible {
             // 2026-11-08 诊断（排查虎整句「一直很闪」）：只在**窗口正显示着**时记录，
             // 因为「已隐藏时的空帧」不会造成闪烁，记了只会把 theme.log 写爆。
             if self.shown.get() {
@@ -1664,13 +1968,39 @@ impl Window {
         {
             let mut app = self.app.borrow_mut();
             let measured = app.graphics.measure_all(&layout_metrics, snapshot);
-            let layout = if snapshot.mode_indicator.is_some() && snapshot.items.is_empty() {
-                Layout::mode_indicator(&layout_metrics)
-            } else {
-                Layout::build(&layout_metrics, snapshot, &measured)
-            };
+            let (mut layout, flipped) =
+                if snapshot.mode_indicator.is_some() && snapshot.items.is_empty() {
+                    (Layout::mode_indicator(&layout_metrics), false)
+                } else {
+                    let mut layout = Layout::build(&layout_metrics, snapshot, &measured);
+                    // 本帧精确高度的翻转判定:翻上方 + 候选列表倒序(序号 1 紧贴输入行)。
+                    let flip = exact_flip(
+                        snapshot,
+                        &layout_metrics,
+                        layout.content_size.cy,
+                        self.dpi.get(),
+                    );
+                    if flip {
+                        layout.mirror_candidates_bottom_up(
+                            snapshot.selected_index.min(layout.rows.len().saturating_sub(1) as u32) as usize,
+                        );
+                    }
+                    (layout, flip)
+                };
+            // 布局建好后用本帧精确翻转回填布局键(est 只服务复用判定)。
+            layout_key.candidates_bottom_up = flipped;
+            // 翻转状态变化帧:高亮动画从旧 y 滑到镜像 y 很怪,跳过插值。
+            // 用局部 `app`(外层 borrow_mut 持有中),不能再 self.app.borrow()。
+            let prev_flip = app
+                .content
+                .as_ref()
+                .map(|c| c.layout.candidates_bottom_up)
+                .unwrap_or(false);
+            if flipped != prev_flip {
+                self.visual_hilite.set(None);
+            }
             crate::diagnostics::record_verbose(format_args!(
-                "布局: 面板 {:.1}x{:.1} DIP · 内容 {:.1},{:.1}-{:.1},{:.1} · 候选 {} 行 · 预编辑 {} · 翻页 {}",
+                "布局: 面板 {:.1}x{:.1} DIP · 内容 {:.1},{:.1}-{:.1},{:.1} · 候选 {} 行 · 预编辑 {} · 翻页 {} · 翻转 {}",
                 layout.content_size.cx,
                 layout.content_size.cy,
                 layout.content.left,
@@ -1680,6 +2010,7 @@ impl Window {
                 layout.rows.len(),
                 if layout.preedit.is_null() { "无".to_string() } else { format!("{:.1},{:.1}-{:.1},{:.1}", layout.preedit.left, layout.preedit.top, layout.preedit.right, layout.preedit.bottom) },
                 if layout.page_prev.is_null() { "无".to_string() } else { format!("<{:.0},{:.0} >{:.0},{:.0}", layout.page_prev.left, layout.page_prev.top, layout.page_next.left, layout.page_next.top) },
+                flipped,
             ));
             for (index, row) in layout.rows.iter().enumerate() {
                 crate::diagnostics::record_verbose(format_args!(
@@ -1724,6 +2055,30 @@ impl Window {
             );
         }
         self.shown.set(true);
+        // 记下这一帧的签名：下一帧同内容同锚点时整帧去重可跳过 D2D 重绘。
+        // 这里重新读 generation（reload 可能在本帧刚 bump 过布局代数）。
+        self.last_animating.set(self.anim.borrow().is_some());
+        let flipped_now = self
+            .app
+            .borrow()
+            .content
+            .as_ref()
+            .map(|c| c.layout.candidates_bottom_up)
+            .unwrap_or(false);
+        let flipped_now = self
+            .app
+            .borrow()
+            .content
+            .as_ref()
+            .map(|c| c.layout.candidates_bottom_up)
+            .unwrap_or(false);
+        self.last_painted.set(Some(frame_signature(
+            snapshot,
+            layout_metrics.bar_at_bottom,
+            self.app.borrow().generation,
+            flipped_now,
+            self.visual_hilite.get(),
+        )));
         // 真有候选/预编辑时撤掉模式提示的自毁计时器（不然 900ms 后会把面板隐藏）
         self.invalidate();
         self.health()
@@ -1788,6 +2143,19 @@ impl Window {
             return;
         }
         self.hide_pending.set(true);
+        self.hide_pending_content.set(
+            self.app
+                .borrow()
+                .content
+                .as_ref()
+                .map(|c| c.snapshot.content_id)
+                .unwrap_or(0),
+        );
+        // 2026-11-17 用户口径「打字后别暂留一秒」：450ms 去抖期间窗口不能还挂着
+        // 上一帧候选。这里立刻把 D2D 表面清成透明（视觉上当场收起），但**不**
+        // ShowWindow(SW_HIDE)/Cloak/关亚克力——真收窗仍在计时器到期时做一次，
+        // 所以连续打字依旧只有一次 hide→show，不复发闪烁风暴。
+        self.clear_visual_now();
         unsafe {
             let _ = SetTimer(
                 Some(self.hwnd.get()),
@@ -1796,6 +2164,49 @@ impl Window {
                 None,
             );
         }
+    }
+
+    /// 视觉即时收起：清内容 + 透明帧上屏，但保留「窗口已显示」与去抖计时器。
+    ///
+    /// 与 [`Self::hide_now`] 的区别：不 `SW_HIDE`/Cloak/关亚克力（那三步是
+    /// hide→show 风暴里最贵的部分），只让屏幕上看不见旧候选。下一次可见帧会
+    /// 走正常 rebuild 重画（content 已清空，`render()` 的 `same=false` 分支重建）。
+    fn clear_visual_now(&self) {
+        if !self.shown.get() {
+            return;
+        }
+        self.cancel();
+        self.last_painted.set(None);
+        self.last_animating.set(false);
+        self.app.borrow_mut().content = None;
+        let presenter = self.app.borrow().graphics.target.is_some();
+        if presenter {
+            if let Some(target) = self.app.borrow().graphics.target.as_ref() {
+                target.begin_draw();
+                target.clear_transparent();
+                let _ = target.end_draw();
+            }
+            // 与 hide_now 同理：Present 只是排帧，DwmFlush 确保这帧透明真的合成出去，
+            // 否则屏幕上还会留着上一帧那张模糊面板。
+            let _ = unsafe { DwmFlush() };
+        }
+    }
+
+    /// 条件撤销:内容**变了**的可见帧(新候选/联想)才撤销挂起的隐藏;
+    /// content_id 没变的 = 管道里的过期帧,不撤销 —— 这是「选完词窗口暂留
+    /// 旧候选几秒」的最终防线(2026-11-17)。
+    fn cancel_pending_hide_if_content_changed(&self, snapshot_content_id: u64) {
+        if !self.hide_pending.get() {
+            return;
+        }
+        if snapshot_content_id == self.hide_pending_content.get() {
+            // 过期帧:内容与挂起时相同,保留计时器,到时照常收窗。
+            crate::diagnostics::record(format_args!(
+                "[过期帧] content_id={snapshot_content_id} 与挂起时相同,不撤销隐藏"
+            ));
+            return;
+        }
+        self.cancel_pending_hide();
     }
 
     /// 真正隐藏窗口并释放交互状态（由 `HIDE_DEBOUNCE_TIMER` 落地）。
@@ -1811,6 +2222,9 @@ impl Window {
         // 是否真的显示着：已经隐藏时不必再做「D2D 清透明 + DwmFlush」这两步最贵的动作
         // （hide 风暴下它们是纯浪费），但 SW_HIDE/Cloak/亚克力关等保障性动作照做。
         let was_shown = self.shown.get();
+        // 隐藏后下次显示必须重画一帧；旧签名会让整帧去重误以为画面还是最新的。
+        self.last_painted.set(None);
+        self.last_animating.set(false);
         self.cancel();
         self.app.borrow_mut().content = None;
         self.recovery.borrow_mut().waiting = false;
@@ -2269,6 +2683,43 @@ struct Position {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// reposition 与 render 布局预判共用:贴光标下方的默认 y(阴影偏移已扣)。
+fn default_below_y(anchor_bottom: f32, m: &Metrics, dpi: u32) -> f32 {
+    let mut y = anchor_bottom + CARET_GAP as f32;
+    if m.shadow_radius != 0.0 {
+        y -= pixels(m.offset().1, dpi) as f32;
+    }
+    y
+}
+
+/// 光标下方默认位放不下整窗 → 翻到上方(reposition 与 render 预判共用一个表达式)。
+fn flips_above(default_below_y: f32, height_px: f32, work_bottom: f32) -> bool {
+    default_below_y + height_px > work_bottom
+}
+
+/// 本帧精确翻转判定(锚点无效 → false;高度用传入的 DIP)。
+fn exact_flip(
+    snapshot: &CandidateView,
+    m: &Metrics,
+    height_dip: f32,
+    dpi: u32,
+) -> bool {
+    snapshot
+        .anchor
+        .as_ref()
+        .filter(|a| a.valid)
+        .map(|a| {
+            let work = crate::presentation::work_area(a);
+            let work_bottom = work.map(|w| w.bottom as f32).unwrap_or(1080.0);
+            flips_above(
+                default_below_y(a.bottom as f32, m, dpi),
+                pixels(height_dip, dpi) as f32,
+                work_bottom,
+            )
+        })
+        .unwrap_or(false)
+}
+
 fn reposition(
     anchor: &crate::theme_api::Anchor,
     work: Option<(i32, i32, i32, i32)>,
@@ -2280,11 +2731,10 @@ fn reposition(
 ) -> Position {
     let (work_left, work_top, work_right, work_bottom) = work.unwrap_or((0, 0, 1920, 1080));
     let mut x = anchor.left;
-    let mut y = anchor.bottom + CARET_GAP;
     if m.shadow_radius != 0.0 {
         x -= pixels(m.offset().0, dpi);
-        y -= pixels(m.offset().1, dpi);
     }
+    let mut y = default_below_y(anchor.bottom as f32, m, dpi);
     if x + width > work_right {
         x = work_right - width;
     }
@@ -2293,18 +2743,18 @@ fn reposition(
     }
     // 只在「光标下方放不下整窗」时翻到上方；否则一律落回光标下方，
     // 不让 sticky 永久锁死在上方（否则移到顶部输入框时窗口会卡在屏幕顶、盖住输入框）。
-    let flip = y + height > work_bottom;
+    let flip = flips_above(y, height as f32, work_bottom as f32);
     let mut sticky = flip;
     if flip {
-        y = anchor.top - CARET_GAP - height;
+        y = anchor.top as f32 - CARET_GAP as f32 - height as f32;
         if m.shadow_radius != 0.0 && m.shadow_offset_y > 0.0 {
-            y -= pixels(m.shadow_offset_y, dpi);
+            y -= pixels(m.shadow_offset_y, dpi) as f32;
         }
     }
-    if y < work_top {
-        y = work_top;
+    if y < work_top as f32 {
+        y = work_top as f32;
     }
-    Position { x, y, sticky }
+    Position { x, y: y as i32, sticky }
 }
 
 /// 组字中的中/英提示：预编辑文字后面一个**小圆角徽标**（「中」/「英」）。
@@ -2412,6 +2862,7 @@ fn draw_mode_indicator(
             "Segoe UI",
             size,
             DWRITE_WORD_WRAPPING_NO_WRAP,
+            DWRITE_FONT_WEIGHT_NORMAL,
             &painter.m,
         ) else {
             return;
@@ -2537,25 +2988,6 @@ impl Drop for DrawGuard<'_> {
             let _ = self.presenter.end_draw();
         }
     }
-}
-
-/// 这一帧是不是「上屏后联想条」：**无预编辑**，非空，且整屏 items 都是 `kind == "prediction"`。
-///
-/// 联想条**不是**候选列表 —— 引擎只是为了按官方候选画法给第一个词画个高亮，
-/// 才把 `selected_index` 写死成 0（见 `renderer_bridge::render_snapshot`），
-/// 它没有"用户当前选中项"的语义。
-///
-/// 保险（2026-11-08）：打字时 librime 追加的预测候选也标 `kind == "prediction"`
-/// （comment == "预测"），但那一帧**带 preedit**（组字中）——不能按联想条处理，
-/// 否则编码栏/点击语义会被一起收掉。所以「整屏 prediction」的判定必须再加
-/// `preedit.is_none()`，与 `layout::Layout::build` 的 `show_bar` 同口径。
-fn is_prediction_strip(snapshot: &CandidateView) -> bool {
-    snapshot.preedit.is_none()
-        && !snapshot.items.is_empty()
-        && snapshot
-            .items
-            .iter()
-            .all(|item| item.kind == PREDICTION_KIND)
 }
 
 /// 鼠标抬起时是否派发 `ItemInvoked(index)`。
@@ -3095,8 +3527,139 @@ impl crate::theme_api::ThemeFactory for Factory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme_api::Anchor;
-    use weasel_style::UIStyle;
+
+    /// 2026-11-10 抄 CloudIME 第六条：整帧去重。签名必须覆盖会改变画面的每一维。
+    #[test]
+#[test]
+fn flips_above_is_the_shared_predicate() {
+    // 默认位(光标下 6px)起 + 高度 100,工作区底 500:
+    //   y=106,106+100=206 < 500 → 不翻
+    assert!(!flips_above(100.0, 100.0, 500.0));
+    //   y=450,450+100=550 > 500 → 翻
+    assert!(flips_above(450.0, 100.0, 500.0));
+}
+
+    #[test]
+    fn frame_signature_tracks_every_visible_dimension() {
+        use crate::theme_api::Anchor;
+        let mut view = CandidateView::default();
+        view.content_id = 42;
+        view.selected_index = 1;
+        view.page_start = 0;
+        view.anchor = Some(Anchor {
+            left: 10,
+            top: 20,
+            right: 14,
+            bottom: 40,
+            valid: true,
+        });
+        let base = frame_signature(&view, false, 3, false, None);
+        assert_eq!(
+            base,
+            frame_signature(&view, false, 3, false, None)
+        );
+        {
+            let mut moved = view.clone();
+            if let Some(a) = moved.anchor.as_mut() {
+                a.left = 15;
+            }
+            assert_ne!(
+                base,
+                frame_signature(&moved, false, 3, false, None)
+            );
+        }
+        {
+            let mut selected = view.clone();
+            selected.selected_index = 2;
+            assert_ne!(
+                base,
+                frame_signature(&selected, false, 3, false, None)
+            );
+        }
+        {
+            let mut paged = view.clone();
+            paged.page_start = 5;
+            assert_ne!(
+                base,
+                frame_signature(&paged, false, 3, false, None)
+            );
+        }
+        assert_ne!(
+            base,
+            frame_signature(&view, true, 3, false, None)
+        );
+        assert_ne!(
+            base,
+            frame_signature(&view, false, 4, false, None)
+        );
+        assert_eq!(
+            base,
+            frame_signature(&view, false, 3, false, None),
+            "同参数应得到同签名(整帧去重的正确性前提)"
+        );
+        // 注意 CandidateView::default() 的 active/visible 都是 false，
+        // 必须从 false 翻到 true 才算「变了」（写成设 false 是自欺欺人的空测试）。
+        let mut active = view.clone();
+        active.active = true;
+        assert_ne!(
+            base,
+            frame_signature(&active, false, 3, false, None)
+        );
+        let mut visible = view.clone();
+        visible.visible = true;
+        assert_ne!(
+            base,
+            frame_signature(&visible, false, 3, false, None)
+        );
+    }
+
+    /// 2026-11-10 抄 CloudIME 第七条：测量缓存换 foldhash 后查表语义不变。
+    #[test]
+    fn measure_cache_with_foldhash_keeps_exact_hit_and_clear() {
+        let cache = MeasureCache::default();
+        let key = measure_key(MeasureFormat::Preedit, "中文", 240.0);
+        assert_eq!(cache.get(&key), None, "冷缓存必须 miss");
+        cache.put(key.clone(), Size::new(48.0, 24.0));
+        assert_eq!(
+            cache.get(&key),
+            Some(Size::new(48.0, 24.0)),
+            "foldhash 下同一 MeasureKey 必须精确命中"
+        );
+        assert_eq!(
+            cache.get(&measure_key(MeasureFormat::Text, "中文", 240.0)),
+            None,
+            "同文本不同格式不能串味"
+        );
+        assert_eq!(
+            cache.get(&measure_key(MeasureFormat::Preedit, "中文", 0.0)),
+            None,
+            "同文本同格式但 max_width 不同不能串味"
+        );
+        cache.clear();
+        assert_eq!(cache.get(&key), None, "clear 后必须重新测量");
+    }
+
+    #[test]
+    fn frame_signature_distinguishes_anchor_validity() {
+        use crate::theme_api::Anchor;
+        let mut view = CandidateView::default();
+        view.content_id = 7;
+        view.anchor = Some(Anchor {
+            left: 10,
+            top: 20,
+            right: 14,
+            bottom: 40,
+            valid: false,
+        });
+        let invalid = frame_signature(&view, false, 1, false, None);
+        if let Some(a) = view.anchor.as_mut() {
+            a.valid = true;
+        }
+        assert_ne!(
+            invalid,
+            frame_signature(&view, false, 1, false, None)
+        );
+    }
 
     // 2026-11-10 第二条：帧间隔按 DWM 合成刷新率算，替掉固定 8ms 帧循环。
     #[test]
@@ -3139,6 +3702,7 @@ mod tests {
     }
 
     fn metrics(shadow_radius: i32) -> Metrics {
+        use weasel_style::UIStyle;
         let mut style = UIStyle::default();
         style.layout.shadow_radius = shadow_radius;
         Metrics::new(&style, 96.0)
@@ -3214,6 +3778,7 @@ mod tests {
     fn layout_reuse_requires_both_same_content_and_same_key() {
         let old = LayoutKey {
             generation: 3,
+            candidates_bottom_up: false,
             bar_at_bottom: true,
         };
         assert!(reusable_layout(true, old, old), "内容没变、参数没变 → 复用");
@@ -3227,6 +3792,7 @@ mod tests {
                 old,
                 LayoutKey {
                     generation: 4,
+                    candidates_bottom_up: false,
                     bar_at_bottom: true
                 }
             ),
@@ -3238,6 +3804,7 @@ mod tests {
                 old,
                 LayoutKey {
                     generation: 3,
+                    candidates_bottom_up: false,
                     bar_at_bottom: false
                 }
             ),
@@ -3245,7 +3812,8 @@ mod tests {
         );
     }
 
-    fn anchor(left: i32, top: i32, right: i32, bottom: i32) -> Anchor {
+    fn anchor(left: i32, top: i32, right: i32, bottom: i32) -> crate::theme_api::Anchor {
+        use crate::theme_api::Anchor;
         Anchor {
             left,
             top,
@@ -3391,25 +3959,36 @@ mod tests {
         );
     }
 
-    /// 2026-11-08 用户口径：「预测」这个标签做成小一号 = 候选字号的 1/2
-    /// （而**不是**把预测候选的正文文字缩小 —— `make_formats` 里 `text` 格式仍按
-    /// `m.font_point` 建，预编辑/候选正文字号一个像素不动）。
+    /// 2026-11-15 用户「候选窗做成除候选外全部 0.75em」：
+    /// 测量（Metrics）与绘制（point 函数）必须共用同一个倍率，
+    /// 只有候选正文 `m.font_point` 保持 1em。
     #[test]
-    fn prediction_tag_is_half_of_candidate_font_size() {
+    fn all_non_candidate_fonts_are_three_quarters_em() {
         let m = metrics(0);
         assert!(m.font_point > 0.0, "默认 style 字高应 > 0");
-        let tag = prediction_tag_point(&m);
-        assert!(
-            (tag - m.font_point / 2.0).abs() < 0.001,
-            "预测标签字号应为候选字号的一半：{tag} vs {}",
-            m.font_point
-        );
-        // 负对照：默认 style 的注释字号 == 候选字号，标签必须明显更小。
-        assert!(
-            tag < m.comment_font_point,
-            "预测标签必须比候选注释小：{tag} vs {}",
-            m.comment_font_point
-        );
+        let expected = m.font_point * NON_CANDIDATE_FONT_EM;
+        assert!((NON_CANDIDATE_FONT_EM - 0.75).abs() < 0.001, "倍率 = 0.75em");
+        for (name, got) in [
+            ("预测标签", prediction_tag_point(&m)),
+            ("ASCII 编码", preedit_ascii_point(&m)),
+            ("序号", m.label_font_point),
+            ("注释", m.comment_font_point),
+            ("挤压顶行", m.head_font_point),
+            ("挤压序号/拼音", m.small_font_point),
+            ("挤压底栏按钮", m.btn_font_point),
+            ("挤压页码", m.pg_font_point),
+            ("挤压方案名 pill", m.tag_font_point),
+        ] {
+            assert!(
+                (got - expected).abs() < 0.001,
+                "{name} 应为 0.75em：{got} vs {expected}"
+            );
+        }
+        assert!(expected < m.font_point, "非候选文字必须小于候选正文 1em");
+        assert!(expected < m.bar_height, "0.75em 仍须装进 1.5em 编码栏");
+        // 负对照：中文按钮不走 ASCII 专用格式（判定函数由 layout 单测钉死）。
+        assert!(!bar_text_uses_ascii_format("符"));
+        assert!(!bar_text_uses_ascii_format("智能预测"));
     }
 
     /// 联想条识别：非空且**每一项**都是 prediction；空/混合/普通候选/旧版无 kind 都不算。
@@ -3445,8 +4024,8 @@ mod tests {
             "旧渲染器缺 kind（空串）按普通候选处理"
         );
         // 负（2026-11-08 保险）：打字时 librime 追加的预测候选帧也是整屏
-        // kind=prediction，但它**带预编辑**（组字中），不能按联想条收掉编码栏/
-        // 点击语义。正对照：同样的 items 去掉 preedit ⇒ 是联想条。
+        // kind=prediction，但它**带预编辑**（组字中），不能按联想条改点击语义、
+        // 也不能把编码栏覆写成「智能预测」。正对照：同样的 items 去掉 preedit ⇒ 是联想条。
         let mut composing = view(&["prediction", "prediction", "prediction"]);
         composing.preedit = Some(crate::theme_api::Preedit {
             text: "nihao".into(),

@@ -178,6 +178,21 @@ pub fn generate() {
             "Windows.Win32.D2D1_BEZIER_SEGMENT",
             "Windows.Win32.ID2D1RenderTarget::{FillGeometry,DrawGeometry}",
             "Windows.Win32.ID2D1Geometry::FillContainsPoint",
+            // ★ AC2 几何背景层(2026-11-14):PushLayer 用圆角面板路径做蒙版,
+            //   把网格/放射线裁进面板 —— 需要 layer 三件套 + 参数结构。
+            "Windows.Win32.ID2D1RenderTarget::{CreateLayer,PushLayer,PopLayer}",
+            "Windows.Win32.D2D1_LAYER_PARAMETERS",
+            "Windows.Win32.D2D1_LAYER_OPTIONS",
+            "Windows.Win32.D2D1_LAYER_OPTIONS_NONE",
+            "Windows.Win32.ID2D1Layer",
+            "Windows.Win32.ID2D1Factory::CreateRoundedRectangleGeometry",
+            "Windows.Win32.ID2D1RoundedRectangleGeometry",
+            // ★ 四通道求导渲染(2026-11-17 用户「做四通道求导吧」):径向渐变 =
+            //   每通道(R,G,B,A)从中心向外的解析导数场 —— 一个 brush 一个 draw call
+            //   画完一团光,替代「两条对角 wash 近似径向」的旧路。
+            //   (GradientMesh 在本仓 bindgen 的 metadata 里解析不出,绕行。)
+            "Windows.Win32.ID2D1RenderTarget::CreateRadialGradientBrush",
+            "Windows.Win32.D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES",
             // ★ 阴影：官方的 compatible render target + 高斯模糊效果链
             "Windows.Win32.ID2D1RenderTarget::CreateCompatibleRenderTarget",
             "Windows.Win32.ID2D1BitmapRenderTarget::GetBitmap",

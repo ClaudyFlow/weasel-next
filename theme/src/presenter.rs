@@ -30,9 +30,20 @@ pub(crate) type ColorF = D3DCOLORVALUE;
 /// 全透明：预乘 alpha 下表示"这里什么都没有"。
 pub(crate) const TRANSPARENT: ColorF = ColorF { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
 
+const D3D11_USAGE_STAGING: i32 = 3;
+const D3D11_CPU_ACCESS_READ: u32 = 0x20000;
+const D3D11_MAP_READ: i32 = 1;
+
+/// 系统级单调时钟（微秒），与 render-trace 同一条时间轴。
+pub(crate) fn now_us() -> u64 {
+    weasel_common::render_trace::now_us()
+}
+
 /// 一次呈现所需的全部平台资源。必须由创建它们的 UI 线程释放。
 pub(crate) struct Presenter {
     device: ID3D11Device,
+    /// 读回帧像素时用它做 CopyResource/Map（只在测量开关打开时使用）。
+    d3d_context: ID3D11DeviceContext,
     dxgi_device: IDXGIDevice,
     factory: IDXGIFactory2,
     swap_chain: IDXGISwapChain1,
@@ -50,6 +61,8 @@ pub(crate) struct Presenter {
     brush: ID2D1SolidColorBrush,
     width: u32,
     height: u32,
+    /// 测量用：本帧 `begin_draw` 的时间戳（微秒）；关闭测量时不读取。
+    frame_begin_us: std::sync::atomic::AtomicU64,
 }
 
 /// 交换链与位图的公共描述（官方参数原样照抄）。
@@ -114,6 +127,8 @@ impl Presenter {
         .ok()
         .map_err(|error| format!("D3D11CreateDevice 失败: {error}"))?;
         let device = device.ok_or_else(|| "D3D11CreateDevice 未返回设备".to_string())?;
+        let d3d_context =
+            d3d_context.ok_or_else(|| "D3D11CreateDevice 未返回上下文".to_string())?;
 
         // ② 取 DXGI 设备；工厂用独立函数创建（官方走 DeviceResources，我们用 CreateDXGIFactory2）。
         let dxgi_device: IDXGIDevice = device
@@ -173,6 +188,7 @@ impl Presenter {
 
         Ok(Self {
             device,
+            d3d_context,
             dxgi_device,
             factory,
             swap_chain,
@@ -186,6 +202,7 @@ impl Presenter {
             brush,
             width,
             height,
+            frame_begin_us: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -254,21 +271,140 @@ impl Presenter {
 
     /// 每帧开始绘制。
     pub(crate) fn begin_draw(&self) {
+        if crate::frame_diff::enabled() {
+            self.frame_begin_us
+                .store(now_us(), std::sync::atomic::Ordering::Relaxed);
+        }
         unsafe { self.context.BeginDraw() };
     }
 
     /// 每帧结束：EndDraw 检查 HRESULT，然后提交交换链。
+    ///
+    /// `WEASEL_FRAME_DIFF=1` 时在 Present 之前把后缓冲读回成 RGBA，交给帧间差分；
+    /// 关闭时只在 EndDraw/Present 前后各取一次时间戳，行为与原来一致。
     pub(crate) fn end_draw(&self) -> Result<(), String> {
+        let measuring = crate::frame_diff::enabled();
+        let start = if measuring { now_us() } else { 0 };
         unsafe { self.context.EndDraw(None, None) }
             .ok()
             .map_err(|error| format!("EndDraw 失败: {error}"))?;
+        let enddraw_us = if measuring {
+            now_us().saturating_sub(start)
+        } else {
+            0
+        };
+        let captured = if measuring {
+            let capture_start = now_us();
+            let captured = unsafe { self.capture_rgba() };
+            captured.map(|rgba| {
+                (
+                    rgba,
+                    self.width,
+                    self.height,
+                    now_us().saturating_sub(capture_start),
+                )
+            })
+        } else {
+            None
+        };
+        let ts = if measuring { now_us() } else { 0 };
+        let frame_us = if measuring {
+            ts.saturating_sub(
+                self.frame_begin_us
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            )
+        } else {
+            0
+        };
         let base: IDXGISwapChain = self
             .swap_chain
             .cast()
             .map_err(|error| format!("IDXGISwapChain1 → IDXGISwapChain 失败: {error}"))?;
-        unsafe { base.Present(1, 0) }
+        let present_start = if measuring { now_us() } else { 0 };
+        let result = unsafe { base.Present(1, 0) }
             .ok()
-            .map_err(|error| format!("Present 失败: {error}"))
+            .map_err(|error| format!("Present 失败: {error}"));
+        if measuring {
+            let present_us = now_us().saturating_sub(present_start);
+            if let Some((rgba, width, height, capture_us)) = captured {
+                crate::frame_diff::observe(
+                    &rgba, width, height, ts, frame_us, enddraw_us, capture_us, present_us,
+                );
+            }
+        }
+        result
+    }
+
+    /// 把交换链后缓冲读回为 RGBA 字节（仅在测量开关打开时调用）。
+    ///
+    /// 交换链是 BGRA8，读回后把 B/R 换序；行跨度按 `RowPitch` 处理，
+    /// 不使用 `width * 4` 直接连续拷贝。
+    unsafe fn capture_rgba(&self) -> Option<Vec<u8>> {
+        macro_rules! step {
+            ($expr:expr, $name:expr) => {
+                match $expr {
+                    Ok(value) => value,
+                    Err(error) => {
+                        crate::frame_diff::debug(format_args!("{}: {error}", $name));
+                        return None;
+                    }
+                }
+            };
+        }
+        let base: IDXGISwapChain = step!(self.swap_chain.cast(), "cast IDXGISwapChain");
+        let source: ID3D11Texture2D = step!(base.GetBuffer(0), "GetBuffer");
+        let description = D3D11_TEXTURE2D_DESC {
+            Width: self.width,
+            Height: self.height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ,
+            MiscFlags: 0,
+        };
+        let mut staging: Option<ID3D11Texture2D> = None;
+        step!(
+            self.device
+                .CreateTexture2D(&description, None, Some(&mut staging))
+                .ok(),
+            "CreateTexture2D"
+        );
+        let staging = match staging {
+            Some(staging) => staging,
+            None => {
+                crate::frame_diff::debug("CreateTexture2D 未返回纹理");
+                return None;
+            }
+        };
+        let destination: ID3D11Resource = step!(staging.cast(), "cast ID3D11Resource(staging)");
+        let resource: ID3D11Resource = step!(source.cast(), "cast ID3D11Resource(source)");
+        self.d3d_context.CopyResource(&destination, &resource);
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        step!(
+            self.d3d_context
+                .Map(&destination, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .ok(),
+            "Map"
+        );
+        let row_bytes = self.width as usize * 4;
+        let mut rgba = vec![0u8; row_bytes * self.height as usize];
+        let source_bytes = mapped.pData as *const u8;
+        for y in 0..self.height as usize {
+            let row = source_bytes.add(y * mapped.RowPitch as usize);
+            rgba[y * row_bytes..(y + 1) * row_bytes]
+                .copy_from_slice(std::slice::from_raw_parts(row, row_bytes));
+        }
+        self.d3d_context.Unmap(&destination, 0);
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        Some(rgba)
     }
 
     /// 全透明清屏：圆角之外靠它透出背后。

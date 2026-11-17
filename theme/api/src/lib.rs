@@ -138,7 +138,8 @@ pub struct CandidateItem {
     ///
     /// 预测项有两种形态：打字时 librime 追加的预测候选（带预编辑，`comment == "预测"`）
     /// 与上屏后的联想条（无预编辑、整屏都是预测词）。主题据此把预测项的「预测」标签
-    /// 换成小号字体、并在联想条帧收掉编码栏；正文文字与普通候选一致。
+    /// 恒隐藏；联想条帧现在**保留编码栏**，并在栏内写固定文案「智能预测」（2026-11-12
+    /// 用户要求）。正文文字与普通候选一致。
     ///
     /// 旧渲染器/旧主题不带这个字段，`serde(default)` 保证缺省为空串（按普通候选处理），
     /// 这样单独换一侧二进制也不会解析失败。
@@ -178,6 +179,17 @@ pub struct CandidateView {
     pub page_start: u32,
     /// 候选总数；`None` 表示总数未知。
     pub total_item_count: Option<u32>,
+    /// 当前方案的显示名（如「拼音」）；空串表示未知，主题据此决定是否画 pill。
+    ///
+    /// 2026-11-13「方案②」加：默认值让旧 Renderer 帧（无此字段）反序列化仍成功。
+    #[serde(default)]
+    pub schema_name: String,
+    /// 当前页页码（0 起）；`None` 表示未知。
+    #[serde(default)]
+    pub page_no: Option<u32>,
+    /// 总页数；`None` 表示未知。与 `page_no` 同时有值才画底行「1 / N」页码。
+    #[serde(default)]
+    pub page_count: Option<u32>,
     /// 当前是否可以切换到上一页。
     pub can_page_previous: bool,
     /// 当前是否可以切换到下一页。
@@ -205,6 +217,9 @@ pub fn same_content(a: &CandidateView, b: &CandidateView) -> bool {
         && a.selected_index == b.selected_index
         && a.page_start == b.page_start
         && a.total_item_count == b.total_item_count
+        && a.schema_name == b.schema_name
+        && a.page_no == b.page_no
+        && a.page_count == b.page_count
         && a.can_page_previous == b.can_page_previous
         && a.can_page_next == b.can_page_next
 }
@@ -411,5 +426,41 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    /// 2026-11-13「方案②」：`schema_name` / `page_no` / `page_count` 三项既是
+    /// 内容身份的一部分（变化必须触发重画），也必须能反序列化旧帧（字段缺失 = 默认值）。
+    #[test]
+    fn schema_name_and_page_fields_join_content_identity() {
+        let base = CandidateView::default();
+        assert!(base.schema_name.is_empty() && base.page_no.is_none() && base.page_count.is_none());
+
+        let mut tagged = base.clone();
+        tagged.schema_name = "拼音".into();
+        tagged.page_no = Some(0);
+        tagged.page_count = Some(2);
+        assert!(!same_content(&base, &tagged), "方案名/页码是内容身份");
+        assert!(same_content(&tagged, &tagged.clone()));
+
+        for (what, mutate) in [
+            ("schema_name", (|v: &mut CandidateView| v.schema_name = "仓颉".into()) as fn(&mut CandidateView)),
+            ("page_no", |v: &mut CandidateView| v.page_no = Some(1)),
+            ("page_count", |v: &mut CandidateView| v.page_count = Some(3)),
+        ] {
+            let mut changed = tagged.clone();
+            mutate(&mut changed);
+            assert!(!same_content(&tagged, &changed), "{what} 变化应算内容变化");
+        }
+
+        // 旧 Renderer 帧（JSON 里没有这三个字段）必须还能反序列化，且取默认值。
+        // 主题 DLL 与 Renderer exe 不一定同批更新，这是跨进程兼容的最低要求。
+        let legacy = r#"{"preedit":null,"content_id":1,"active":true,"ascii_mode":null,
+            "mode_indicator":null,"visible":true,"anchor":null,"items":[],
+            "selected_index":0,"page_start":0,"total_item_count":null,
+            "can_page_previous":false,"can_page_next":false}"#;
+        let view: CandidateView = serde_json::from_str(legacy).expect("旧帧应可反序列化");
+        assert_eq!(view.content_id, 1);
+        assert!(view.schema_name.is_empty());
+        assert!(view.page_no.is_none() && view.page_count.is_none());
     }
 }

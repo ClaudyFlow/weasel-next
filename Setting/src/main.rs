@@ -5,6 +5,7 @@ mod bindings;
 mod broker;
 mod colors;
 mod dialogs;
+mod dict_dialog;
 mod style_keys;
 mod switcher_dialog;
 mod single_instance;
@@ -14,9 +15,13 @@ mod updater;
 mod wasm_modules;
 // 框架无关的设置核心来自 weasel_settings 库
 // （配置文档读写与冲突检测、主题目录发现、表单字段模型、应用选项编辑）。
-use weasel_settings::{app_options, catalog, config, form};
+use weasel_settings::{app_options, catalog, config, form, schema_tree};
 use slint::{ComponentHandle, Model, VecModel};
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, HashSet},
+    rc::Rc,
+};
 use weasel_common::process::RuntimePaths;
 slint::include_modules!();
 
@@ -27,6 +32,17 @@ slint::include_modules!();
 /// 写死在代码里 —— 安装器就算给了选择页也无处落地。统一走 common 的解析。
 fn user_data_dir() -> std::path::PathBuf {
     weasel_common::process::user_data_dir().unwrap_or_default()
+}
+
+/// 共享（出厂）数据目录：`default.yaml` 等出厂资源的回退来源，与 `wire_skins`
+/// 里 `skins::resolve_shared_dir` 同一套查找（exe 旁边 → 上溯 Rime-Next → ProgramFiles）。
+fn shared_data_dir() -> std::path::PathBuf {
+    let script_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_default();
+    let probe = script_dir.join("theme").join("default").join("default.theme.yaml");
+    skins::resolve_shared_dir(&script_dir, &probe)
 }
 
 /// 统计页自动刷新的轮询间隔（用户 2026-10-26：**5 秒**，原 1.5 秒）。
@@ -270,7 +286,7 @@ fn refresh_page_fields(ui: &SettingsWindow) {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 设置界面唯一化（用户 2026-10-28：不许同时存在多个设置界面）。
     // 只锁**无参数**的主界面启动；带参数的对话框（/style、/switcher、/dict、/stat）
-    // 不占这把锁 —— 否则设置窗开着时，托盘的「方案选单 / 界面风格」会全都打不开。
+    // 不占这把锁 —— 否则设置窗开着时，托盘的「菜单 / 外观」会全都打不开。
     // 第二个主界面实例不建窗口：把已有窗口拉到前台后直接退出。
     let _settings_instance = if std::env::args_os().len() <= 1 {
         match weasel_common::process::SingleInstance::acquire("settings-ui") {
@@ -290,7 +306,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     // ️ 这里曾经写成「无参数就换成 /switcher」，与 `Server/src/menu_actions.rs`
     // 的约定正好相反 —— 那里「设置」故意不传参数，指望落到主界面。结果托盘点
-    // 「设置」弹出来的是方案选单对话框，用户 2026-10-17 21:11 报过
+    // 「设置」弹出来的是菜单设置对话框，用户 2026-10-17 21:11 报过
     // 「设置界面没显示，直接是这个」。别再改回去。
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
@@ -338,18 +354,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let download_loader = wire_downloads(&window);
     window.invoke_dict_refresh();
     {
-        // 切页签时重算当前页的字段模型（筛选放在 Rust 侧，界面上不留空行）。
-        // 同时：切到「下载」页（idx 6）时自动刷新仓库列表。
+        // 导航信号槽（2026-11-14）：界面上的「方案」等标签只发 `page-selected`，
+        // **不再直接赋值 current-page**。这里用 lib 的分发器把一条信号展开成
+        // 「切页 → 进入页面 → 加载数据」，命令行 / 环境变量也走同一个槽。
         let weak = window.as_weak();
         let loader = std::sync::Arc::clone(&download_loader);
         window.on_page_selected(move |page| {
-            if let Some(window) = weak.upgrade() {
-                refresh_page_fields(&window);
-                if page == 6 {
-                    loader();
+            use weasel_settings::signals::{
+                PAGE_COUNT, PAGE_DOWNLOAD, PAGE_SETTINGS, Signal, dispatch,
+            };
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            let (target, out) = dispatch(
+                Signal::PageSelected(page.max(0) as usize),
+                window.get_current_page().max(0) as usize,
+                PAGE_COUNT,
+            );
+            // 页面状态只在这里落地。
+            window.set_current_page(target as i32);
+            for signal in out {
+                match signal {
+                    Signal::PageEntered(p) | Signal::PageReselected(p) => {
+                        // 重算当前页的字段模型（筛选放在 Rust 侧，界面上不留空行）。
+                        refresh_page_fields(&window);
+                        // 切到「常规」页时重读一次当前值：用户可能在别处改过 theme.yaml
+                        // 或 default.yaml（每页候选数）。
+                        if p == PAGE_SETTINGS {
+                            let user = user_data_dir();
+                            window.set_font_point(dialogs::current_font_point(&user) as i32);
+                            let shared = shared_data_dir();
+                            window.set_page_size(dialogs::current_page_size(&user, &shared) as i32);
+                        }
+                        if p == PAGE_DOWNLOAD {
+                            loader();
+                        }
+                    }
+                    Signal::ReloadStats => {
+                        let _ = apply_stats_to_settings(&window);
+                    }
+                    // 进入「方案」界面 ⇒ 重新读盘：CLI / 官方对话框改过清单也不会看到旧列表。
+                    Signal::ReloadSchemas => window.invoke_schema_refresh(),
+                    Signal::ReloadDicts => window.invoke_dict_refresh(),
+                    Signal::PageSelected(_) => {}
                 }
             }
         });
+    }
+    // 运维/回归用：WEASEL_SETTING_PAGE=<0..6> 让无人值守启动时直接落在指定页签，
+    // 方便截图核对（默认的「主页」行为完全不变；正常托盘打开仍不带这个变量）。
+    if let Ok(raw) = std::env::var("WEASEL_SETTING_PAGE") {
+        if let Ok(page) = raw.parse::<i32>() {
+            if (0..=6).contains(&page) {
+                // 只发信号：current-page 由 on_page_selected 槽统一设置，
+                // 与鼠标点标签走完全相同的分发路径。
+                window.invoke_page_selected(page);
+            }
+        }
     }
     wire_official_dialogs(&window);
     // 首帧就以透明背景初始化渲染表面；apply 失败时恢复纯色。
@@ -484,6 +545,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ui.set_dirty(false);
             let mut messages = Vec::new();
+            if config_changed {
+                // 常规页字段落盘到 weasel.yaml（宿主级设置）；保存后立刻让 broker
+                // 重读（1016，毫秒级），不必重启/部署。「保存并应用」随后还会重启
+                // 服务，这条通知只是让「仅保存」路径也即时生效。
+                match broker::request_settings_reload() {
+                    Ok(()) => {}
+                    Err(error) => messages.push(format!("宿主配置热更新通知失败：{error}")),
+                }
+            }
             // 现有重启命令只重启子组件，不重新初始化 broker 中的 WinSparkle。
             if apply && (config_changed || !update_changed) {
                 messages.push(match broker::request_restart() {
@@ -854,6 +924,60 @@ fn wire_skins(ui: &SettingsWindow) {
             }
         });
     }
+    /// 候选窗字号（2026-11-08 用户要求：放在「常规」页调节）。
+    ///
+    /// 写用户目录 `theme.yaml` 的 `style/font_point`（`label_font_point` /
+    /// `comment_font_point` 同步），主题每次渲染前比对配置时间戳（750ms 缓存），
+    /// 改完下一次出现候选窗就重载。界面首次显示与每次切到「常规」页时读一次当前值。
+    ui.set_font_point(dialogs::current_font_point(&user) as i32);
+    {
+        let ui_weak = ui.as_weak();
+        let user = user.clone();
+        ui.on_font_point_changed(move |value| {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            let point = value.clamp(
+                dialogs::FONT_POINT_MIN as i32,
+                dialogs::FONT_POINT_MAX as i32,
+            ) as u32;
+            match dialogs::write_font_point(&user, point) {
+                Ok(_) => {
+                    ui.set_font_point(point as i32);
+                    ui.set_status(format!("候选窗字号：{point}（下一次出现候选窗即生效）").into());
+                }
+                Err(error) => ui.set_status(format!("写字号失败：{error}").into()),
+            }
+        });
+    }
+    // 每页候选数（2026-11-08 用户要求：放在「常规」页）。
+    //
+    // 落点是曲线最短的那条真实生效路径：用户目录 `default.yaml` 的 `menu/page_size`。
+    // 部署把用户 default.yaml 合并进 `build/*.schema.yaml`，引擎从部署产物读
+    // `context.menu.page_size` —— 候选窗分页（`Engine/src/librime/mod.rs`）、翻页键
+    // （`menu.rs` 的 paginate）、`select_labels`/`alternative_select_keys` 的数字键
+    // 全都消费这一个值，所以不需要另设第二条路径。改完**重新部署后生效**（范围 3–9
+    // 保证数字键 1–9 不跨到 0）。
+    ui.set_page_size(dialogs::current_page_size(&user, &shared) as i32);
+    {
+        let ui_weak = ui.as_weak();
+        let user = user.clone();
+        let shared = shared.clone();
+        ui.on_page_size_changed(move |value| {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            let size = value.clamp(
+                dialogs::PAGE_SIZE_MIN as i32,
+                dialogs::PAGE_SIZE_MAX as i32,
+            ) as u32;
+            match dialogs::write_page_size(&user, &shared, size) {
+                Ok(_) => {
+                    ui.set_page_size(size as i32);
+                    ui.set_status(
+                        format!("每页候选数：{size}（重新部署后生效，可在「更新」页部署）").into(),
+                    );
+                }
+                Err(error) => ui.set_status(format!("写每页候选数失败：{error}").into()),
+            }
+        });
+    }
 }
 
 /// 把数据层的状态推给界面：行模型、当前配色、状态栏、预览颜色。
@@ -880,13 +1004,19 @@ fn push_skins(ui: &SettingsWindow, skins: &skins::Skins) {
         ui.set_scheme_preview_comment(row.comment_color);
     }
 }
-// ------------------------------------------------------- 方案选单页（tab 2）
+// ------------------------------------------------------- 方案页（tab 2）
 
-/// 方案选单页：读可用方案 → 勾选 → 写 `schema/schema.yaml` → 请 broker 重新部署。
+/// 方案页：读可用方案 → 只通过左侧勾选框改 `schema/schema.yaml` → 请 broker 重新部署。
 ///
-/// 数据层与官方 `/switcher` 对话框是同一份（`weasel_style::switcher`），落盘也走
-/// `write_schema_ids`（保留原有的 `active`），所以两条路径不会互相踩。官方对话框
-/// 里的快捷键设置这页不做，留一个「官方对话框…」按钮跳过去。
+/// 数据层与官方 `/switcher` 对话框是同一份（`weasel_style::switcher`），勾选落盘走
+/// `write_schema_ids`（保留原有的 `active`）。2026-11-12 用户要求去掉「禁用 / 启用」
+/// 按钮：界面不再写 `disabled.yaml`，只保留 `read_disabled()` 兼容外部手工写的存量。
+///
+/// 取消勾选父方案（如 `pinyin`）只从 `schemas` 移除该父 id；子方案条目、active 与 build
+/// 全部保留，子方案因父未选而自动不部署/不进菜单，重新勾选父方案即恢复。
+/// 但每个父方案组必须至少留一个**真正可用**（已勾选且未被父未选/禁用压住）的方案——
+/// 否则「启用方案」实际什么都没有，界面会在切换时就拒绝并提示。
+/// 官方对话框里的快捷键设置这页不做，留一个「官方对话框…」按钮跳过去。
 fn wire_schemas(ui: &SettingsWindow) {
     let script_dir = std::env::current_exe()
         .ok()
@@ -900,46 +1030,279 @@ fn wire_schemas(ui: &SettingsWindow) {
     let _ = weasel_style::switcher::seed_schema_table(&shared, &user);
 
     let rows = Rc::new(RefCell::new(Vec::<weasel_style::switcher::SchemaInfo>::new()));
-    reload_schemas(ui, &shared, &user, &rows);
+    // 子方案 id → 父方案 id（扫描 schema 文件里的父子声明，见 schema_tree）。
+    let parents = Rc::new(RefCell::new(BTreeMap::<String, String>::new()));
+    // 2026-11-11：禁用态与勾选清单**正交**。勾选写 schema.yaml，禁用写 disabled.yaml；
+    // 这里先读盘到内存，点「保存并部署」才落盘（与勾选的「确定才生效」一致）。
+    let disabled = Rc::new(RefCell::new(weasel_style::switcher::read_disabled(&user)));
+    // 2026-11-12 方案 A：拼音的 16 种输入类型由主方案顶层 input_types 驱动（不再是子方案
+    // 文件夹）。这里读出厂清单 + 用户覆盖，作为「父方案组」的组成员，供保留规则与勾选使用。
+    let pinyin_input_types = Rc::new(RefCell::new(
+        weasel_style::switcher::read_pinyin_input_types(&shared, &user),
+    ));
+    reload_schemas(
+        ui,
+        &shared,
+        &user,
+        &rows,
+        &parents,
+        &disabled,
+        &pinyin_input_types,
+    );
+    // 运维/回归用：启动时按 id/名字过滤方案列表（例如 pinyin），只显示命中分组。
+    // 正常启动不设该变量，列表照旧全量；与 WEASEL_SETTING_PAGE 一样不改用户默认行为。
+    if let Ok(filter) = std::env::var("WEASEL_SETTING_SCHEMA_FILTER") {
+        set_schema_filter(&filter);
+        push_schemas(
+            &ui,
+            &shared,
+            &user,
+            &rows,
+            &parents,
+            &disabled,
+            &pinyin_input_types,
+        );
+    }
 
     // 勾选/取消：只改内存，点「保存并部署」才写盘（与官方"确定才生效"一致）。
-    // 树结构：点系列标题折叠/展开（用户 2026-10-19）
+    // 2026-11-12：只有左侧选择框会触发这里（schemas.slint 的 check-touch），整行/名字
+    // 都不再可点。子方案也是独立可勾选方案，取消勾选 = 从点名清单移除 = 不编译其 prism。
+    //
+    // 两道防线：
+    //   ① 全局至少留一项；
+    //   ② 每个父方案组至少留一个「真正可用」的**子方案**（主方案只是词库/规则外壳，
+    //      本身不输入、不出候选，不算可用成员——2026-11-12 晚间修订：保留义务落在
+    //      子方案上，取消最后一个可用子方案要被拒绝，且提示点名那个子方案）。
+    // 只拒绝「会让原本合法的组变空」的切换（前后对比），外部漂移出来的空组
+    // 仍可通过重新勾选父方案/子方案恢复，不会死锁。
     {
         let ui_weak = ui.as_weak();
         let shared = shared.to_path_buf();
         let user = user.to_path_buf();
-        let rows = Rc::clone(&rows);
-        ui.on_schema_series_select(move |name| {
-            toggle_series(name.as_str());
-            let Some(ui) = ui_weak.upgrade() else { return };
-            push_schemas(&ui, &shared, &user, &rows);
-        });
-    }
-    {
-        let ui_weak = ui.as_weak();
         let rows = rows.clone();
-        let shared = shared.to_path_buf();
-        let user = user.to_path_buf();
+        let parents = parents.clone();
+        let disabled = disabled.clone();
+        let pinyin_input_types = pinyin_input_types.clone();
         ui.on_schema_toggle(move |id| {
             let Some(ui) = ui_weak.upgrade() else { return };
+            // 拼音输入类型（方案 A：16 种拼式由 input_types 承担，不再是子方案）。
+            // 合成 id `__it__<option>`，父方案 pinyin 在 push_schemas 里把它展开成子行。
+            if let Some(option) = id.as_str().strip_prefix("__it__") {
+                // 2026-11-15：拼音主方案没勾选时，输入类型子行全部灰掉且不可单独改动。
+                // 这是「父未选压住」的计算态，不写 disabled.yaml；重勾父方案自动恢复。
+                if !rows.borrow().iter().any(|r| r.id == "pinyin" && r.selected) {
+                    ui.set_schema_status(
+                        "拼音主方案未勾选，输入类型已停用；请先勾选「拼音」。".into(),
+                    );
+                    return;
+                }
+                let label = {
+                    let pit = pinyin_input_types.borrow();
+                    pit.as_ref()
+                        .and_then(|pit| pit.options.iter().find(|o| o.option == option))
+                        .map(|o| o.label.clone())
+                        .unwrap_or_else(|| option.to_string())
+                };
+                let mut pit = pinyin_input_types.borrow_mut();
+                let Some(pit) = pit.as_mut() else { return };
+                let currently = pit.enabled.contains(option);
+                if currently {
+                    // 取消最后一个可用输入类型 ⇒ 拒绝（保留义务落到 input_types 组）。
+                    if pit.enabled.len() <= 1 {
+                        ui.set_schema_status(
+                            format!(
+                                "「{}（{}）」是拼音最后一个可用输入类型，不能取消；请先勾选其他输入类型。",
+                                label, option
+                            )
+                            .into(),
+                        );
+                        return;
+                    }
+                    pit.enabled.remove(option);
+                } else {
+                    pit.enabled.insert(option.to_string());
+                }
+                drop(pit);
+                push_schemas(
+                    &ui,
+                    &shared,
+                    &user,
+                    &rows,
+                    &parents,
+                    &disabled,
+                    &pinyin_input_types,
+                );
+                return;
+            }
+            let rejection = {
+                let rows_ref = rows.borrow();
+                let Some(current) = rows_ref.iter().find(|row| row.id == id.as_str()) else {
+                    return;
+                };
+                let next = !current.selected;
+                let before: BTreeSet<String> = rows_ref
+                    .iter()
+                    .filter(|row| row.selected)
+                    .map(|row| row.id.clone())
+                    .collect();
+                let mut candidate = before.clone();
+                if next {
+                    candidate.insert(id.to_string());
+                } else {
+                    candidate.remove(id.as_str());
+                }
+                if candidate.is_empty() {
+                    Some("至少要保留一个勾选方案。".to_string())
+                } else {
+                    let group_label = |gid: &str| -> String {
+                        rows_ref
+                            .iter()
+                            .find(|row| row.id == gid)
+                            .map(|row| format!("{}（{}）", row.name.as_str(), row.id.as_str()))
+                            .unwrap_or_else(|| gid.to_string())
+                    };
+                    let pre_empty =
+                        weasel_style::switcher::parent_groups_without_deployable_member(
+                            &before,
+                            &disabled.borrow(),
+                            &parents.borrow(),
+                        );
+                    let post_empty =
+                        weasel_style::switcher::parent_groups_without_deployable_member(
+                            &candidate,
+                            &disabled.borrow(),
+                            &parents.borrow(),
+                        );
+                    let newly_empty: Vec<&String> = post_empty
+                        .iter()
+                        .filter(|group| !pre_empty.contains(*group))
+                        .collect();
+                    if newly_empty.is_empty() {
+                        None
+                    } else if next {
+                        // 勾选动作反而让组变空只可能发生在：父方案未勾选时勾子方案，
+                        // 子方案立刻被「父未选」压住。
+                        Some(format!(
+                            "「{}」组的父方案未勾选：子方案勾了也会处于「父未选」，请先勾选父方案。",
+                            newly_empty
+                                .iter()
+                                .map(|group| group_label(group))
+                                .collect::<Vec<_>>()
+                                .join("、")
+                        ))
+                    } else if newly_empty.len() == 1
+                        && parents
+                            .borrow()
+                            .get(id.as_str())
+                            .is_some_and(|parent| parent == newly_empty[0].as_str())
+                    {
+                        // 取消的是子方案，且它所在组因此空了 ⇒ 它就是最后一个可用子方案。
+                        Some(format!(
+                            "「{}」是「{}」组最后一个可用子方案，不能取消；请先勾选该组其他子方案。",
+                            group_label(id.as_str()),
+                            group_label(newly_empty[0])
+                        ))
+                    } else if newly_empty
+                        .iter()
+                        .any(|group| group.as_str() == id.as_str())
+                    {
+                        // 取消的是父方案本身：全部子方案进入「父未选」。
+                        Some(format!(
+                            "取消父方案「{}」会让该组全部子方案进入「父未选」，整组没有可部署/可进菜单的方案；请保持父方案勾选。",
+                            group_label(id.as_str())
+                        ))
+                    } else {
+                        Some(format!(
+                            "「{}」组至少要保留一个已勾选子方案：取消后整组没有可部署/可进菜单的方案。",
+                            newly_empty
+                                .iter()
+                                .map(|group| group_label(group))
+                                .collect::<Vec<_>>()
+                                .join("、")
+                        ))
+                    }
+                }
+            };
+            if let Some(message) = rejection {
+                ui.set_schema_status(message.into());
+                return;
+            }
             {
                 let mut rows = rows.borrow_mut();
                 if let Some(row) = rows.iter_mut().find(|row| row.id == id.as_str()) {
                     row.selected = !row.selected;
                 }
             }
-            push_schemas(&ui, &shared, &user, &rows);
+            push_schemas(
+                &ui,
+                &shared,
+                &user,
+                &rows,
+                &parents,
+                &disabled,
+                &pinyin_input_types,
+            );
         });
-
+    }
+    // 父方案行：点折叠箭头展开/收起子方案（父方案本身仍可勾选）。
+    {
+        let ui_weak = ui.as_weak();
+        let shared = shared.to_path_buf();
+        let user = user.to_path_buf();
+        let rows = rows.clone();
+        let parents = parents.clone();
+        let disabled = disabled.clone();
+        let pinyin_input_types = pinyin_input_types.clone();
+        ui.on_schema_toggle_children(move |id| {
+            toggle_collapsed(id.as_str());
+            let Some(ui) = ui_weak.upgrade() else { return };
+            push_schemas(
+                &ui,
+                &shared,
+                &user,
+                &rows,
+                &parents,
+                &disabled,
+                &pinyin_input_types,
+            );
+        });
+    }
+    // 搜索：只过滤显示，不改勾选状态。
+    {
+        let ui_weak = ui.as_weak();
+        let shared = shared.to_path_buf();
+        let user = user.to_path_buf();
+        let rows = rows.clone();
+        let parents = parents.clone();
+        let disabled = disabled.clone();
+        let pinyin_input_types = pinyin_input_types.clone();
+        ui.on_schema_filter_changed(move |text| {
+            set_schema_filter(text.as_str());
+            let Some(ui) = ui_weak.upgrade() else { return };
+            push_schemas(
+                &ui,
+                &shared,
+                &user,
+                &rows,
+                &parents,
+                &disabled,
+                &pinyin_input_types,
+            );
+        });
     }
     {
         let ui_weak = ui.as_weak();
         let rows = rows.clone();
+        let parents = parents.clone();
+        let disabled = disabled.clone();
         let user = user.clone();
+        let pinyin_input_types = pinyin_input_types.clone();
         ui.on_schema_apply(move || {
             let Some(ui) = ui_weak.upgrade() else { return };
+            // 2026-11-11：勾选谁就部署谁。子方案不再自动跟随父方案，
+            // 用户可以只留主方案、把不想用的双拼逐个取消勾选（不编译、不进菜单）。
+            let rows = rows.borrow();
             let ids: Vec<String> = rows
-                .borrow()
                 .iter()
                 .filter(|row| row.selected)
                 .map(|row| row.id.clone())
@@ -949,32 +1312,104 @@ fn wire_schemas(ui: &SettingsWindow) {
                 ui.set_schema_status("至少要选用一项。".into());
                 return;
             }
+            let disabled_snapshot = disabled.borrow().clone();
+            let selected_ids: BTreeSet<String> = ids.iter().cloned().collect();
+            // 2026-11-12 最终闸门：父组必须至少留一个真正可用方案。切换时已经拦过一次，
+            // 这里再挡住「外部改过内存/盘后直接点保存」的旁路，不写半状态。
+            let empty_groups = weasel_style::switcher::parent_groups_without_deployable_member(
+                &selected_ids,
+                &disabled_snapshot,
+                &parents.borrow(),
+            );
+            if !empty_groups.is_empty() {
+                let names: Vec<String> = empty_groups
+                    .iter()
+                    .map(|group| {
+                        rows.iter()
+                            .find(|row| row.id == group.as_str())
+                            .map(|row| format!("{}（{}）", row.name.as_str(), row.id.as_str()))
+                            .unwrap_or_else(|| group.clone())
+                    })
+                    .collect();
+                ui.set_schema_status(
+                    format!(
+                        "「{}」组至少要保留一个已勾选子方案；请先勾选该组的一个子方案（主方案外壳本身不算）。",
+                        names.join("、")
+                    )
+                    .into(),
+                );
+                return;
+            }
+            let effective = weasel_style::switcher::effective_disabled_ids_from_selection(
+                &selected_ids,
+                &disabled_snapshot,
+                &parents.borrow(),
+            );
+            let disabled_count = ids.iter().filter(|id| effective.contains(*id)).count();
+            let deploy_count = ids.len() - disabled_count;
             let path = user
                 .join("schema")
                 .join(weasel_style::switcher::SCHEMA_TABLE_FILE);
-            match weasel_style::switcher::write_schema_ids(&path, &ids) {
-                Ok(()) => {
-                    ui.set_schema_status(
-                        format!("已保存 {} 个方案，正在请 broker 重新部署…", ids.len()).into(),
-                    );
-                    // 部署必须由掌握引擎生死的 broker 做（引擎单实例，自己拉第二个只会
-                    // 得到 AlreadyRunning）；与官方对话框 OnOK 之后是同一个动作。
-                    switcher_dialog::request_deploy();
-                }
-                Err(error) => {
-                    ui.set_schema_status(format!("写入方案选单失败：{error}").into());
+            // write_schema_ids 保留 active + 全量 schemas。2026-11-12 起设置页不再写
+            // disabled.yaml：UI 已无「禁用/启用」按钮，外部手工写的存量禁用态只读保留。
+            if let Err(error) = weasel_style::switcher::write_schema_ids(&path, &ids) {
+                ui.set_schema_status(format!("写入勾选清单失败：{error}").into());
+                return;
+            }
+            // 2026-11-12 方案 A：拼音输入类型的启用集合同样在此落盘。最后一个可用输入类型
+            // 不可取消（切换时已经拦过，这里再挡住「外部改过内存后直接点保存」的旁路）。
+            {
+                let pit = pinyin_input_types.borrow();
+                if let Some(pit) = pit.as_ref() {
+                    if pit.enabled.is_empty() {
+                        ui.set_schema_status(
+                            "拼音至少要保留一个输入类型（明月/地球/自然码…），不能全部取消。".into(),
+                        );
+                        return;
+                    }
+                    if let Err(error) = weasel_style::switcher::write_pinyin_input_types_enabled(
+                        &user,
+                        &pit.enabled,
+                        &pit.section,
+                    ) {
+                        ui.set_schema_status(format!("写入输入类型选择失败：{error}").into());
+                        return;
+                    }
                 }
             }
+            ui.set_schema_status(
+                format!(
+                    "已保存 {} 个勾选（其中 {} 个当前不部署，实际部署 {} 个），正在请 broker 重新部署…",
+                    ids.len(),
+                    disabled_count,
+                    deploy_count
+                )
+                .into(),
+            );
+            // 部署必须由掌握引擎生死的 broker 做（引擎单实例，自己拉第二个只会
+            // 得到 AlreadyRunning）；与官方对话框 OnOK 之后是同一个动作。
+            switcher_dialog::request_deploy();
         });
     }
     {
         let ui_weak = ui.as_weak();
         let rows = rows.clone();
+        let parents = parents.clone();
+        let disabled = disabled.clone();
         let shared = shared.to_path_buf();
         let user = user.to_path_buf();
+        let pinyin_input_types = pinyin_input_types.clone();
         ui.on_schema_refresh(move || {
             let Some(ui) = ui_weak.upgrade() else { return };
-            reload_schemas(&ui, &shared, &user, &rows);
+            reload_schemas(
+                &ui,
+                &shared,
+                &user,
+                &rows,
+                &parents,
+                &disabled,
+                &pinyin_input_types,
+            );
         });
     }
     {
@@ -982,7 +1417,7 @@ fn wire_schemas(ui: &SettingsWindow) {
         ui.on_schema_open_dialog(move || {
             let Some(ui) = ui_weak.upgrade() else { return };
             if let Err(error) = open_official("/switcher") {
-                ui.set_schema_status(format!("无法打开方案选单：{error}").into());
+                ui.set_schema_status(format!("无法打开菜单设置：{error}").into());
             }
         });
     }
@@ -994,27 +1429,47 @@ fn reload_schemas(
     shared: &std::path::Path,
     user: &std::path::Path,
     rows: &Rc<RefCell<Vec<weasel_style::switcher::SchemaInfo>>>,
+    parents: &Rc<RefCell<BTreeMap<String, String>>>,
+    disabled: &Rc<RefCell<weasel_style::switcher::DisabledTable>>,
+    pinyin_input_types: &Rc<RefCell<Option<weasel_style::switcher::PinyinInputTypes>>>,
 ) {
     match weasel_style::switcher::list_schemas(shared, user) {
-        Ok(list) => *rows.borrow_mut() = list,
+        Ok(list) => {
+            // 父子声明每次重读时一起扫描；字段解析隔离在 `schema_tree` 里。
+            *parents.borrow_mut() = schema_tree::scan_parents(shared, user, &list);
+            *rows.borrow_mut() = list;
+        }
         Err(error) => ui.set_schema_status(format!("读取方案列表失败：{error}").into()),
     }
-    push_schemas(ui, shared, user, rows);
+    // 禁用态也从盘上重读：外部（CLI / 官方对话框）改过 disabled.yaml 不会漏。
+    *disabled.borrow_mut() = weasel_style::switcher::read_disabled(user);
+    // 拼音输入类型同样重读（出厂清单 + 用户覆盖）。
+    *pinyin_input_types.borrow_mut() =
+        weasel_style::switcher::read_pinyin_input_types(shared, user);
+    push_schemas(
+        ui,
+        shared,
+        user,
+        rows,
+        parents,
+        disabled,
+        pinyin_input_types,
+    );
 }
 
-/// 左侧导航当前选中的系列（None = 全部）。
-/// 树里被折叠的系列（VS Code 资源管理器式）。
-static COLLAPSED: std::sync::Mutex<Option<std::collections::BTreeSet<String>>> =
-    std::sync::Mutex::new(None);
+/// 树里被折叠的父方案 id（默认全部展开）。
+static COLLAPSED: std::sync::Mutex<Option<BTreeSet<String>>> = std::sync::Mutex::new(None);
+/// 方案筛选框的当前文字（空串 = 不过滤）。
+static SCHEMA_FILTER: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-fn collapsed_snapshot() -> std::collections::BTreeSet<String> {
+fn collapsed_snapshot() -> BTreeSet<String> {
     match COLLAPSED.lock() {
         Ok(guard) => guard.clone().unwrap_or_default(),
         Err(poisoned) => poisoned.into_inner().clone().unwrap_or_default(),
     }
 }
 
-fn toggle_series(name: &str) {
+fn toggle_collapsed(name: &str) {
     let mut guard = match COLLAPSED.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
@@ -1025,77 +1480,199 @@ fn toggle_series(name: &str) {
     }
 }
 
+fn schema_filter_snapshot() -> String {
+    match SCHEMA_FILTER.lock() {
+        Ok(guard) => guard.clone().unwrap_or_default(),
+        Err(poisoned) => poisoned.into_inner().clone().unwrap_or_default(),
+    }
+}
+
+fn set_schema_filter(text: &str) {
+    match SCHEMA_FILTER.lock() {
+        Ok(mut guard) => *guard = Some(text.to_string()),
+        Err(poisoned) => *poisoned.into_inner() = Some(text.to_string()),
+    }
+}
 
 /// 把方案列表推给界面（当前方案从 `schema.yaml` 的 `active` 读）。
+///
+/// 父子关系来自 schema 文件里的声明（见 `schema_tree`），不再按目录分组：
+/// 父方案是普通可勾选方案，子方案缩进一层；没有父级的方案照旧平铺。
 fn push_schemas(
     ui: &SettingsWindow,
     shared: &std::path::Path,
     user: &std::path::Path,
     rows: &Rc<RefCell<Vec<weasel_style::switcher::SchemaInfo>>>,
+    parents: &Rc<RefCell<BTreeMap<String, String>>>,
+    disabled: &Rc<RefCell<weasel_style::switcher::DisabledTable>>,
+    pinyin_input_types: &Rc<RefCell<Option<weasel_style::switcher::PinyinInputTypes>>>,
 ) {
     let active = weasel_style::switcher::read_schema_table(shared, user).active;
     let rows = rows.borrow();
-    let selected = rows.iter().filter(|row| row.selected).count();
-    // 用户 2026-10-19：按系列分组（schema\<系列>\<方案>\）。
-    // 同一系列的方案前面插一行标题（header = true），界面按 header 渲染成灰字标题。
-    // 用户 2026-10-19：VS Code 文件夹视图 —— 系列是可折叠的文件夹节点，方案缩进。
-    let collapsed = collapsed_snapshot();
-    let mut model: Vec<SchemaRow> = Vec::with_capacity(rows.len() + 4);
-    let mut current_series: Option<String> = None;
-    let mut series_open = true;
-    for row in rows.iter() {
-        let series = row.series.clone().unwrap_or_default();
-        if current_series.as_deref() != Some(series.as_str()) {
-            if !series.is_empty() {
-                series_open = !collapsed.contains(&series);
-                let chevron = if series_open { "▾  " } else { "▸  " };
-                let count = rows
+    let parents = parents.borrow();
+    let disabled_table = disabled.borrow();
+    let mut tree = schema_tree::build_tree(
+        &rows,
+        &parents,
+        &collapsed_snapshot(),
+        &schema_filter_snapshot(),
+    );
+    // 2026-11-12 方案 A：16 个子方案文件夹已删，「拼音」的子行改由 input_types 承担——
+    // 在 pinyin 行下注入合成子行 `__it__<option>`（label 来自出厂 options，勾选态来自
+    // enabled）。折叠态照父方案处理：pinyin 折叠时不展开合成行。
+    let pit_snapshot = pinyin_input_types.borrow().clone();
+    if let Some(pit) = pit_snapshot.as_ref() {
+        if let Some(pos) = tree
+            .iter()
+            .position(|node| node.id == "pinyin" && node.level == 0)
+        {
+            tree[pos].child_count = pit.options.len();
+            if !tree[pos].collapsed {
+                let mut insert_at = pos + 1;
+                // 理论上 pinyin 已无真实子行；防御式跳过（万一外部又声明了父子）。
+                while tree
+                    .get(insert_at)
+                    .is_some_and(|n| n.parent.as_deref() == Some("pinyin"))
+                {
+                    insert_at += 1;
+                }
+                let synthetic: Vec<schema_tree::TreeRow> = pit
+                    .options
                     .iter()
-                    .filter(|other| other.series.as_deref() == Some(series.as_str()))
-                    .count();
-                model.push(SchemaRow {
-                    id: series.clone().into(),
-                    name: "".into(),
-                    author: "".into(),
-                    description: "".into(),
-                    selected: false,
-                    active: false,
-                    series: format!("{chevron}{series}  ({count})").into(),
-                    header: true,
-                    level: 0,
-                });
-            } else {
-                series_open = true;
+                    .map(|o| schema_tree::TreeRow {
+                        id: format!("__it__{}", o.option),
+                        parent: Some("pinyin".into()),
+                        child_count: 0,
+                        level: 1,
+                        collapsed: false,
+                    })
+                    .collect();
+                tree.splice(insert_at..insert_at, synthetic);
             }
-            current_series = Some(series.clone());
         }
-        if !series.is_empty() && !series_open {
-            continue;
-        }
-        model.push(SchemaRow {
-            id: row.id.as_str().into(),
-            name: row.name.as_str().into(),
-            author: row.author.as_str().into(),
-            description: row
-                .description
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .into(),
-            selected: row.selected,
-            active: active.as_deref() == Some(row.id.as_str()),
-            series: series.clone().into(),
-            header: false,
-            level: if series.is_empty() { 0 } else { 1 },
-        });
     }
+    // 勾选集合 = schema.yaml 的 schemas（内部状态）。父方案未勾选时，子方案按
+    // schema.parent 自动压住；这是计算态，不写 disabled.yaml，父方案自己仍可重新勾选。
+    let selected_ids: BTreeSet<String> = rows
+        .iter()
+        .filter(|row| row.selected)
+        .map(|row| row.id.clone())
+        .collect();
+    // 拼音主方案没勾选 ⇒ 15 项输入类型子行按「父未选」灰掉（记忆保留、可恢复）。
+    let pinyin_selected = selected_ids.contains("pinyin");
+    let blocked_by_parent =
+        weasel_style::switcher::blocked_children_by_unselected_parents(&selected_ids, &parents);
+    // 显式禁用（兼容手工写的 disabled.yaml）∪ 父未选压住的子方案。
+    let effective = weasel_style::switcher::effective_disabled_ids_from_selection(
+        &selected_ids,
+        &disabled_table,
+        &parents,
+    );
+    // 父方案自己没勾、但底下还有子方案保留勾选 → 灰色「未选」态，不是「被禁用」。
+    let mut muted_parents = BTreeSet::new();
+    for (child, parent) in parents.iter() {
+        if !selected_ids.contains(parent)
+            && rows.iter().any(|row| row.id == *child && row.selected)
+        {
+            muted_parents.insert(parent.clone());
+        }
+    }
+    // 当前生效的子方案（引擎/Ctrl+` 选择，设置里只展示）。
+    // 生效 id 不在两层树里时按平铺/无生效子方案处理。
+    let active_child = active.as_deref().and_then(|id| {
+        let node = tree.iter().find(|node| node.level == 1 && node.id == id)?;
+        let parent = node.parent.clone()?;
+        let name = rows.iter().find(|row| row.id == id)?.name.clone();
+        Some((parent, name))
+    });
+    // 勾选数照旧统计全部已勾选项（含禁用）；实际部署数另算并写进状态栏。
+    let selected = rows.iter().filter(|row| row.selected).count();
+    let disabled_count = rows.iter().filter(|row| effective.contains(&row.id)).count();
+    let deploy_count = rows
+        .iter()
+        .filter(|row| row.selected && !effective.contains(&row.id))
+        .count();
+    let model: Vec<SchemaRow> = tree
+        .into_iter()
+        .filter_map(|node| {
+            // 方案 A：拼音输入类型合成行不在 rows 里，直接由 input_types 构造。
+            // 勾选态 = enabled.contains(option)；无独立禁用/激活/折叠概念。
+            if let Some(option) = node.id.strip_prefix("__it__") {
+                let pit = pit_snapshot.as_ref()?;
+                let opt = pit.options.iter().find(|o| o.option == option)?;
+                return Some(SchemaRow {
+                    id: node.id.as_str().into(),
+                    name: opt.label.as_str().into(),
+                    author: "".into(),
+                    description: format!("输入类型（{}）", option).into(),
+                    selected: pit.enabled.contains(option),
+                    active: false,
+                    disabled: false,
+                    disabled_by_parent: !pinyin_selected,
+                    disabled_by_group: false,
+                    is_parent: false,
+                    muted: !pinyin_selected,
+                    level: 1,
+                    child_count: 0,
+                    collapsed: false,
+                    selectable: true,
+                    active_child: "".into(),
+                });
+            }
+            let row = rows.iter().find(|row| row.id == node.id)?;
+            let active_child_name = active_child
+                .as_ref()
+                .filter(|(parent, _)| parent == &node.id)
+                .map(|(_, name)| name.as_str())
+                .unwrap_or_default();
+            // 父方案未勾选压住的子方案：显示「父未选」，不给独立「启用」按钮。
+            let disabled_by_parent = blocked_by_parent.contains(&row.id);
+            // 兼容外部手工写进 disabled.yaml 的整组禁用。
+            let disabled_by_group = node.parent.as_deref().is_some_and(|parent| {
+                disabled_table.groups.iter().any(|group| group == parent)
+            });
+            // 父方案本身是普通可勾选方案；有子方案但自己没勾时画灰色（不是「被禁用」）。
+            let is_parent = node.child_count > 0;
+            let muted = muted_parents.contains(&row.id);
+            Some(SchemaRow {
+                id: row.id.as_str().into(),
+                name: row.name.as_str().into(),
+                author: row.author.as_str().into(),
+                description: row
+                    .description
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .into(),
+                selected: row.selected,
+                active: active.as_deref() == Some(row.id.as_str()),
+                disabled: effective.contains(&row.id),
+                disabled_by_parent,
+                disabled_by_group,
+                is_parent,
+                muted,
+                level: node.level as i32,
+                child_count: node.child_count as i32,
+                collapsed: node.collapsed,
+                // 每一行都可勾选：子方案取消勾选后部署器就不会编译它。
+                selectable: true,
+                active_child: active_child_name.into(),
+            })
+        })
+        .collect();
     ui.set_schema_rows(Rc::new(VecModel::from(model)).into());
-    ui.set_schema_status(format!("{} 个可用方案 · 已勾选 {} 个", rows.len(), selected).into());
+    ui.set_schema_status(
+        format!(
+            "{} 个可用方案 · 已勾选 {} 个（当前不部署 {} 个，实际部署 {} 个）",
+            rows.len(), selected, disabled_count, deploy_count
+        )
+        .into(),
+    );
 }
 
 // ------------------------------------------------------- 界面与方案（官方对话框）
 
-/// 主界面的「界面风格…」「方案选单…」两个按钮。
+/// 主界面的「外观…」「方案…」两个按钮。
 ///
 /// 托盘菜单里原来各有一项，用户要求收进设置（「这不是设置的部分吗」）。两条都是
 /// 官方模板的 Win32 对话框，见 [`open_official`]。
@@ -1105,7 +1682,7 @@ fn wire_official_dialogs(ui: &SettingsWindow) {
         ui.on_open_switcher(move || {
             if let Some(ui) = weak.upgrade() {
                 if let Err(error) = open_official("/switcher") {
-                    ui.set_status(format!("无法打开方案选单：{error}").into());
+                    ui.set_status(format!("无法打开菜单设置：{error}").into());
                 }
             }
         });
@@ -1115,7 +1692,7 @@ fn wire_official_dialogs(ui: &SettingsWindow) {
         ui.on_open_style(move || {
             if let Some(ui) = weak.upgrade() {
                 if let Err(error) = open_official("/style") {
-                    ui.set_status(format!("无法打开界面风格：{error}").into());
+                    ui.set_status(format!("无法打开外观设置：{error}").into());
                 }
             }
         });
@@ -1834,150 +2411,10 @@ fn read_last_build_time() -> Option<i64> {
     }
     None
 }
-// ── 生涯段位（移植自 input_statistics.lua 的 career_levels / career_realms）──────
-//
-// 20 级、按累计经验（≈上屏字数）分段；7 境界按累计字数。这两张表和 lua 插件
-// **完全一致**，否则同一个用户在两处看到的段位会不一样。
-/// 100 级段位曲线：`req(n) = 50(n-1) + 50(n-1)²`。
-///
-/// 前 5 级正好是 100 / 300 / 600 / 1000（与旧的手写表一致），
-/// 上级到 100 级约 49.5 万经验（≈ 上屏 49.5 万字），普通人几年可满级。
-/// 旧表用 `r*2+100` 会指数爆炸（20 级就到 5200 万），100 级根本到不了。
-const CAREER_MAX_LEVEL: u32 = 100;
-
-fn career_level_req(level: u32) -> u64 {
-    if level <= 1 {
-        return 0;
-    }
-    let n = u64::from(level - 1);
-    50 * n + 50 * n * n
-}
-
-/// 每 10 级一个段位称号（等级越高，称号越"仙"）。
-const CAREER_TITLES: &[&str] = &[
-    "初识键盘",
-    "摸键学徒",
-    "码字新人",
-    "指尖练习生",
-    "输入学徒",
-    "码流行者",
-    "飞键使",
-    "连击者",
-    "码阵构筑师",
-    "熟练输入师",
-];
-
-fn career_title(level: u32) -> &'static str {
-    let index = ((level.saturating_sub(1)) / 10) as usize;
-    CAREER_TITLES[index.min(CAREER_TITLES.len() - 1)]
-}
-
-const CAREER_REALMS: &[(u64, &str)] = &[
-    (10_000_000, "码仙境"),
-    (5_000_000, "码圣境"),
-    (1_000_000, "通玄境"),
-    (200_000, "御码境"),
-    (50_000, "飞键境"),
-    (10_000, "熟键境"),
-    (0, "凡键境"),
-];
-
-/// 按累计经验算段位。返回 (称号, 等级, 本级已得经验, 本级所需经验)。
-fn career_level(total_exp: u64) -> (&'static str, u32, u64, u64) {
-    // 二分出等级：最大的 n 使 req(n) <= total_exp
-    let mut lo = 1u32;
-    let mut hi = CAREER_MAX_LEVEL;
-    while lo < hi {
-        let mid = (lo + hi + 1) / 2;
-        if career_level_req(mid) <= total_exp {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    let level = lo;
-    let start = career_level_req(level);
-    let end = career_level_req((level + 1).min(CAREER_MAX_LEVEL + 1));
-    let span = if end > start { end - start } else { 1 };
-    (career_title(level), level, total_exp.saturating_sub(start), span)
-}
-
-/// 按累计字数算境界。
-fn career_realm(total_chars: u64) -> &'static str {
-    for (base, name) in CAREER_REALMS {
-        if total_chars >= *base {
-            return name;
-        }
-    }
-    "凡键境"
-}
-
-// ── 名著字数水平（趣味对照：累计上屏字数 ≈ 某部名著的篇幅）──────────────
-//
-// 字数是各书**通行版本的约数**（不同版本、不同统计口径会有出入），只用来给打字量
-// 一个直观参照，不追求精确。表按字数**升序**排列，`book_level` 报"还差多少字到下一部"。
-
-
-const BOOK_LEVELS: &[(u64, &str)] = &[
-    (5_000, "《道德经》"),
-    (6_000, "《孙子兵法》"),
-    (16_000, "《论语》"),
-    (35_000, "《孟子》"),
-    (80_000, "《庄子》"),
-    (196_000, "《左传》"),
-    (360_000, "《三国志》"),
-    (526_000, "《史记》"),
-    (640_000, "《三国演义》"),
-    (731_000, "《红楼梦》"),
-    (820_000, "《西游记》"),
-    (960_000, "《水浒传》"),
-    (3_000_000, "《资治通鉴》"),
-    (40_000_000, "《二十四史》"),
-];
-
-/// 字数格式化：满一万写成"X.X 万字"，否则直接写"X 字"。
-fn format_chars(n: u64) -> String {
-    if n >= 10_000 {
-        format!("{:.1} 万字", n as f64 / 10_000.0)
-    } else {
-        format!("{n} 字")
-    }
-}
-
-/// 展示时最多列几个"下一个里程碑"（一行放不下更多）。
-///
-/// 用户 2026-10-29 定的口径：**只报"还差多少字到哪一部"**，
-/// 「已写多少 ≈ A+B」那种加法折算与"再写多少字加上 C"的说法都不要。
-const BOOK_UPCOMING_SHOWN: usize = 3;
-
-/// 累计字数还没超过的下一批名著（按字数升序，最多 [`BOOK_UPCOMING_SHOWN`] 部）。
-///
-/// 返回 `(目标字数, 书名)`；目标只随字数前进，不会因为别的书被"折算掉"而回头。
-fn upcoming_books(total_chars: u64) -> Vec<(u64, &'static str)> {
-    BOOK_LEVELS
-        .iter()
-        .filter(|(base, _)| *base > total_chars)
-        .take(BOOK_UPCOMING_SHOWN)
-        .map(|(base, name)| (*base, *name))
-        .collect()
-}
-
-/// 名著字数水平：已写多少字 + **还差多少字到 a / 到 b / 到 c**。
-///
-/// 例（6 万字）：`已写 6.0 万字；还差 2.0 万字到《庄子》、13.6 万字到《左传》、30.0 万字到《三国志》`
-fn book_level(total_chars: u64) -> String {
-    let upcoming = upcoming_books(total_chars);
-    let mut text = format!("已写 {}", format_chars(total_chars));
-    if upcoming.is_empty() {
-        text.push_str("，已经超过《二十四史》的篇幅");
-        return text;
-    }
-    for (index, (base, name)) in upcoming.iter().enumerate() {
-        text.push_str(if index == 0 { "；还差 " } else { "、" });
-        text.push_str(&format!("{}到{}", format_chars(base - total_chars), name));
-    }
-    text
-}
+// 段位 / 境界 / 名著字数水平 的逻辑已统一抽到框架无关的 `weasel_settings::career`
+// （Slint 版与 D2D 外壳共用、有单测；详见 `Setting/src/career.rs`）。
+// 下面是主页 stats 直接调用的三个名字的别名（其余名字请直接用 `weasel_settings::career::*`）。
+use weasel_settings::career::{book_level, career_level, career_realm};
 
 // ── 词库页（tab 5）──────────────────────────────────────────────────────
 fn wire_dicts(ui: &SettingsWindow) {
@@ -2074,6 +2511,69 @@ fn wire_dicts(ui: &SettingsWindow) {
     }
 }
 
+/// 从静态索引拼出下载页的行；索引读不到 / 是空的就返回 `None`（调用方回退到 GitHub 列举）。
+///
+/// 索引里只有 `repo` / `name` / `schemas` / `branch`，没有 star、语言、pushed_at，
+/// 所以这几列留空 —— 宁可少显示，也不要编数据。徽标只能靠本地台账判定「已安装」。
+fn rows_from_index(
+    index_dir: &std::path::Path,
+    user_root: &std::path::Path,
+) -> Option<(Vec<RepoRow>, Vec<String>)> {
+    let (_, groups) = plum_next::index::load(index_dir).ok()?;
+    if groups.iter().all(|(_, recipes)| recipes.is_empty()) {
+        return None;
+    }
+
+    let installed = weasel_settings::download::load_installed(user_root);
+    let mut rows: Vec<RepoRow> = Vec::new();
+    let mut cats: Vec<String> = vec!["全部".to_owned()];
+
+    for (category, recipes) in groups {
+        // 索引里的 key 可能是多级路径（`Chinese/Mandarin`），展示名优先用索引给的 name
+        let cat = if category.name.trim().is_empty() {
+            plum_next::index::category_name(&category.key).to_owned()
+        } else {
+            category.name.clone()
+        };
+        if !cats.contains(&cat) {
+            cats.push(cat.clone());
+        }
+        for recipe in recipes {
+            let short = recipe
+                .repo
+                .rsplit('/')
+                .next()
+                .unwrap_or(&recipe.repo)
+                .to_owned();
+            let initial = short
+                .chars()
+                .next()
+                .map(|c| c.to_uppercase().to_string())
+                .unwrap_or_else(|| "?".to_owned());
+            let description = if recipe.schemas.is_empty() {
+                recipe.name.clone()
+            } else {
+                format!("{} · {}", recipe.name, recipe.schemas.join(", "))
+            };
+            let badge = weasel_settings::download::badge_for(installed.get(&recipe.repo), None);
+            rows.push(RepoRow {
+                name: short.into(),
+                description: description.into(),
+                clone_url: recipe.clone_url().into(),
+                default_branch: recipe.branch.clone().unwrap_or_default().into(),
+                stargazers: 0,
+                language: "".into(),
+                category: cat.clone().into(),
+                initial: initial.into(),
+                badge: badge.into(),
+                pushed_at: "".into(),
+            });
+        }
+    }
+
+    Some((rows, cats))
+}
+
 /// 下载页：浏览 GitHub Rime-Next 组织仓库 + 一键拉取搬运。
 ///
 /// 组织名、目标目录写死；镜像自动探测由 plum 内部完成，UI 不暴露任何输入。
@@ -2089,10 +2589,28 @@ fn wire_downloads(ui: &SettingsWindow) -> std::sync::Arc<dyn Fn() + Send + Sync>
         let ui_weak = ui.as_weak();
         std::sync::Arc::new(move || {
             let Some(ui) = ui_weak.upgrade() else { return };
-            ui.set_download_list_status("正在从 GitHub 加载...".into());
+            ui.set_download_list_status("正在加载方案列表...".into());
             let ui_weak2 = ui_weak.clone();
             let user_root_f = user_for_list.clone();
             std::thread::spawn(move || {
+                // 索引优先：静态索引读得通就不打 GitHub API（离线、限流、断连都能列）。
+                // 读不到（还没生成 / 被删 / 解析失败）就照旧回退到组织实时列举，老环境不受影响。
+                if let Some((rows, cats)) =
+                    rows_from_index(&plum_next::index::default_dir(), &user_root_f)
+                {
+                    let total = rows.len();
+                    let _ = ui_weak2.upgrade_in_event_loop(move |ui| {
+                        ui.set_download_repos(Rc::new(slint::VecModel::from(rows)).into());
+                        let cats_shared: Vec<slint::SharedString> =
+                            cats.iter().map(|c| c.clone().into()).collect();
+                        ui.set_download_categories(Rc::new(slint::VecModel::from(cats_shared)).into());
+                        ui.set_download_list_status(
+                            format!("共 {total} 个仓库（来源：静态索引）").into(),
+                        );
+                        ui.set_download_net_error("".into());
+                    });
+                    return;
+                }
                 match plum_next::org::list_repos(plum_next::org::ORG) {
                     Ok(repos) => {
                         let mut rows: Vec<RepoRow> = Vec::new();
@@ -2222,6 +2740,7 @@ fn wire_downloads(ui: &SettingsWindow) -> std::sync::Arc<dyn Fn() + Send + Sync>
                                     repo: full,
                                     pushed_at: pushed_at_for_record.clone(),
                                     installed_at: format!("epoch:{now}"),
+                                    ..Default::default()
                                 },
                             );
                             ui.set_download_installed_name(repo_name.clone().into());
@@ -2282,7 +2801,7 @@ fn wire_downloads(ui: &SettingsWindow) -> std::sync::Arc<dyn Fn() + Send + Sync>
 
 #[cfg(test)]
 mod tests {
-    use super::{book_level, format_chars};
+    use weasel_settings::career::{book_level, format_chars};
 
     #[test]
     fn format_chars_switches_to_wan_above_ten_thousand() {
@@ -2326,7 +2845,7 @@ mod tests {
     /// 且差额恒为正（旧实现会在 5000→6000 字时从《孙子兵法》跳回《道德经》）。
     #[test]
     fn upcoming_books_only_move_forward() {
-        use super::{upcoming_books, BOOK_LEVELS};
+        use weasel_settings::career::{upcoming_books, BOOK_LEVELS};
         let mut last = 0usize;
         for total in (0..=1_000_000).step_by(500) {
             let upcoming = upcoming_books(total);
@@ -2334,7 +2853,7 @@ mod tests {
                 continue;
             }
             let (base, name) = upcoming[0];
-            let index = BOOK_LEVELS.iter().position(|(_, n)| *n == name).unwrap();
+            let index = weasel_settings::career::BOOK_LEVELS.iter().position(|(_, n)| *n == name).unwrap();
             assert!(index >= last, "目标回退：{total} 字 → {name}");
             assert!(base > total, "差额必须为正：{total} 字 → {name}");
             assert!(upcoming.len() <= 3, "最多三项目标");
