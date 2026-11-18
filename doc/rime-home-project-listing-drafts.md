@@ -1,8 +1,9 @@
 # rime/home 项目收录 issue 草稿（待用户确认，**未提交**）
 
 > 参考样本：`rime/home` #2238（librime-evo）、#2239（万象拼音）、#2240（万象词库与语法模型），
-> 均为 2026-11-18 由 amzxyz 新建的「项目收录」型 issue。
-> 本文只整理写法与两份草稿；按用户要求，**确认前不向 rime/home 提交任何 issue**。
+> 均为 2026-11-18 由 amzxyz 新建的「项目收录」型 issue；标签口径依据维护者 lotem 的
+> [#2237](https://github.com/rime/home/issues/2237)「通過 issue label 彙總 Rime 下游項目介紹頁」。
+> 本文只整理写法与两份最终草稿；按用户要求，**确认前不向 rime/home 提交任何 issue**。
 
 ## 一、三个样本共同写法（可复制的模板）
 
@@ -16,6 +17,7 @@
    - `**使用文档：** <文档 URL>`（可选）
    - `**上游项目：** <上游 URL>`（衍生项目必写）
    - `**项目类型：** Rime 核心引擎衍生项目（`hall of fame`）` / `Rime 拼音输入方案（`data project`）` / `Rime 词库、语法模型与数据构建工具（`data project`）`
+   - `hall of fame` 收录 Rime 衍生项目；下分 `frontend`（输入法前端）、`plugin`（插件）、`tools`（工具软件）；`data project` 单列输入方案/词库/配置/文档类数据项目（#2237 的正式定义）。**没有 `engine` 这个标签**：引擎衍生项目按 #2238 的写法归入 `hall of fame`。
    - `**开发语言：** C++`（可选，样本 #2238 有）
    - `**安装与下载：**` / `**数据及模型下载：**`（releases URL，可选）
    - `**源码及版本发布：**`（#2238 用）
@@ -34,7 +36,7 @@
 
 **上游项目：** https://github.com/rime/librime
 
-**项目类型：** Rime 核心引擎衍生项目（`engine`）
+**项目类型：** Rime 核心引擎衍生项目（`hall of fame`）
 
 **开发语言：** Rust
 
@@ -72,7 +74,7 @@ BSD 3-Clause 开源许可证，并持续跟进上游变更。
 
 **上游项目：** https://github.com/rime/weasel
 
-**项目类型：** Rime Windows 输入法前端（`frontend`）
+**项目类型：** Rime Windows 输入法前端（`hall of fame`、`frontend`）
 
 **开发语言：** C++ / Rust
 
@@ -102,7 +104,9 @@ BSD 3-Clause 开源许可证，并持续跟进上游变更。
 勿在 rime/home 或本收录页面讨论。上游小狼毫的通用问题请优先向上游项目反馈。
 ````
 
-## 四、提交前需要你拍板的两点
+## 四、两处待定项已经按 rime/home 口径定稿
 
-1. 仓库名大小写：主仓同时存在 `ClaudyFlow/Weasel-Next` 与 `ClaudyFlow/weasel-next` 两个远端别名，草稿统一用了大写 `Weasel-Next`（与 README 一致）。
-2. 项目类型标签：样本用的是 `hall of fame` / `data project`，本文给引擎写了 `engine`、前端写了 `frontend`；若 rime/home 只接受样本里的标签，需要改成 `hall of fame` 后再提交。
+1. **仓库名大小写**：`ClaudyFlow/Weasel-Next` 与 `ClaudyFlow/weasel-next` 是同一仓库的大小写别名；草稿统一用大写 `Weasel-Next`，与仓库 README、GitHub API 返回的 `full_name` 一致。
+2. **项目类型标签**：#2237 定义了 `hall of fame` / `frontend` / `plugin` / `tools` / `data project`，没有 `engine`。按此定稿：引擎写 `hall of fame`（与样本 #2238 一致），前端写 `hall of fame`、`frontend`。注意正文里的反引号标签是**写法说明/搜索入口**，三个样本本体都没加 GitHub issue label（labels 数组为空），提交时不需要（也无法自行）添加标签。
+
+以上两份正文现在是可直接复制提交的最终文案；仍**未向 rime/home 提交**，等你确认。
