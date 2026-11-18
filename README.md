@@ -57,6 +57,9 @@ cargo build --workspace --release
 
 ## 致谢
 
+- [Rime](https://rime.im) 原版项目：[librime](https://github.com/rime/librime) 引擎与 [Weasel（小狼毫）](https://github.com/rime/weasel) 前端——本项目的引擎语义、配置体系与候选窗行为都源自原版实现。
+- [amzxyz](https://github.com/amzxyz) 的 [万象拼音（rime-wanxiang）](https://github.com/amzxyz/rime-wanxiang) 与 librime-evo（[rime/librime PR #1232](https://github.com/rime/librime/pull/1232)）：拼音方案、棱镜/词库结构与 `input_types` 设计的重要参考。
+- [fxliang](https://github.com/fxliang) 的 [weasel](https://github.com/fxliang/weasel)、[rime](https://github.com/fxliang/rime)、[rime-cli](https://github.com/fxliang/rime-cli) 与 [rime-plugin-template](https://github.com/fxliang/rime-plugin-template)：官方 UIStyle/渲染链、编译图调度、进度条与插件接口的主要参照。
 - [水杉输入法（MSIME）](https://github.com/metasequoiaime/msime) 及其作者——**本项目的部分设计灵感来源于水杉输入法**：
   感谢作者与本项目的开放交流，以及其仓库里详实的
   [功能需求与问题记录](https://github.com/metasequoiaime/msime/issues)（open issues / PR，含学习同步、词库自改进闭环、
