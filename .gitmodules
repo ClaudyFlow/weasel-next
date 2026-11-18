@@ -1,0 +1,8 @@
+[submodule "librime-next"]
+	path = librime-next
+	url = https://github.com/ClaudyFlow/librime-next.git
+	branch = main
+[submodule "plum-next"]
+	path = plum-next
+	url = https://github.com/ClaudyFlow/plum-next.git
+	branch = main

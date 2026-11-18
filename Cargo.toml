@@ -19,12 +19,10 @@ members = [
     "theme/support",
     # librime config 层的 Rust 重写（独立 bin，不进 Engine、不进安装包）
     "librime-next",
-    # 東風破 /plum/ 的 Rust 重写：配方管理器（libgit2 + 镜像自动嗅探/切换）
-    "plum-next",
 ]
-# 乙路 2026-10-30：librime-next 的一份**临时副本**，用来在自己的工作区里
-# 验证 make_sentence 的修复方案（甲路正在改真身，不能去碰）。验证完会删掉。
-exclude = ["librime-next-perf"]
+# plum-next 已拆成独立仓库并作为 git submodule 接入（自带 [workspace]）：
+# https://github.com/ClaudyFlow/plum-next
+exclude = ["plum-next", "librime-next-perf"]
 
 [workspace.package]
 license = "BSD-3-Clause"

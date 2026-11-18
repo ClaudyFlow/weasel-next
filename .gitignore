@@ -10,10 +10,8 @@ plugin/librime/tests/*.exe
 !Rime-Next/model/*.7z
 !Rime-Next/model/*.7z.*
 
-# librime-next 已独立成库：https://github.com/ClaudyFlow/librime-next
-# 它在本目录里是一个**嵌套 git 仓库**，若被 `git add` 会变成没有 .gitmodules
-# 的 gitlink（父仓库克隆后拉不到内容）。这里显式忽略；需要的话按 submodule 接。
-/librime-next/
+# librime-next / plum-next 都是独立仓库，作为真正的 git submodule 接入：
+# 见 .gitmodules；不要再当普通目录提交，也不要用本地嵌套仓库冒充 gitlink。
 
 # 目录重组实验的遗留变体（正式文件是 yuhao_pinyin.dict.yaml，权重不同，勿入库）
 Rime-Next/schema/yuhao_pinyin/*.yuhao-folder-variant
@@ -42,3 +40,11 @@ dist/
 /_tmp_*.rs
 /.git-rewrite/
 /.tmp_qiaoma/
+
+# 2026-11-18 仓库整理：脚本、部署产物、备份、截图一律不入库。
+# 原文件已移出仓库归档到 C:/code/_repo_cleanup_20261118/，没有删除。
+/script/
+/build/
+/migration-backup-*/
+/*.png
+/*.bmp

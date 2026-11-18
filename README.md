@@ -32,6 +32,10 @@ Rime 配置决定输入法的输入方案与交互，见 [Rime定制指南](http
 
 ## 构建
 
+> 仓库结构（2026-11-18）：`librime-next/` 与 `plum-next/` 是真正的 git submodule，
+> 克隆时用 `git clone --recurse-submodules`。构建脚本、部署产物、备份与截图不入库，
+> 已移到仓外归档；下方历史命令里的 `script/` 步骤仅适用于保留脚本的旧工作区。
+
 开发构建：
 
 ```powershell
@@ -48,3 +52,12 @@ cargo build --workspace --release
 .\script\build-release.ps1
 .\script\build-installer.ps1
 ```
+
+## 致谢
+
+- [水杉输入法（MSIME）](https://github.com/metasequoiaime/msime) 及其作者——**本项目的部分设计灵感来源于水杉输入法**：
+  感谢作者与本项目的开放交流，以及其仓库里详实的
+  [功能需求与问题记录](https://github.com/metasequoiaime/msime/issues)（open issues / PR，含学习同步、词库自改进闭环、
+  TSF 前端防闪等方向），为本项目的功能规划与实现提供了宝贵参考，整理见
+  [水杉开放需求清单](doc/shuishan-msime-requirements.md)（覆盖 [metasequoiaime 组织](https://github.com/orgs/metasequoiaime/repositories) 全部 20 个仓库的主仓与 Windows 产品仓 issues/PR）。水杉输入法以 GPL-3.0 开源，
+  面向 Android、iOS、macOS、Linux、Windows 与 HarmonyOS 六平台的原生宿主 + 共享 Rust 输入运行时，值得一读。
