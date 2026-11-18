@@ -15,7 +15,8 @@
   原因：GDI 字形光栅化 + Win32 窗口 + `SetWindowRgn` + `BitBlt` 模糊全绑死 Windows，
   跨平台无望；且三模式几何是编译期硬编码（`base=20.0`、`PAD_N=0.25`），
   `theme.yaml` 改不动结构。仅 `ash` 那段命令流可复用，价值不足。
-  未提交改动备份在 `dist/vk-uncommitted-20261105.patch`，代码可从 `f107ee5` 恢复。
+  源码与未提交改动备份已于 2026-11-18 归档到 `C:/code/_repo_cleanup_20261118/vk-prototypes/`
+  （含 `Setting-vk/src/canvas.rs` 的未提交改动），旧代码也可从 `f107ee5` 恢复。
 
 ## 架构：布局感知选中态（已按"外科手术式"落地）
 
@@ -164,9 +165,29 @@ layout:
 ### 4. 重锚：候选组按**外框**贴纸边
 
 - 横流 / 竹简：`min(rect.left − pad_x) = lip`，`width = max(rect.right + pad_x) + lip`。
-- 飞瀑：每只外框等宽 `[lip, W − lip]`；内容按各自 pad 从纸左边推开
-  （选中项正文比邻居右 0.25em / 低 0.25em，与 HTML 实测一致）。
+- 飞瀑：每只外框等宽 `[lip, W − lip]`；内容按各自 `pad_x` 从纸左边推开。
 - 竖向：`min(rect.top − pad_y) = 栏底 + hsep`；`height = max(rect.bottom + pad_y) + lip`。
+
+### 4.1 2026-11-12 增量：语义轴 padding → 终版统一 0.25em
+（覆盖上面「只有选中项右 0.25em / 低 0.25em」的旧口径；本节末尾为**当前生效规则**）
+
+第一版（用户原话）：「在序号和候选的排列方向上（飞瀑=水平），给所有候选做一个 0.25em 的左右边框，然后在序号增长的方向上（飞瀑=垂直）不要做任何边框，只有当前选中是 0.25em」。15:3x 推广到三模式。
+
+**终版（2026-11-12 18:5x 用户）：「所有候选都做成0.25em吧，不然太闪了」** —— 增长轴只给选中加 padding，选中块在候选间移动时尺寸忽大忽小（闪烁）。取消差异：
+
+- **三模式所有候选（选中/未选中）两轴一律 `0.25em`**（= `0.5 × hilite_padding_*`，后者在 `config.rs::Metrics::new()` 里是 0.5em；theme.yaml 的 `hilite_padding_*` 在 squeeze 布局不参与）。色块尺寸恒定，只有位置随选中移动。
+- 语义轴映射仅存档，不再参与计算：飞瀑/横流（排列 x / 增长 y）、竹简（排列 y / 增长 x）。
+- 飞瀑外框仍等宽贴纸边，正文被 `pad_x` 推开 ⇒ 左内边距恒 0.25em，右内边距 ≥ 0.25em（短候选因等宽外框更空）。非 squeeze 布局恒基准 padding。
+- 回归测试：`theme/src/layout.rs::squeeze_padding_uniform_quarter_em_in_vertical_squeeze`、`squeeze_padding_uniform_quarter_em_in_horizontal_and_cells`。
+
+### 4.2 2026-11-12 增量：编码栏 ASCII 编码视觉字号补偿
+
+用户截图「为什么左右字号不是一样大」：左侧蓝色 ASCII 编码 `ff` 与右侧「符 / 贴 / 同」代码上同为 `formats.preedit`（14pt），但用**同一套像素阈值**量原图，`ff` 墨迹高 24px、中文按钮 28px、箭头 26px ⇒ 需要补偿到 28/24 ≈ 1.167。
+
+- 只把**纯 ASCII 编码**（`bar_text_uses_ascii_format`：非空、全 ASCII 可打印）交给 `MeasureFormat::PreeditAscii` / `Formats::preedit_ascii`，字号 = `font_point × 1.17`（= 28/24，且 `< bar_height = 1.5 × font_point`）。
+- 放大后预览复核：`jie m` 的 `i` 含点字形 27px、`e/m` x-height 19–20px、`j` 含降部 36px；中文按钮 28px。ASCII 的 x-height 仍天然小于汉字字面框，但** ascender 视觉字高已齐**，不再像原来那样明显小一号。再放大到 1.35× 会让 `i` 到 31px、`j` 到 41px，反而比中文按钮大，故不取。
+- 中文按钮、翻页箭头、上屏后联想条的「智能预测」继续用 `preedit`，**不缩小**。`measure_all` 与 `draw_squeeze` / `draw_preedit` 共用同一个判定函数，量/画字号一致，缓存也按 `MeasureFormat` 隔离。
+- 回归测试：`layout.rs::bar_text_ascii_format_decision_only_for_ascii_codes`、`mod.rs::ascii_preedit_format_is_visually_compensated`。
 
 ### 5. 装饰（按设计稿）
 
