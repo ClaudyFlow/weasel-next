@@ -344,7 +344,7 @@ Lua 插件的落位（2026-10-20 用户改口径：入口也进 plugin\，**根�
 - 迁移顺序：先做主题化外壳（窗口/圆角/玻璃）→ 再逐页迁移（常规/外观/按键/词典/关于）→ 最后删除 Slint 依赖。
 - 性能约定：设置界面同样采用 D2D1_ALPHA_MODE_PREMULTIPLIED + DwmEnableBlurBehindWindow，
   与候选窗共用一份 D2D 绑定（theme\support\build_d2d.rs 生成的绑定）。
-- **2026-10-29：外壳 v1 已落地**（`Weasel-Next-Setting-D2D.exe`，见 `PROGRESS.md` 六·十三）：
+- **2026-10-29：外壳 v1 已落地**（`Weasel-Next-Setting-D2D.exe`）：
   Win32 无边框 + DComp 交换链 + D2D/DWrite 自绘 + DWM 亚克力（`#991B1F27`）+ Win11 圆角；
   左侧五页签 + 占位卡片，可点、可拖、可缩放。**默认设置入口仍是 Slint 版**，进包与切换都还没做。
 ## 安装期两件独立任务（已定：并行、互不牵制）
@@ -671,7 +671,7 @@ Rime 原生 `punctuator`/`key_binder` 做不到"句中选择性补码"，**必�
 * 一条命令出 arm64 包：`script\build-installer-arm64.ps1`（`-SkipBuild` 跳过重编、`-SkipX64` 跳过顺带打 x64 包）。
 * **仍未解**：**有没有骁龙真机可测**（2026-10-26 13:0x 起一直挂着）。所以 ARM64 只验到「打包层面」——
   包内每个 PE 的机器类型、版本信息、数据齐全都核过；**安装 + 部署 + 打字没在 ARM 上跑过**。
-  详见 `PROGRESS.md` 六·十一。
+  （相关历史进度已归档出仓库。）
 
 ---
 
