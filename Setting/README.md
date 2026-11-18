@@ -1,6 +1,6 @@
 # Weasel-Next-Setting（Slint 界面）
 
-小狼毫 RS 的两套设置界面之一，**功能完整**的那一套（另一套见 `../settings-tauri/`）。
+锈狼嚎的两套设置界面之一，**功能完整**的那一套（另一套见 `../settings-tauri/`）。
 界面用 Slint 描述（`ui/*.slint`），配置读写、schema 校验、表单模型在 **`weasel_settings` 库**里，
 与 Tauri 版共用。
 

@@ -63,10 +63,10 @@ BSD 3-Clause 开源许可证，并持续跟进上游变更。
 或本收录页面讨论。上游 librime 的通用问题请优先向上游项目反馈。
 ````
 
-## 三、草稿 B：小狼毫 RS（Weasel-Next）
+## 三、草稿 B：锈狼嚎（Weasel-Next）
 
 ````text
-## 小狼毫 RS（Weasel-Next）
+## 锈狼嚎（Weasel-Next）
 
 **项目主页：** https://github.com/ClaudyFlow/Weasel-Next
 
@@ -76,7 +76,7 @@ BSD 3-Clause 开源许可证，并持续跟进上游变更。
 
 **开发语言：** C++ / Rust
 
-小狼毫 RS（Weasel-Next）是基于 Rime 输入法引擎的 Windows 前端，面向 Windows 10 1809
+锈狼嚎（Weasel-Next）是基于 Rime 输入法引擎的 Windows 前端，面向 Windows 10 1809
 及以上版本。它保留小狼毫的使用方式，同时把部署、候选窗渲染与设置界面逐步迁移到 Rust
 组件，并配套自研的 Rime-Next 引擎（librime-next）与配方管理器 PlumNext。
 
@@ -91,7 +91,7 @@ BSD 3-Clause 开源许可证，并持续跟进上游变更。
 项目是完整的输入法前端，需要配合 Rime 引擎与输入方案数据使用；不兼容 C++ 版小狼毫的
 `weasel.toml` / `weasel.custom.toml` 配置格式。
 
-小狼毫 RS 为社区独立维护的衍生项目，**并非 Rime 官方版本**。项目使用 BSD 3-Clause
+锈狼嚎 为社区独立维护的衍生项目，**并非 Rime 官方版本**。项目使用 BSD 3-Clause
 开源许可证，第三方组件许可清单见仓库 `THIRD-PARTY-LICENSE.txt`。
 
 **源码及版本发布：** https://github.com/ClaudyFlow/Weasel-Next/releases

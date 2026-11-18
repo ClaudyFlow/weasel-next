@@ -1,4 +1,4 @@
-# 小狼毫 RS 输入法
+# 锈狼嚎（Weasel-Next）输入法
 
 基于 中州韵输入法引擎 / Rime Input Method Engine 的 Windows 输入法
 
@@ -23,7 +23,7 @@ Rime 配置决定输入法的输入方案与交互，见 [Rime定制指南](http
 
 小狼毫配置决定输入法的外观、与操作系统和应用的交互方式，见程序附带【设置】应用或源码中的配置文件 schema 进行配置。
 
-小狼毫 RS **不兼容** 小狼毫 (C/C++版) 的配置文件 (weasel.toml/weasel.custom.toml) 。
+锈狼嚎 **不兼容** 小狼毫 (C/C++版) 的配置文件 (weasel.toml/weasel.custom.toml) 。
 
 ## 自定义皮肤
 

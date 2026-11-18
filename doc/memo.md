@@ -36,6 +36,7 @@ model/<名字>.gram                   语言模型    （直接放好，librime 
 ## 已经做完并验证的
 
 - 全量改名：`Weasel-RS` → `Weasel-Next`、`weasel-rs` → `weasel-next`、`weaselrs` → `weaselnext`、`小狼毫RS` → `小狼毫Next`。
+- 2026-11-18 用户拍板：产品显示名改为**锈狼嚎**（仓库/代码名仍是 Weasel-Next）；对外文档、收录 issue 统一用「锈狼嚎」，不再写「小狼毫 RS / 小狼毫Next」。
 - 代码目录改名：`C:\code\weasel-rs` → `C:\code\Weasel-Next`（TIP 注册表已同步指向新路径）。
 - 用户目录：`%APPDATA%\Rime-Next\`（大写保留）、日志 `%LOCALAPPDATA%\Rime-Next\Logs\`；`lua\` → `plugin\`。
 - `sound` 移出用户目录：声音用**程序文件夹**的 `Rime-Next\sound\*.wav`。
