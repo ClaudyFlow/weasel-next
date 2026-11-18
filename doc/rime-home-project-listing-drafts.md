@@ -3,7 +3,7 @@
 > 参考样本：`rime/home` #2238（librime-evo）、#2239（万象拼音）、#2240（万象词库与语法模型），
 > 均为 2026-11-18 由 amzxyz 新建的「项目收录」型 issue；标签口径依据维护者 lotem 的
 > [#2237](https://github.com/rime/home/issues/2237)「通過 issue label 彙總 Rime 下游項目介紹頁」。
-> 本文只整理写法与两份最终草稿；按用户要求，**确认前不向 rime/home 提交任何 issue**。
+> 本文只整理写法与三份最终草稿；按用户要求，**确认前不向 rime/home 提交任何 issue**。
 
 ## 一、三个样本共同写法（可复制的模板）
 
@@ -16,7 +16,7 @@
    - `**项目主页：** <仓库 URL>`
    - `**使用文档：** <文档 URL>`（可选）
    - `**上游项目：** <上游 URL>`（衍生项目必写）
-   - `**项目类型：** Rime 核心引擎衍生项目（`hall of fame`）` / `Rime 拼音输入方案（`data project`）` / `Rime 词库、语法模型与数据构建工具（`data project`）`
+   - `**项目类型：** Rime 核心引擎衍生项目（`hall of fame`）` / `Rime Windows 输入法前端（`hall of fame`、`frontend`）` / `Rime 配方/配置管理工具（`hall of fame`、`tools`）` / `Rime 拼音输入方案（`data project`）` / `Rime 词库、语法模型与数据构建工具（`data project`）`
    - `hall of fame` 收录 Rime 衍生项目；下分 `frontend`（输入法前端）、`plugin`（插件）、`tools`（工具软件）；`data project` 单列输入方案/词库/配置/文档类数据项目（#2237 的正式定义）。**没有 `engine` 这个标签**：引擎衍生项目按 #2238 的写法归入 `hall of fame`。
    - `**开发语言：** C++`（可选，样本 #2238 有）
    - `**安装与下载：**` / `**数据及模型下载：**`（releases URL，可选）
@@ -104,9 +104,43 @@ BSD 3-Clause 开源许可证，并持续跟进上游变更。
 勿在 rime/home 或本收录页面讨论。上游小狼毫的通用问题请优先向上游项目反馈。
 ````
 
-## 四、两处待定项已经按 rime/home 口径定稿
+## 四、草稿 C：PlumNext（plum-next）
+
+````text
+## PlumNext（plum-next）
+
+**项目主页：** https://github.com/ClaudyFlow/plum-next
+
+**上游项目：** https://github.com/rime/plum
+
+**项目类型：** Rime 配方/配置管理工具（`hall of fame`、`tools`）
+
+**开发语言：** Rust
+
+PlumNext 是 [rime/plum（東風破）](https://github.com/rime/plum) 的 Rust 重写版：一个用于安装、更新 Rime 输入方案与词库配方包的命令行工具。原版是一组 bash 脚本，本项目在保持配方订单（Rx）语义兼容的同时，针对 Windows 上的两个常见痛点做了重做。
+
+项目的主要改进方向包括：
+
+- **不依赖 Git for Windows**：用 libgit2 直接克隆/拉取配方包；已存在的包走 `fetch + 硬重置` 增量更新，不再退化成无增量能力的 ZIP 下载。
+- **镜像自动嗅探与切换**：内置 7 个镜像，按建连延迟排序，失败立即切换下一个；上次成功的镜像会被记住，换源不需要重新 clone。
+- **配方订单兼容**：保留 `<用户>/<仓库>@<分支>:<配方>:key=value` 的 Rx 语法与 `:preset` / `:extra` / `:all` 预设清单，以及交互式选包（`--select`）。
+- **用户目录一致性**：默认 Rime 用户目录为 `%APPDATA%\Rime-Next`，与锈狼嚎（Weasel-Next）保持一致；也可作为其设置界面里的配方管理器使用。
+- **配方参数补丁**：`patch_files` 把参数写进方案的 `__patch:` 段，并对同一配方订单幂等替换。
+
+项目是独立的命令行配方管理器，不包含输入方案或词库数据本身；配方包由各自仓库发布，许可证请以各包自己的说明为准。原版脚本的部分能力（git 子模块递归、`eval` 选项变量）尚未实现。
+
+PlumNext 为社区独立维护的衍生项目，**并非 Rime 官方版本**。代码沿用上游 rime/plum 的授权，遵循 LGPL-3.0-or-later 开源许可证，全文见仓库 `LICENSE`。
+
+**源码及版本发布：** https://github.com/ClaudyFlow/plum-next/releases
+
+**问题反馈：** https://github.com/ClaudyFlow/plum-next/issues
+
+有关配方安装、镜像与更新行为的问题，请前往项目自身的 Issues 反馈，勿在 rime/home 或本收录页面讨论。上游東風破的通用问题请优先向上游项目反馈。
+````
+
+## 五、两处待定项已经按 rime/home 口径定稿
 
 1. **仓库名大小写**：`ClaudyFlow/Weasel-Next` 与 `ClaudyFlow/weasel-next` 是同一仓库的大小写别名；草稿统一用大写 `Weasel-Next`，与仓库 README、GitHub API 返回的 `full_name` 一致。
-2. **项目类型标签**：#2237 定义了 `hall of fame` / `frontend` / `plugin` / `tools` / `data project`，没有 `engine`。按此定稿：引擎写 `hall of fame`（与样本 #2238 一致），前端写 `hall of fame`、`frontend`。注意正文里的反引号标签是**写法说明/搜索入口**，三个样本本体都没加 GitHub issue label（labels 数组为空），提交时不需要（也无法自行）添加标签。
+2. **项目类型标签**：#2237 定义了 `hall of fame` / `frontend` / `plugin` / `tools` / `data project`，没有 `engine`。按此定稿：引擎写 `hall of fame`（与样本 #2238 一致），前端写 `hall of fame`、`frontend`，配方管理器写 `hall of fame`、`tools`。注意正文里的反引号标签是**写法说明/搜索入口**，三个样本本体都没加 GitHub issue label（labels 数组为空），提交时不需要（也无法自行）添加标签。
 
-以上两份正文现在是可直接复制提交的最终文案；仍**未向 rime/home 提交**，等你确认。
+以上三份正文现在是可直接复制提交的最终文案；仍**未向 rime/home 提交**，等你确认。
