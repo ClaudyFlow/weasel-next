@@ -57,12 +57,9 @@ cargo build --workspace --release
 
 ## 致谢
 
-- [Rime](https://rime.im) 原版项目：[librime](https://github.com/rime/librime) 引擎与 [Weasel（小狼毫）](https://github.com/rime/weasel) 前端——本项目的引擎语义、配置体系与候选窗行为都源自原版实现。
-- [amzxyz](https://github.com/amzxyz) 的 [万象拼音（rime-wanxiang）](https://github.com/amzxyz/rime-wanxiang) 与 librime-evo（[rime/librime PR #1232](https://github.com/rime/librime/pull/1232)）：拼音方案、棱镜/词库结构与 `input_types` 设计的重要参考。
-- [fxliang](https://github.com/fxliang) 的 [weasel](https://github.com/fxliang/weasel)、[rime](https://github.com/fxliang/rime)、[rime-cli](https://github.com/fxliang/rime-cli) 与 [rime-plugin-template](https://github.com/fxliang/rime-plugin-template)：官方 UIStyle/渲染链、编译图调度、进度条与插件接口的主要参照。
-- [水杉输入法（MSIME）](https://github.com/metasequoiaime/msime) 及其作者——**本项目的部分设计灵感来源于水杉输入法**：
-  感谢作者与本项目的开放交流，以及其仓库里详实的
-  [功能需求与问题记录](https://github.com/metasequoiaime/msime/issues)（open issues / PR，含学习同步、词库自改进闭环、
-  TSF 前端防闪等方向），为本项目的功能规划与实现提供了宝贵参考，整理见
-  [水杉开放需求清单](doc/shuishan-msime-requirements.md)（覆盖 [metasequoiaime 组织](https://github.com/orgs/metasequoiaime/repositories) 全部 20 个仓库的主仓与 Windows 产品仓 issues/PR）。水杉输入法以 GPL-3.0 开源，
-  面向 Android、iOS、macOS、Linux、Windows 与 HarmonyOS 六平台的原生宿主 + 共享 Rust 输入运行时，值得一读。
+本项目建立在以下项目与作者的工作之上：
+
+- **Rime / 小狼毫原版**：[Rime](https://rime.im) 社区，以及 [librime](https://github.com/rime/librime) 引擎与 [Weasel（小狼毫）](https://github.com/rime/weasel) 前端。本项目的引擎语义、配置体系与候选窗行为均以原版为基准。
+- **fxliang**：[weasel](https://github.com/fxliang/weasel) 的 C++ UI 与渲染链、[rime](https://github.com/fxliang/rime) 的编译图与词典实现、[rime-cli](https://github.com/fxliang/rime-cli) 的进度条/代理参数、[rime-plugin-template](https://github.com/fxliang/rime-plugin-template) 的插件接口约定，是多处实现的直接参照。
+- **amzxyz**：[万象拼音](https://github.com/amzxyz/rime-wanxiang) 与 librime-evo（[rime/librime PR #1232](https://github.com/rime/librime/pull/1232)），为拼音方案、棱镜/词库组织与 `input_types` 设计提供参考。
+- **水杉输入法（MSIME）**：[metasequoiaime/msime](https://github.com/metasequoiaime/msime) 及其作者。感谢开放交流，以及 [issues / PR](https://github.com/metasequoiaime/msime/issues) 中关于学习同步、词库自改进闭环与 TSF 前端防闪的记录，部分设计灵感由此而来；整理见 [水杉开放需求清单](doc/shuishan-msime-requirements.md)。
