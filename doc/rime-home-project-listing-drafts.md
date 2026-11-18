@@ -1,9 +1,10 @@
-# rime/home 项目收录 issue 草稿（待用户确认，**未提交**）
+# rime/home 项目收录 issue（2026-11-18 已提交，均无标签）
 
 > 参考样本：`rime/home` #2238（librime-evo）、#2239（万象拼音）、#2240（万象词库与语法模型），
 > 均为 2026-11-18 由 amzxyz 新建的「项目收录」型 issue；标签口径依据维护者 lotem 的
 > [#2237](https://github.com/rime/home/issues/2237)「通過 issue label 彙總 Rime 下游項目介紹頁」。
-> 本文只整理写法与三份最终草稿；按用户要求，**确认前不向 rime/home 提交任何 issue**。
+> 本文记录写法与已提交的三份正文；按用户要求，三个 issue 均**不带任何 GitHub 标签**（labels 数组为空）。
+> 已提交：[#2241 Rime-Next 引擎](https://github.com/rime/home/issues/2241)、[#2242 锈狼嚎](https://github.com/rime/home/issues/2242)、[#2243 PlumNext](https://github.com/rime/home/issues/2243)。
 
 ## 一、三个样本共同写法（可复制的模板）
 
@@ -27,7 +28,7 @@
 
 ## 二、草稿 A：Rime-Next 引擎（librime-next）
 
-> 目标 issue URL（待确认）：https://github.com/rime/home/issues/new
+> 已提交为 https://github.com/rime/home/issues/2241
 
 ````text
 ## Rime-Next 引擎（librime-next）
@@ -143,4 +144,4 @@ PlumNext 为社区独立维护的衍生项目，**并非 Rime 官方版本**。�
 1. **仓库名大小写**：`ClaudyFlow/Weasel-Next` 与 `ClaudyFlow/weasel-next` 是同一仓库的大小写别名；草稿统一用大写 `Weasel-Next`，与仓库 README、GitHub API 返回的 `full_name` 一致。
 2. **项目类型标签**：#2237 定义了 `hall of fame` / `frontend` / `plugin` / `tools` / `data project`，没有 `engine`。按此定稿：引擎写 `hall of fame`（与样本 #2238 一致），前端写 `hall of fame`、`frontend`，配方管理器写 `hall of fame`、`tools`。注意正文里的反引号标签是**写法说明/搜索入口**，三个样本本体都没加 GitHub issue label（labels 数组为空），提交时不需要（也无法自行）添加标签。
 
-以上三份正文现在是可直接复制提交的最终文案；仍**未向 rime/home 提交**，等你确认。
+以上三份正文已于 2026-11-18 原文提交为 #2241 / #2242 / #2243，三者的 labels 数组均为空（不带任何标签）。后续修改正文请直接编辑对应 issue，不必重开。
