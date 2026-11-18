@@ -1,0 +1,166 @@
+# Rime Schema — 明月（主方案：无调全拼，即 evo 万象 input_types 的首项「全拼」）
+# encode: utf-8
+# newline: lf
+#
+# 目标形态：
+#   * 一本词库 `pinyin`（入口表 + import_tables: pinyin.* 分表）；
+#   * 14 种双拼/龙码各是一份 `<dict>.<组>.prism`，组集合由顶层
+#     input_types.enabled 提供，规则全部在 pinyin.algebra.yaml；
+#   * 全部输入类型共用这本词库与用户词典（pinyin.userdb）。
+---
+schema:
+  id: pinyin
+  name: 拼音
+  version: "2026.11.10"
+  author:
+    - Weasel-Next
+  description: |
+    拼音主方案 = 全拼。一本词库，15 种输入类型（全拼 + 14 种双拼/龙码）：
+    集合、默认项与菜单文案见顶层 input_types；各组的拼式规则统一放在
+    pinyin.algebra.yaml（单个外置文件），build 期按组名编出 pinyin.<组>.prism.bin。
+
+# 开关
+# reset: 默认状态。注释掉后，切换窗口时不会重置到默认状态。
+# state: 方案选单显示的名称。可以注释掉，仍可以通过快捷键切换。
+switch:
+  - name: ascii_mode
+    reset: 0
+    state: [ 中文, 英文 ]
+  # 繁简字形：单选组。合并词库里 terra 条目偏繁、luna 偏简，
+  # 默认落在「简化字」，保证各子方案输出统一。
+  - options:
+      - zh_hans
+      - zh_hant
+      - zh_hant_tw
+    state:
+      - 简化字
+      - 傳統漢字
+      - 臺灣字形
+    reset: 0
+input_type:
+  enabled: [luna, terra, zrm, flypy, mspy, sogou, znabc, ziguang, pyjj, gbpy, lxsq, ltsp, wxsp, zrlong, hxlong]
+  reset: luna
+  options:
+    - {option: luna, label: 明月}
+    - {option: terra, label: 地球}
+    - {option: zrm, label: 自然码}
+    - {option: flypy, label: 小鹤双拼}
+    - {option: mspy, label: 微软双拼}
+    - {option: sogou, label: 搜狗双拼}
+    - {option: znabc, label: 智能ABC}
+    - {option: ziguang, label: 紫光双拼}
+    - {option: pyjj, label: 拼音加加}
+    - {option: gbpy, label: 国标双拼}
+    - {option: lxsq, label: 乱序17}
+    - {option: ltsp, label: 蓝天双拼}
+    - {option: wxsp, label: 万象双拼}
+    - {option: zrlong, label: 自然龙}
+    - {option: hxlong, label: 汉心龙}
+###
+engine:
+  processor:
+    - ascii_composer
+    - speller
+    - input_type_speller
+    - input_type_selector
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentor:
+    - ascii_segmentor
+    - abc_segmentor
+    - auxiliary_suffix_segmentor   #拆分 ` 后的后置辅助码
+    - punct_segmentor
+    - fallback_segmentor
+  translator:
+    - punct_translator
+    - history_translator   # 重复上屏快速重打(巧码同款,无 lua)
+    - script_translator
+  data_source: ['aux', 'db']        #反查数据顺序:aux=词库辅助编码优先
+  filter:
+    - simplifier@zh_hans
+    - simplifier@zh_hant_tw
+    - uniquifier
+###
+# menu/page_size 不在方案级写死（用户 2026-11-17）：build 时 default.yaml 的 menu 块
+# 会合并进每个方案的编译产物，方案级值优先级更高、会把设置页「每页候选数」压掉。
+# 现在整块删掉，统一由 default.yaml 的 menu/page_size 管：
+# 设置页点选 → 写 user default.yaml → 自动部署 → 即时生效。
+###
+speller:
+  alphabet: 'zyxwvutsrqponmlkjihgfedcba'
+  initials: 'zyxwvutsrqponmlkjihgfedcba'
+  delimiter: "'"
+###
+# 标点映射必须写进方案：引擎只把 schema 自己的配置传给 punctuator，
+# 不会把 default.yaml 的 punctuator 段合并进来。缺这段时逗号/句号
+# 落到 editor 直接原样上屏（半角 , .），其他方案（092 等）都有这条。
+punctuator:
+  import_preset: symbols
+###
+translator:
+  dict: pinyin
+  aux: none                       #辅助码类型:自然码辅助(aux_code.yaml)
+  aux_suffix: "`"                   #触发键:输入 ` 进入辅助码段
+  prism: pinyin
+  enable_user_dict: true
+  # 2026-11-18 用户实测：enable_completion(默认 true) 的「补全前缀」让
+  # juzhong 被切成 ju|zho|ng（zho=zhong 前缀、ng=ng3 前缀），句子组装把
+  # [居][中][㕶] 这类幻影句顶到高亮位，按空格直接上屏「居中㕶」。
+  # 全拼输入用不到前缀补全（简拼走 algebra 的 abbreviation，不受影响），
+  # 故关闭；qiaoma 等码表方案仍保持默认 true。
+  enable_completion: false
+###
+build:
+  dict:
+    pinyin:
+      algebra:
+        luna:
+          __patch: pinyin.algebra:/明月
+        terra:
+          __patch: pinyin.algebra:/地球
+        zrm:
+          __patch: pinyin.algebra:/自然码
+        flypy:
+          __patch: pinyin.algebra:/小鹤双拼
+        mspy:
+          __patch: pinyin.algebra:/微软双拼
+        sogou:
+          __patch: pinyin.algebra:/搜狗双拼
+        znabc:
+          __patch: pinyin.algebra:/智能ABC
+        ziguang:
+          __patch: pinyin.algebra:/紫光双拼
+        pyjj:
+          __patch: pinyin.algebra:/拼音加加
+        gbpy:
+          __patch: pinyin.algebra:/国标双拼
+        lxsq:
+          __patch: pinyin.algebra:/乱序17
+        ltsp:
+          __patch: pinyin.algebra:/蓝天双拼
+        wxsp:
+          __patch: pinyin.algebra:/万象双拼
+        zrlong:
+          __patch: pinyin.algebra:/自然龙
+        hxlong:
+          __patch: pinyin.algebra:/汉心龙
+###
+# 繁简字形（与出厂 zhuyin 同构）：option_name 指向单选组里的选项名，
+# 只有选中该选项时对应 filter 才生效；opencc 数据取共享目录下的 `opencc/`。
+zh_hans:
+  option_name: zh_hans
+  opencc_config: t2s.json
+  tips: all
+  excluded_types: [ reverse_lookup ]
+###
+zh_hant_tw:
+  option_name: zh_hant_tw
+  opencc_config: t2tw.json
+  tips: none
+  excluded_types: [ reverse_lookup ]
+###
+# 用家自選配置
+__patch:
+  - pinyin.custom:/patch?
